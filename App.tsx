@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Image as ImageIcon, Video, LayoutGrid, Folder, Sparkles, Settings, Star, CheckSquare, MoveHorizontal, Brush, X, Languages, Trash2, Recycle } from 'lucide-react';
 import { AppMode, AspectRatio, GenerationParams, AssetItem, ImageResolution, VideoResolution, ImageModel, VideoModel, ImageStyle, Project, ChatMessage, BackgroundTask } from './types';
@@ -425,6 +424,8 @@ export function App() {
                 const cooldownDuration = 60000; // 60s
                 setVideoCooldownEndTime(Date.now() + cooldownDuration);
                 addToast('error', 'Server Busy', 'Quota Limit reached. System is cooling down for 60 seconds.');
+             } else if (error.message === 'STORAGE_QUOTA_EXCEEDED') {
+                addToast('error', 'Storage Full', 'Browser storage is full. Please delete old videos from Trash.');
              } else {
                 addToast('error', 'Generation Failed', error.message);
              }

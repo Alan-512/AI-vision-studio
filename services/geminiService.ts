@@ -1,4 +1,3 @@
-
 import { GoogleGenAI, GenerateContentResponse, Content, Part } from "@google/genai";
 import { GenerationParams, AspectRatio, ImageResolution, VideoResolution, AssetItem, ImageModel, ImageStyle, VideoStyle, VideoDuration, VideoModel, ChatMessage, ChatModel, AppMode } from "../types";
 
@@ -195,18 +194,34 @@ export const optimizePrompt = async (originalPrompt: string, mode: AppMode): Pro
   if (!originalPrompt.trim()) return "";
   
   const ai = getClient();
-  const task = mode === AppMode.VIDEO 
-    ? "Enhance this video prompt with cinematic details, lighting, camera movement, and atmosphere. Keep it concise (under 80 words)."
-    : "Enhance this image prompt with artistic details, lighting, composition, and texture. Keep it concise (under 60 words).";
+  
+  let task = "";
+  if (mode === AppMode.VIDEO) {
+    task = `You are an expert Film Director and Prompt Engineer for AI Video generation (Google Veo). 
+    Rewrite the following user prompt into a single, high-quality, descriptive caption optimized for Veo.
+    
+    OFFICIAL GUIDELINES:
+    1. **Structure**: Follow this flow: (Subject + Action) + (Environment + Lighting) + (Camera Movement + Style).
+    2. **Natural Language**: Write as a fluid, natural sentence, NOT a list of tags.
+    3. **Visuals Only**: Describe what is seen. Avoid abstract words like "amazing" or "thought-provoking".
+    4. **Motion**: Use strong verbs to describe movement (e.g., "sprinting", "morphing", "gliding").
+    5. **Camera**: Explicitly state camera movement (e.g., "Drone tracking shot", "Slow pan right", "Static camera").
+    6. **Conciseness**: Keep it under 70 words.
+    
+    Original Input: "${originalPrompt}"
+    
+    Output ONLY the refined prompt text. Do not add quotes.`;
+  } else {
+    task = `You are a professional Creative Director. 
+    Enhance this image prompt with artistic details, lighting, composition, and texture. 
+    Original Prompt: "${originalPrompt}"
+    Output ONLY the refined prompt text. Keep it concise (under 60 words).`;
+  }
     
   try {
     const response = await ai.models.generateContent({
       model: 'gemini-2.5-flash',
-      contents: `You are a professional prompt engineer. ${task}
-      
-      Original Prompt: "${originalPrompt}"
-      
-      Output ONLY the refined prompt text. Do not add "Here is the prompt" or quotes.`,
+      contents: task,
     });
     return response.text?.trim() || originalPrompt;
   } catch (e) {
@@ -376,10 +391,18 @@ export const streamChatResponse = async (
 
   let roleInstruction = "";
   if (mode === AppMode.VIDEO) {
-    roleInstruction = `You are a professional Film Director and Cinematographer AI assistant.
+    roleInstruction = `You are a professional Film Director and Cinematographer (DoP) AI assistant.
     Your goal is to help the user brainstorm and refine prompts for VIDEO generation (using Google Veo).
-    Focus on: Camera angles (drone, handheld, pan), Motion (fast, slow mo), Lighting, and Scene Consistency.
-    Keep in mind videos are short (5-10s).
+    
+    CRITICAL: You must always guide the user to provide the following structure for video prompts:
+    (Subject + Action) + (Environment + Lighting) + (Camera Movement).
+    
+    If the user's prompt is too simple (e.g., "a cat"), you MUST ask:
+    1. "What is the subject doing?" (Action)
+    2. "How should the camera move?" (e.g., Drone shot, Pan, Zoom, Static)
+    
+    Always suggest specific camera terminology (e.g., "Low angle", "Tracking shot", "Slow motion").
+    Ensure the description respects physical consistency.
     `;
   } else {
     roleInstruction = `You are a professional Creative Director and Digital Artist AI assistant. 

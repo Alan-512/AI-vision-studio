@@ -1,12 +1,14 @@
 
 import React, { useState } from 'react';
-import { Sun, Camera, Box, Move, ChevronDown, ChevronUp, Tag, Palette, Layers } from 'lucide-react';
+import { Sun, Camera, Box, Move, ChevronDown, ChevronUp, Tag, Palette, Layers, Video, Zap, Aperture } from 'lucide-react';
+import { AppMode } from '../types';
 
 interface PromptBuilderProps {
   onAppend: (text: string) => void;
+  mode?: AppMode; // New optional prop to switch between Image/Video modes
 }
 
-const CATEGORIES = [
+const IMAGE_CATEGORIES = [
   {
     id: 'lighting',
     label: 'Lighting',
@@ -39,8 +41,37 @@ const CATEGORIES = [
   }
 ];
 
-export const PromptBuilder: React.FC<PromptBuilderProps> = ({ onAppend }) => {
+const VIDEO_CATEGORIES = [
+  {
+    id: 'camera_move',
+    label: 'Camera',
+    icon: <Video size={14} />,
+    tags: ['Drone Shot / Aerial', 'Pan Left', 'Pan Right', 'Tilt Up', 'Tilt Down', 'Dolly In (Zoom In)', 'Dolly Out (Zoom Out)', 'Tracking Shot', 'Handheld Shake', 'FPV View', 'Low Angle / Worms Eye']
+  },
+  {
+    id: 'motion',
+    label: 'Motion',
+    icon: <Zap size={14} />,
+    tags: ['Slow Motion', 'Time-lapse', 'Hyper-lapse', 'High Speed Action', 'Static Camera', 'Motion Blur', 'Freeze Frame', 'Loop', 'Fluid Motion', 'Explosive Action']
+  },
+  {
+    id: 'atmosphere',
+    label: 'Atmosphere',
+    icon: <Sun size={14} />,
+    tags: ['Cinematic', 'Vintage Film Grain', 'Foggy / Hazy', 'Rainy / Stormy', 'Sunny Day', 'Night City Neon', 'Underwater', 'Dusty / Sandy', 'Sci-Fi Clean', 'Horror / Dark']
+  },
+  {
+    id: 'lens',
+    label: 'Lens/Focus',
+    icon: <Aperture size={14} />,
+    tags: ['Shallow Depth of Field', 'Deep Focus', 'Rack Focus', 'Macro Close-up', 'Wide Angle Lens', 'Telephoto Lens', 'Fish-Eye Lens', 'Anamorphic Lens']
+  }
+];
+
+export const PromptBuilder: React.FC<PromptBuilderProps> = ({ onAppend, mode = AppMode.IMAGE }) => {
   const [activeCategory, setActiveCategory] = useState<string | null>(null);
+
+  const categories = mode === AppMode.VIDEO ? VIDEO_CATEGORIES : IMAGE_CATEGORIES;
 
   const toggleCategory = (id: string) => {
     setActiveCategory(activeCategory === id ? null : id);
@@ -57,7 +88,7 @@ export const PromptBuilder: React.FC<PromptBuilderProps> = ({ onAppend }) => {
 
       {/* Category Tabs */}
       <div className="flex gap-2 overflow-x-auto pb-1 custom-scrollbar no-scrollbar">
-        {CATEGORIES.map(cat => (
+        {categories.map(cat => (
           <button
             key={cat.id}
             onClick={() => toggleCategory(cat.id)}
@@ -76,15 +107,15 @@ export const PromptBuilder: React.FC<PromptBuilderProps> = ({ onAppend }) => {
 
       {/* Tag Grid */}
       {activeCategory && (
-        <div className="bg-dark-surface/50 border border-dark-border rounded-xl p-3 grid grid-cols-2 md:grid-cols-3 gap-2 animate-in zoom-in-95 duration-200">
-           {CATEGORIES.find(c => c.id === activeCategory)?.tags.map(tag => (
+        <div className="bg-dark-surface/50 border border-dark-border rounded-xl p-3 grid grid-cols-2 md:grid-cols-3 gap-2 animate-in zoom-in-95 duration-200 max-h-48 overflow-y-auto custom-scrollbar">
+           {categories.find(c => c.id === activeCategory)?.tags.map(tag => (
              <button
                key={tag}
                onClick={() => onAppend(tag)}
                className="text-left text-xs text-gray-300 hover:text-brand-400 hover:bg-white/5 px-2 py-1.5 rounded transition-colors flex items-center gap-2 group"
              >
                <Tag size={10} className="text-gray-600 group-hover:text-brand-500" />
-               {tag}
+               <span className="truncate">{tag}</span>
              </button>
            ))}
         </div>

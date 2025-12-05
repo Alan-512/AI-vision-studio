@@ -1,7 +1,7 @@
 
 import React, { useRef, useState, useEffect } from 'react';
 import { AppMode, AspectRatio, GenerationParams, ImageResolution, VideoResolution, ImageModel, VideoModel, ImageStyle, VideoStyle, VideoDuration, ChatMessage, AssetItem } from '../types';
-import { Settings2, Sparkles, Image as ImageIcon, Video as VideoIcon, Upload, X, Camera, Palette, Film, RefreshCw, MessageSquare, Layers, ChevronDown, ChevronUp, SlidersHorizontal, Monitor, Eye, Lock, Dice5, Type, User, ScanFace, Frame, ArrowRight, Loader2, Clock } from 'lucide-react';
+import { Settings2, Sparkles, Image as ImageIcon, Video as VideoIcon, Upload, X, Camera, Palette, Film, RefreshCw, MessageSquare, Layers, ChevronDown, ChevronUp, SlidersHorizontal, Monitor, Eye, Lock, Dice5, Type, User, ScanFace, Frame, ArrowRight, Loader2, Clock, BookTemplate } from 'lucide-react';
 import { ChatInterface } from './ChatInterface';
 import { extractPromptFromHistory, optimizePrompt, describeImage } from '../services/geminiService';
 import { PromptBuilder } from './PromptBuilder';
@@ -26,6 +26,14 @@ interface GenerationFormProps {
   cooldownEndTime?: number; // New: Global Cooldown timestamp
 }
 
+const VIDEO_TEMPLATES = [
+    { label: "Cinematic Drone", text: "A drone shot of [Subject], flying over [Environment], cinematic lighting, 4k, smooth motion." },
+    { label: "Character Reveal", text: "Close up of [Subject]'s face, turning to look at the camera, slow motion, dramatic lighting, high detail." },
+    { label: "Cyberpunk Action", text: "[Subject] running through a neon-lit cyberpunk city, tracking shot, rain, reflections, high speed." },
+    { label: "Nature Documentary", text: "Wide shot of [Subject] in a natural habitat, golden hour sun, national geographic style, slow movement." },
+    { label: "Product Showcase", text: "Studio shot of [Subject], rotating on a turntable, clean background, soft studio lighting, 4k, macro lens." }
+];
+
 export const GenerationForm: React.FC<GenerationFormProps> = ({ 
   mode, 
   params, 
@@ -48,6 +56,7 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isOptimizing, setIsOptimizing] = useState(false);
   const [isDescribing, setIsDescribing] = useState(false);
+  const [showTemplates, setShowTemplates] = useState(false);
   
   // Drag State
   const [dragTarget, setDragTarget] = useState<'reference' | 'subject' | 'style' | 'videoStart' | 'videoEnd' | null>(null);
@@ -93,6 +102,17 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
       if (intervalId) clearInterval(intervalId);
     };
   }, [isGenerating, startTime, cooldownEndTime]);
+
+  // Close template dropdown on click outside
+  useEffect(() => {
+      const handleClickOutside = (event: MouseEvent) => {
+          if (showTemplates && !(event.target as Element).closest('.template-dropdown')) {
+              setShowTemplates(false);
+          }
+      };
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showTemplates]);
 
   const formatTime = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
@@ -148,6 +168,11 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
             prompt: current ? `${current}, ${tag}` : tag
          };
       });
+  };
+  
+  const applyTemplate = (text: string) => {
+      setParams(prev => ({ ...prev, prompt: text }));
+      setShowTemplates(false);
   };
 
   const handleRandomizeSeed = () => setParams(prev => ({ ...prev, seed: undefined }));
@@ -297,7 +322,7 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
           }
        } else {
           // 2. Handle External Files Drop
-          const files = Array.from(e.dataTransfer.files);
+          const files = Array.from(e.dataTransfer.files) as File[];
           const validFiles = files.filter(f => f.type.startsWith('image/'));
           
           if (validFiles.length > 0) {
@@ -421,10 +446,43 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
 
           {/* Prompt & Inputs */}
           <div className="space-y-3">
-            <PromptBuilder onAppend={handleAppendTag} />
+            <PromptBuilder onAppend={handleAppendTag} mode={mode} />
+            
             <div className="flex justify-between items-center">
               <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">{t('lbl.prompt')}</label>
-              <div className="flex gap-2">
+              <div className="flex gap-2 relative">
+                 {/* Video Templates Dropdown */}
+                 {mode === AppMode.VIDEO && (
+                     <div className="relative template-dropdown">
+                        <button 
+                            onClick={() => setShowTemplates(!showTemplates)}
+                            className="flex items-center gap-1.5 px-2.5 py-1.5 bg-white/5 hover:bg-white/10 text-gray-300 rounded-lg text-[10px] font-medium transition-colors border border-white/10"
+                        >
+                            <BookTemplate size={12} />
+                            Template
+                        </button>
+                        {showTemplates && (
+                            <div className="absolute top-full right-0 mt-2 w-64 bg-dark-surface border border-dark-border rounded-xl shadow-xl z-50 overflow-hidden animate-in fade-in slide-in-from-top-2">
+                                <div className="p-2 text-[10px] font-bold text-gray-500 uppercase border-b border-dark-border">
+                                    Select Template
+                                </div>
+                                <div className="max-h-48 overflow-y-auto custom-scrollbar">
+                                    {VIDEO_TEMPLATES.map((tmpl, idx) => (
+                                        <button
+                                            key={idx}
+                                            onClick={() => applyTemplate(tmpl.text)}
+                                            className="w-full text-left px-3 py-2 text-xs text-gray-300 hover:bg-white/10 hover:text-white transition-colors border-b border-dark-border/30 last:border-0"
+                                        >
+                                            <div className="font-bold mb-0.5 text-brand-400">{tmpl.label}</div>
+                                            <div className="text-[10px] text-gray-500 line-clamp-2 leading-tight">{tmpl.text}</div>
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+                     </div>
+                 )}
+
                  {params.referenceImage && (
                     <button onClick={handleDescribeImage} disabled={isDescribing} className="flex items-center gap-1.5 px-2.5 py-1.5 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 rounded-lg text-[10px] font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed border border-indigo-500/20">
                       {isDescribing ? <div className="w-3 h-3 rounded-full border-2 border-indigo-400 border-t-transparent animate-spin"/> : <Eye size={12} />}
@@ -437,7 +495,13 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
                  </button>
               </div>
             </div>
-            <textarea value={params.prompt} onChange={(e) => setParams(prev => ({...prev, prompt: e.target.value}))} placeholder={mode === AppMode.IMAGE ? t('ph.prompt.image') : t('ph.prompt.video')} className="w-full h-32 bg-dark-surface border border-dark-border rounded-xl p-4 text-sm text-white placeholder-gray-600 focus:border-brand-500 focus:outline-none resize-none transition-colors" />
+            
+            <textarea 
+                value={params.prompt} 
+                onChange={(e) => setParams(prev => ({...prev, prompt: e.target.value}))} 
+                placeholder={mode === AppMode.IMAGE ? t('ph.prompt.image') : "Describe the video: Subject + Action + Camera Movement..."} 
+                className="w-full h-32 bg-dark-surface border border-dark-border rounded-xl p-4 text-sm text-white placeholder-gray-600 focus:border-brand-500 focus:outline-none resize-none transition-colors" 
+            />
           </div>
 
           {/* VISUAL CONTROL CENTER (IMAGE MODE ONLY) */}

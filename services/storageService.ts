@@ -44,11 +44,24 @@ const getDB = (): Promise<IDBDatabase> => {
 
     request.onerror = () => {
       console.error("IndexedDB error:", request.error);
+      dbPromise = null;
       reject(request.error);
     };
 
     request.onsuccess = () => {
-      resolve(request.result);
+      const db = request.result;
+      
+      // Robustness: Handle connection closing events
+      db.onversionchange = () => {
+        db.close();
+        dbPromise = null;
+      };
+
+      db.onclose = () => {
+        dbPromise = null;
+      };
+
+      resolve(db);
     };
 
     request.onupgradeneeded = (event) => {
@@ -67,6 +80,23 @@ const getDB = (): Promise<IDBDatabase> => {
   return dbPromise;
 };
 
+// Helper: robust transaction creation with retry mechanism
+const getTransaction = async (storeNames: string | string[], mode: IDBTransactionMode): Promise<IDBTransaction> => {
+  let db = await getDB();
+  try {
+    return db.transaction(storeNames, mode);
+  } catch (err: any) {
+    // Check for specific error regarding closed connection
+    if (err.name === 'InvalidStateError' || (err.message && err.message.includes('closing'))) {
+      console.warn("LuminaDB connection was closed. Reopening...");
+      dbPromise = null; // Clear cached promise
+      db = await getDB(); // Re-open
+      return db.transaction(storeNames, mode); // Retry
+    }
+    throw err;
+  }
+};
+
 export const initDB = async (): Promise<void> => {
   await getDB();
   // Try to enable persistence silently on init
@@ -76,9 +106,8 @@ export const initDB = async (): Promise<void> => {
 // --- Projects ---
 
 export const saveProject = async (project: Project): Promise<void> => {
-  const db = await getDB();
+  const transaction = await getTransaction(STORE_PROJECTS, 'readwrite');
   return new Promise((resolve, reject) => {
-    const transaction = db.transaction(STORE_PROJECTS, 'readwrite');
     const store = transaction.objectStore(STORE_PROJECTS);
     const request = store.put(project);
 
@@ -88,9 +117,8 @@ export const saveProject = async (project: Project): Promise<void> => {
 };
 
 export const loadProjects = async (): Promise<Project[]> => {
-  const db = await getDB();
+  const transaction = await getTransaction(STORE_PROJECTS, 'readonly');
   return new Promise((resolve, reject) => {
-    const transaction = db.transaction(STORE_PROJECTS, 'readonly');
     const store = transaction.objectStore(STORE_PROJECTS);
     const request = store.getAll();
 
@@ -100,10 +128,8 @@ export const loadProjects = async (): Promise<Project[]> => {
 };
 
 export const deleteProjectFromDB = async (projectId: string): Promise<void> => {
-  const db = await getDB();
+  const transaction = await getTransaction([STORE_PROJECTS, STORE_ASSETS], 'readwrite');
   return new Promise((resolve, reject) => {
-    const transaction = db.transaction([STORE_PROJECTS, STORE_ASSETS], 'readwrite');
-    
     // Delete project
     const projectStore = transaction.objectStore(STORE_PROJECTS);
     projectStore.delete(projectId);
@@ -128,8 +154,6 @@ export const deleteProjectFromDB = async (projectId: string): Promise<void> => {
 // --- Assets ---
 
 export const saveAsset = async (asset: AssetItem): Promise<void> => {
-  const db = await getDB();
-  
   // Clone asset to avoid mutating the in-memory state
   const storageRecord: any = { ...asset };
 
@@ -152,12 +176,11 @@ export const saveAsset = async (asset: AssetItem): Promise<void> => {
     }
   } catch (e) {
     console.error("Failed to prepare asset blob for storage", e);
-    // Continue attempting to save what we have (metadata) if blob fails, 
-    // though ideally we catch this earlier.
+    // Continue attempting to save what we have (metadata) if blob fails
   }
 
+  const transaction = await getTransaction(STORE_ASSETS, 'readwrite');
   return new Promise((resolve, reject) => {
-    const transaction = db.transaction(STORE_ASSETS, 'readwrite');
     const store = transaction.objectStore(STORE_ASSETS);
     const request = store.put(storageRecord);
 
@@ -177,16 +200,33 @@ export const saveAsset = async (asset: AssetItem): Promise<void> => {
 };
 
 export const updateAsset = async (id: string, updates: Partial<AssetItem>): Promise<void> => {
-  const db = await getDB();
+  // Pre-process updates to handle Blob persistence
+  const processedUpdates: any = { ...updates };
+  
+  // If we are updating a URL to a blob (common for Video generation completion), 
+  // we must persist the actual Blob data, not just the temporary browser URL.
+  if (typeof updates.url === 'string' && updates.url.startsWith('blob:')) {
+      try {
+          const response = await fetch(updates.url);
+          const blob = await response.blob();
+          processedUpdates.blob = blob;
+          processedUpdates.url = 'blob'; // Placeholder used by loadAssets
+      } catch (e) {
+          console.error("Failed to persist blob in updateAsset", e);
+          // Fallback: don't modify, try to save URL as is (will likely fail on reload but better than crash)
+      }
+  }
+
+  const transaction = await getTransaction(STORE_ASSETS, 'readwrite');
   return new Promise((resolve, reject) => {
-    const transaction = db.transaction(STORE_ASSETS, 'readwrite');
     const store = transaction.objectStore(STORE_ASSETS);
     const request = store.get(id);
 
     request.onsuccess = () => {
       const data = request.result;
       if (data) {
-        const updatedData = { ...data, ...updates };
+        // Merge existing data with processed updates
+        const updatedData = { ...data, ...processedUpdates };
         const putRequest = store.put(updatedData);
         putRequest.onsuccess = () => resolve();
         putRequest.onerror = () => reject(putRequest.error);
@@ -201,9 +241,8 @@ export const updateAsset = async (id: string, updates: Partial<AssetItem>): Prom
 };
 
 export const loadAssets = async (): Promise<AssetItem[]> => {
-  const db = await getDB();
+  const transaction = await getTransaction(STORE_ASSETS, 'readonly');
   return new Promise((resolve, reject) => {
-    const transaction = db.transaction(STORE_ASSETS, 'readonly');
     const store = transaction.objectStore(STORE_ASSETS);
     const request = store.getAll();
 
@@ -229,9 +268,8 @@ export const loadAssets = async (): Promise<AssetItem[]> => {
 
 // Update: This is now a "Permanent Delete"
 export const permanentlyDeleteAssetFromDB = async (assetId: string): Promise<void> => {
-  const db = await getDB();
+  const transaction = await getTransaction(STORE_ASSETS, 'readwrite');
   return new Promise((resolve, reject) => {
-     const transaction = db.transaction(STORE_ASSETS, 'readwrite');
      const store = transaction.objectStore(STORE_ASSETS);
      const request = store.delete(assetId);
      request.onsuccess = () => resolve();
