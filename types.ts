@@ -104,10 +104,15 @@ export interface GenerationParams {
   videoStyle?: VideoStyle;
   videoDuration?: VideoDuration;
   seed?: number;
+  
+  // Video Keyframes (Mutually exclusive with videoStyleReferences)
   videoStartImage?: string;
   videoStartImageMimeType?: string;
   videoEndImage?: string;
   videoEndImageMimeType?: string;
+
+  // Video Style References (Veo HQ only, Mutually exclusive with Keyframes)
+  videoStyleReferences?: { data: string; mimeType: string }[];
   
   // New: Video Extension
   inputVideoData?: string; // Base64 of video to extend

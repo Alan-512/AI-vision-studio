@@ -1,6 +1,6 @@
 
 import React, { useState, useRef, useEffect } from 'react';
-import { X, ZoomIn, ZoomOut, RotateCcw, Download, RefreshCcw, MessageSquarePlus, Brush, Trash2, ArrowRight } from 'lucide-react';
+import { X, ZoomIn, ZoomOut, RotateCcw, Download, RefreshCcw, MessageSquarePlus, Brush, Trash2, ArrowRight, Video } from 'lucide-react';
 import { AssetItem } from '../types';
 
 interface LightboxViewerProps {
@@ -12,7 +12,7 @@ interface LightboxViewerProps {
   onDelete?: () => void;
   onAddToChat?: (asset: AssetItem) => void;
   onInpaint?: (asset: AssetItem) => void; 
-  onExtendVideo?: (imageData: string, mimeType: string) => void; // Updated Callback
+  onExtendVideo?: (videoData: string, mimeType: string) => void; // Updated Callback to take Video Data
 }
 
 export const LightboxViewer: React.FC<LightboxViewerProps> = ({ asset, onClose, onUseAsReference, onDelete, onAddToChat, onInpaint, onExtendVideo }) => {
@@ -20,6 +20,7 @@ export const LightboxViewer: React.FC<LightboxViewerProps> = ({ asset, onClose, 
   const [position, setPosition] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
+  const [isPreparingExtension, setIsPreparingExtension] = useState(false);
   
   const containerRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
@@ -76,28 +77,34 @@ export const LightboxViewer: React.FC<LightboxViewerProps> = ({ asset, onClose, 
     }
   };
 
-  const handleExtendClick = () => {
-      if (asset.type === 'VIDEO' && onExtendVideo && videoRef.current) {
+  const handleExtendClick = async () => {
+      if (asset.type === 'VIDEO' && onExtendVideo) {
+          setIsPreparingExtension(true);
           try {
-             const video = videoRef.current;
-             const canvas = document.createElement('canvas');
-             canvas.width = video.videoWidth;
-             canvas.height = video.videoHeight;
+             // We need to fetch the blob from the asset URL (which should be a blob: url)
+             // and convert it to base64
+             const response = await fetch(asset.url);
+             const blob = await response.blob();
              
-             const ctx = canvas.getContext('2d');
-             if (ctx) {
-                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-                // Get the frame as image data
-                const frameData = canvas.toDataURL('image/jpeg', 0.95);
-                const matches = frameData.match(/^data:(.+);base64,(.+)$/);
-                if (matches) {
-                   onExtendVideo(matches[2], matches[1]);
-                   onClose();
-                }
-             }
+             const reader = new FileReader();
+             reader.onloadend = () => {
+                 const base64data = reader.result as string;
+                 // Extract clean base64
+                 const matches = base64data.match(/^data:(.+);base64,(.+)$/);
+                 if (matches) {
+                     onExtendVideo(matches[2], matches[1]); // Data, Mime
+                     onClose();
+                 } else {
+                     throw new Error("Failed to parse base64 video");
+                 }
+                 setIsPreparingExtension(false);
+             };
+             reader.readAsDataURL(blob);
+
           } catch (e) {
-             console.error("Failed to capture video frame", e);
-             alert("Could not capture video frame for extension. Security restrictions may apply.");
+             console.error("Failed to prepare video for extension", e);
+             alert("Could not load video data for extension.");
+             setIsPreparingExtension(false);
           }
       }
   };
@@ -229,10 +236,12 @@ export const LightboxViewer: React.FC<LightboxViewerProps> = ({ asset, onClose, 
                  {asset.type === 'VIDEO' && onExtendVideo && (
                     <button 
                       onClick={handleExtendClick}
-                      className="flex items-center gap-1.5 px-3 py-1.5 bg-purple-600 hover:bg-purple-500 text-white rounded-lg text-xs font-bold transition-colors"
-                      title="Use the current frame to continue this video"
+                      disabled={isPreparingExtension}
+                      className="flex items-center gap-1.5 px-3 py-1.5 bg-purple-600 hover:bg-purple-500 text-white rounded-lg text-xs font-bold transition-colors disabled:opacity-50"
+                      title="Generate next 5 seconds for this video"
                     >
-                      <ArrowRight size={14} /> Continue
+                      {isPreparingExtension ? <div className="w-3 h-3 border-2 border-white/50 border-t-white rounded-full animate-spin" /> : <Video size={14} />} 
+                      Extend Video
                     </button>
                  )}
                  

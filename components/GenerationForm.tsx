@@ -1,7 +1,6 @@
-
 import React, { useRef, useState, useEffect } from 'react';
 import { AppMode, AspectRatio, GenerationParams, ImageResolution, VideoResolution, ImageModel, VideoModel, ImageStyle, VideoStyle, VideoDuration, ChatMessage, AssetItem } from '../types';
-import { Settings2, Sparkles, Image as ImageIcon, Video as VideoIcon, Upload, X, Camera, Palette, Film, RefreshCw, MessageSquare, Layers, ChevronDown, ChevronUp, SlidersHorizontal, Monitor, Eye, Lock, Dice5, Type, User, ScanFace, Frame, ArrowRight, Loader2, Clock, BookTemplate } from 'lucide-react';
+import { Settings2, Sparkles, Image as ImageIcon, Video as VideoIcon, Upload, X, Camera, Palette, Film, RefreshCw, MessageSquare, Layers, ChevronDown, ChevronUp, SlidersHorizontal, Monitor, Eye, Lock, Dice5, Type, User, ScanFace, Frame, ArrowRight, Loader2, Clock, BookTemplate, Clapperboard, XCircle } from 'lucide-react';
 import { ChatInterface } from './ChatInterface';
 import { extractPromptFromHistory, optimizePrompt, describeImage } from '../services/geminiService';
 import { PromptBuilder } from './PromptBuilder';
@@ -57,9 +56,13 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
   const [isOptimizing, setIsOptimizing] = useState(false);
   const [isDescribing, setIsDescribing] = useState(false);
   const [showTemplates, setShowTemplates] = useState(false);
+  const [isAdvancedOpen, setIsAdvancedOpen] = useState(false);
   
+  // Video Mode Tabs
+  const [activeVideoTab, setActiveVideoTab] = useState<'keyframes' | 'style'>('keyframes');
+
   // Drag State
-  const [dragTarget, setDragTarget] = useState<'reference' | 'subject' | 'style' | 'videoStart' | 'videoEnd' | null>(null);
+  const [dragTarget, setDragTarget] = useState<'reference' | 'subject' | 'style' | 'videoStart' | 'videoEnd' | 'videoStyle' | null>(null);
 
   // Refs for file inputs
   const refImageInputRef = useRef<HTMLInputElement>(null);
@@ -67,10 +70,21 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
   const endFrameInputRef = useRef<HTMLInputElement>(null);
   const styleRefsInputRef = useRef<HTMLInputElement>(null);
   const subjectRefsInputRef = useRef<HTMLInputElement>(null);
+  const videoStyleRefsInputRef = useRef<HTMLInputElement>(null);
   
   // Timer State
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [cooldownRemaining, setCooldownRemaining] = useState(0);
+
+  // Enforce valid Aspect Ratio for Video (Auto-correction)
+  useEffect(() => {
+    if (mode === AppMode.VIDEO) {
+       const validRatios = [AspectRatio.LANDSCAPE, AspectRatio.PORTRAIT];
+       if (!validRatios.includes(params.aspectRatio)) {
+           setParams(prev => ({ ...prev, aspectRatio: AspectRatio.LANDSCAPE }));
+       }
+    }
+  }, [mode, params.aspectRatio, setParams]);
 
   // Persistent Timer Logic
   useEffect(() => {
@@ -185,7 +199,7 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
     }
   };
 
-  const handleUpload = (e: React.ChangeEvent<HTMLInputElement>, field: 'reference' | 'start' | 'end' | 'style' | 'subject') => {
+  const handleUpload = (e: React.ChangeEvent<HTMLInputElement>, field: 'reference' | 'start' | 'end' | 'style' | 'subject' | 'videoStyle') => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
 
@@ -209,14 +223,19 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
         reader.readAsDataURL(file);
     });
 
-    if (field === 'style' || field === 'subject') {
-        const currentCount = field === 'style' ? (params.styleReferences?.length || 0) : (params.subjectReferences?.length || 0);
+    if (field === 'style' || field === 'subject' || field === 'videoStyle') {
+        const currentCount = field === 'style' 
+            ? (params.styleReferences?.length || 0) 
+            : field === 'videoStyle'
+                ? (params.videoStyleReferences?.length || 0)
+                : (params.subjectReferences?.length || 0);
         const availableSlots = 3 - currentCount;
         const filesToProcess = Array.from(files).slice(0, availableSlots);
         
         Promise.all(filesToProcess.map(processFile)).then(results => {
             setParams(prev => {
                 if (field === 'style') return { ...prev, styleReferences: [...(prev.styleReferences || []), ...results] };
+                if (field === 'videoStyle') return { ...prev, videoStyleReferences: [...(prev.videoStyleReferences || []), ...results] };
                 return { ...prev, subjectReferences: [...(prev.subjectReferences || []), ...results] };
             });
         });
@@ -244,6 +263,7 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
 
   const removeStyleRef = (index: number) => setParams(prev => ({...prev, styleReferences: prev.styleReferences?.filter((_, i) => i !== index)}));
   const removeSubjectRef = (index: number) => setParams(prev => ({...prev, subjectReferences: prev.subjectReferences?.filter((_, i) => i !== index)}));
+  const removeVideoStyleRef = (index: number) => setParams(prev => ({...prev, videoStyleReferences: prev.videoStyleReferences?.filter((_, i) => i !== index)}));
 
   const handleGenerateClick = async () => {
     if (activeTab === 'chat') {
@@ -268,12 +288,12 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
     }
   };
   
-  const handleDragOver = (e: React.DragEvent, target: 'reference' | 'subject' | 'style' | 'videoStart' | 'videoEnd') => {
+  const handleDragOver = (e: React.DragEvent, target: 'reference' | 'subject' | 'style' | 'videoStart' | 'videoEnd' | 'videoStyle') => {
     e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; setDragTarget(target);
   };
   const handleDragLeave = (e: React.DragEvent) => { e.preventDefault(); setDragTarget(null); };
   
-  const handleDrop = async (e: React.DragEvent, target: 'reference' | 'subject' | 'style' | 'videoStart' | 'videoEnd') => {
+  const handleDrop = async (e: React.DragEvent, target: 'reference' | 'subject' | 'style' | 'videoStart' | 'videoEnd' | 'videoStyle') => {
     e.preventDefault();
     setDragTarget(null);
 
@@ -317,6 +337,7 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
              if (target === 'reference') setParams(prev => ({ ...prev, referenceImage: data, referenceImageMimeType: mimeType }));
              else if (target === 'subject') setParams(prev => ({ ...prev, subjectReferences: [...(prev.subjectReferences || []), newItem].slice(0, 3) }));
              else if (target === 'style') setParams(prev => ({ ...prev, styleReferences: [...(prev.styleReferences || []), newItem].slice(0, 3) }));
+             else if (target === 'videoStyle') setParams(prev => ({ ...prev, videoStyleReferences: [...(prev.videoStyleReferences || []), newItem].slice(0, 3) }));
              else if (target === 'videoStart') setParams(prev => ({ ...prev, videoStartImage: data, videoStartImageMimeType: mimeType }));
              else if (target === 'videoEnd') setParams(prev => ({ ...prev, videoEndImage: data, videoEndImageMimeType: mimeType }));
           }
@@ -342,6 +363,7 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
              if (target === 'reference' && results[0]) setParams(prev => ({ ...prev, referenceImage: results[0].data, referenceImageMimeType: results[0].mimeType }));
              else if (target === 'subject') setParams(prev => ({ ...prev, subjectReferences: [...(prev.subjectReferences || []), ...results].slice(0, 3) }));
              else if (target === 'style') setParams(prev => ({ ...prev, styleReferences: [...(prev.styleReferences || []), ...results].slice(0, 3) }));
+             else if (target === 'videoStyle') setParams(prev => ({ ...prev, videoStyleReferences: [...(prev.videoStyleReferences || []), ...results].slice(0, 3) }));
              else if (target === 'videoStart' && results[0]) setParams(prev => ({ ...prev, videoStartImage: results[0].data, videoStartImageMimeType: results[0].mimeType }));
              else if (target === 'videoEnd' && results[0]) setParams(prev => ({ ...prev, videoEndImage: results[0].data, videoEndImageMimeType: results[0].mimeType }));
           }
@@ -384,6 +406,31 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
     ? !params.prompt.trim() 
     : (chatHistory.length === 0 || isAnalyzing)) || isVideoGenerating || isCoolingDown;
 
+  // Filter aspect ratios for Video mode (only 16:9 and 9:16)
+  const displayedRatios = mode === AppMode.VIDEO 
+    ? [AspectRatio.LANDSCAPE, AspectRatio.PORTRAIT]
+    : Object.values(AspectRatio);
+  
+  // Video Mode State Checks
+  const isVeoHQ = params.videoModel === VideoModel.VEO_HQ;
+  const isVideoExtension = !!params.inputVideoData;
+
+  // Switch tabs logic: Clear conflicting data
+  const handleVideoTabSwitch = (tab: 'keyframes' | 'style') => {
+      setActiveVideoTab(tab);
+      if (tab === 'keyframes') {
+          // Clear Style Refs
+          setParams(prev => ({ ...prev, videoStyleReferences: [] }));
+      } else {
+          // Clear Keyframes
+          setParams(prev => ({ ...prev, videoStartImage: undefined, videoStartImageMimeType: undefined, videoEndImage: undefined, videoEndImageMimeType: undefined }));
+      }
+  };
+
+  const cancelVideoExtension = () => {
+      setParams(prev => ({ ...prev, inputVideoData: undefined, inputVideoMimeType: undefined }));
+  };
+
   return (
     <div className="w-[400px] flex-shrink-0 flex flex-col border-r border-dark-border bg-dark-panel z-20 h-full">
       <div className="h-16 flex items-center px-4 border-b border-dark-border gap-2 shrink-0 justify-between">
@@ -424,7 +471,7 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
           />
         </div>
 
-        <div className={`absolute inset-0 overflow-y-auto p-6 space-y-8 custom-scrollbar ${activeTab === 'studio' ? 'z-10 opacity-100 pointer-events-auto' : 'z-0 opacity-0 pointer-events-none'}`}>
+        <div className={`absolute inset-0 overflow-y-auto p-6 space-y-6 custom-scrollbar ${activeTab === 'studio' ? 'z-10 opacity-100 pointer-events-auto' : 'z-0 opacity-0 pointer-events-none'}`}>
           {/* Model Selection */}
           <div className="space-y-3">
             <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">{t('lbl.model')}</label>
@@ -504,6 +551,61 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
             />
           </div>
 
+          {/* ADVANCED SETTINGS (Collapsible) */}
+          <div className="border border-dark-border rounded-xl overflow-hidden bg-dark-surface/30">
+            <button 
+                onClick={() => setIsAdvancedOpen(!isAdvancedOpen)}
+                className="w-full flex items-center justify-between p-3 text-xs font-bold text-gray-400 uppercase tracking-wider hover:bg-white/5 transition-colors"
+            >
+                <div className="flex items-center gap-2">
+                    <SlidersHorizontal size={14} />
+                    {t('lbl.advanced')}
+                </div>
+                {isAdvancedOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+            </button>
+            
+            {isAdvancedOpen && (
+                <div className="p-3 pt-0 space-y-4 animate-in slide-in-from-top-2">
+                    {/* Negative Prompt */}
+                    <div className="space-y-2">
+                       <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">{t('lbl.negative_prompt')}</label>
+                       <textarea 
+                         value={params.negativePrompt || ''}
+                         onChange={(e) => setParams(prev => ({...prev, negativePrompt: e.target.value}))}
+                         placeholder={t('ph.negative')}
+                         className="w-full h-20 bg-dark-surface border border-dark-border rounded-lg p-3 text-xs text-white placeholder-gray-600 focus:border-brand-500 focus:outline-none resize-none"
+                       />
+                    </div>
+
+                    {/* Seed (Image Mode Only) */}
+                    {mode === AppMode.IMAGE && (
+                        <div className="space-y-2">
+                           <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">{t('lbl.seed')}</label>
+                           <div className="flex gap-2">
+                              <div className="relative flex-1">
+                                 <input 
+                                   type="number" 
+                                   value={params.seed !== undefined ? params.seed : ''}
+                                   onChange={(e) => setParams(prev => ({...prev, seed: e.target.value ? parseInt(e.target.value) : undefined}))}
+                                   placeholder={t('ph.seed_random')}
+                                   className="w-full bg-dark-surface border border-dark-border rounded-lg pl-3 pr-10 py-2 text-xs text-white placeholder-gray-600 focus:border-brand-500 focus:outline-none font-mono"
+                                 />
+                                 {params.seed !== undefined && (
+                                    <button onClick={handleRandomizeSeed} className="absolute right-2 top-2 text-gray-500 hover:text-white">
+                                       <X size={14} />
+                                    </button>
+                                 )}
+                              </div>
+                              <button onClick={handleLockSeed} className={`p-2 rounded-lg border transition-colors ${params.seed !== undefined ? 'bg-brand-500/20 border-brand-500 text-brand-400' : 'bg-dark-surface border-dark-border text-gray-400 hover:text-white'}`} title="Randomize / Lock Seed">
+                                 <Dice5 size={18} />
+                              </button>
+                           </div>
+                        </div>
+                    )}
+                </div>
+            )}
+          </div>
+
           {/* VISUAL CONTROL CENTER (IMAGE MODE ONLY) */}
           {mode === AppMode.IMAGE && (
             <div className="space-y-6 animate-in fade-in slide-in-from-bottom-5">
@@ -513,7 +615,61 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
                   <div className="h-px bg-white/10 flex-1" />
                </div>
 
-               {/* 1. Subject / Identity */}
+               {/* 1. Composition / Reference (Swapped to Top) */}
+               <div className="space-y-3">
+                  <label className="text-xs font-bold text-gray-400 uppercase tracking-wider flex items-center gap-1.5">
+                     <Frame size={14} className="text-blue-400" />
+                     {t('lbl.comp_ref')}
+                  </label>
+                  <p className="text-[10px] text-gray-500">{t('help.comp_desc')}</p>
+                  
+                  {params.referenceImage ? (
+                    <div className="relative w-full aspect-video rounded-xl overflow-hidden border border-dark-border group">
+                      <img src={`data:${params.referenceImageMimeType};base64,${params.referenceImage}`} alt="Reference" className="w-full h-full object-cover" />
+                      <button onClick={() => removeImage('reference')} className="absolute top-2 right-2 p-1.5 bg-black/50 hover:bg-red-500 text-white rounded-full transition-colors opacity-0 group-hover:opacity-100">
+                        <X size={14} />
+                      </button>
+                      {params.isAnnotatedReference && (
+                         <div className="absolute bottom-2 left-2 bg-red-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-full shadow-lg">
+                            Inpainting Mask Active
+                         </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div 
+                      className={`w-full h-32 border-2 border-dashed rounded-xl flex flex-col items-center justify-center cursor-pointer transition-all ${dragTarget === 'reference' ? 'border-blue-500 bg-blue-500/10' : 'border-dark-border hover:border-blue-500 hover:bg-white/5'}`}
+                      onClick={() => refImageInputRef.current?.click()}
+                      onDragOver={(e) => handleDragOver(e, 'reference')}
+                      onDragLeave={handleDragLeave}
+                      onDrop={(e) => handleDrop(e, 'reference')}
+                    >
+                      <Upload className="text-gray-500 mb-2" size={20} />
+                      <span className="text-xs text-gray-400 font-medium">{t('help.upload')}</span>
+                      <span className="text-[10px] text-gray-600 mt-1">Supports Drag & Drop</span>
+                    </div>
+                  )}
+                  <input ref={refImageInputRef} type="file" accept="image/*" className="hidden" onChange={(e) => handleUpload(e, 'reference')} />
+                  
+                  {/* Continuous Mode Toggle */}
+                  <div className="flex items-center justify-between mt-2 p-2 bg-dark-bg/50 rounded-lg border border-dark-border">
+                        <div className="flex flex-col">
+                            <label className="text-xs text-gray-300 font-medium flex items-center gap-1.5 cursor-pointer" onClick={() => setParams(prev => ({...prev, continuousMode: !prev.continuousMode}))}>
+                                <RefreshCw size={12} className={params.continuousMode ? "text-brand-500" : "text-gray-500"} />
+                                {t('lbl.continuous_mode')}
+                            </label>
+                            <span className="text-[10px] text-gray-600 mt-0.5">{t('help.continuous')}</span>
+                        </div>
+                        
+                        <button 
+                             onClick={() => setParams(prev => ({...prev, continuousMode: !prev.continuousMode}))}
+                             className={`w-9 h-5 rounded-full transition-colors relative flex items-center ${params.continuousMode ? 'bg-brand-500' : 'bg-gray-600'}`}
+                        >
+                             <div className={`w-3.5 h-3.5 bg-white rounded-full shadow-sm transition-all absolute ${params.continuousMode ? 'translate-x-[18px]' : 'translate-x-[2px]'}`} />
+                        </button>
+                    </div>
+               </div>
+
+               {/* 2. Subject / Identity (Swapped to Second) */}
                <div className="space-y-3">
                   <div className="flex items-center justify-between">
                      <label className="text-xs font-bold text-gray-400 uppercase tracking-wider flex items-center gap-1.5">
@@ -557,56 +713,6 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
                      )}
                   </div>
                   <input ref={subjectRefsInputRef} type="file" multiple accept="image/*" className="hidden" onChange={(e) => handleUpload(e, 'subject')} />
-               </div>
-
-               {/* 2. Composition / Reference */}
-               <div className="space-y-3">
-                  <label className="text-xs font-bold text-gray-400 uppercase tracking-wider flex items-center gap-1.5">
-                     <Frame size={14} className="text-blue-400" />
-                     {t('lbl.comp_ref')}
-                  </label>
-                  <p className="text-[10px] text-gray-500">{t('help.comp_desc')}</p>
-                  
-                  {params.referenceImage ? (
-                    <div className="relative w-full aspect-video rounded-xl overflow-hidden border border-dark-border group">
-                      <img src={`data:${params.referenceImageMimeType};base64,${params.referenceImage}`} alt="Reference" className="w-full h-full object-cover" />
-                      <button onClick={() => removeImage('reference')} className="absolute top-2 right-2 p-1.5 bg-black/50 hover:bg-red-500 text-white rounded-full transition-colors opacity-0 group-hover:opacity-100">
-                        <X size={14} />
-                      </button>
-                      {params.isAnnotatedReference && (
-                         <div className="absolute bottom-2 left-2 bg-red-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-full shadow-lg">
-                            Inpainting Mask Active
-                         </div>
-                      )}
-                    </div>
-                  ) : (
-                    <div 
-                      className={`w-full h-32 border-2 border-dashed rounded-xl flex flex-col items-center justify-center cursor-pointer transition-all ${dragTarget === 'reference' ? 'border-blue-500 bg-blue-500/10' : 'border-dark-border hover:border-blue-500 hover:bg-white/5'}`}
-                      onClick={() => refImageInputRef.current?.click()}
-                      onDragOver={(e) => handleDragOver(e, 'reference')}
-                      onDragLeave={handleDragLeave}
-                      onDrop={(e) => handleDrop(e, 'reference')}
-                    >
-                      <Upload className="text-gray-500 mb-2" size={20} />
-                      <span className="text-xs text-gray-400 font-medium">{t('help.upload')}</span>
-                      <span className="text-[10px] text-gray-600 mt-1">Supports Drag & Drop</span>
-                    </div>
-                  )}
-                  <input ref={refImageInputRef} type="file" accept="image/*" className="hidden" onChange={(e) => handleUpload(e, 'reference')} />
-                  
-                  <div className="flex items-center gap-2">
-                     <input 
-                       type="checkbox" 
-                       id="continuousMode" 
-                       checked={params.continuousMode} 
-                       onChange={(e) => setParams(prev => ({...prev, continuousMode: e.target.checked}))}
-                       className="w-3 h-3 rounded border-gray-600 bg-dark-bg text-brand-500 focus:ring-offset-dark-panel"
-                     />
-                     <label htmlFor="continuousMode" className="text-xs text-gray-400 select-none cursor-pointer flex items-center gap-1">
-                        <RefreshCw size={10} />
-                        {t('lbl.continuous_mode')}
-                     </label>
-                  </div>
                </div>
 
                {/* 3. Style / Vibe */}
@@ -659,236 +765,309 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
             </div>
           )}
 
-          {/* VIDEO SPECIFIC: Keyframes */}
+          {/* VIDEO SPECIFIC CONTROLS */}
           {mode === AppMode.VIDEO && (
              <div className="space-y-4 animate-in fade-in slide-in-from-bottom-5">
                 <div className="flex items-center gap-2 mb-2">
                    <div className="h-px bg-white/10 flex-1" />
-                   <span className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">{t('lbl.video_keyframes')}</span>
+                   <span className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">{t('lbl.video_controls')}</span>
                    <div className="h-px bg-white/10 flex-1" />
                 </div>
-                <p className="text-[10px] text-gray-500">{t('help.video_frames')}</p>
                 
-                <div className="grid grid-cols-2 gap-3">
-                   {/* Start Frame */}
-                   <div className="space-y-2">
-                      <label className="text-[10px] font-bold text-gray-400 uppercase">Start Frame</label>
-                      {params.videoStartImage ? (
-                         <div className="relative aspect-video rounded-lg overflow-hidden border border-dark-border group">
-                            <img src={`data:${params.videoStartImageMimeType};base64,${params.videoStartImage}`} className="w-full h-full object-cover" />
-                            <button onClick={() => removeImage('start')} className="absolute top-1 right-1 bg-black/50 text-white p-1 rounded-full opacity-0 group-hover:opacity-100">
-                               <X size={12} />
-                            </button>
-                         </div>
-                      ) : (
-                         <div 
-                           className={`aspect-video border-2 border-dashed rounded-lg flex flex-col items-center justify-center cursor-pointer ${dragTarget === 'videoStart' ? 'border-brand-500 bg-brand-500/10' : 'border-dark-border hover:border-brand-500 hover:bg-white/5'}`}
-                           onClick={() => startFrameInputRef.current?.click()}
-                           onDragOver={(e) => handleDragOver(e, 'videoStart')}
-                           onDragLeave={handleDragLeave}
-                           onDrop={(e) => handleDrop(e, 'videoStart')}
-                         >
-                            <ArrowRight size={16} className="text-gray-500 mb-1" />
-                            <span className="text-[10px] text-gray-500">Start</span>
-                         </div>
-                      )}
-                      <input ref={startFrameInputRef} type="file" accept="image/*" className="hidden" onChange={(e) => handleUpload(e, 'start')} />
-                   </div>
-
-                   {/* End Frame */}
-                   <div className="space-y-2">
-                      <label className="text-[10px] font-bold text-gray-400 uppercase">End Frame</label>
-                      {params.videoEndImage ? (
-                         <div className="relative aspect-video rounded-lg overflow-hidden border border-dark-border group">
-                            <img src={`data:${params.videoEndImageMimeType};base64,${params.videoEndImage}`} className="w-full h-full object-cover" />
-                            <button onClick={() => removeImage('end')} className="absolute top-1 right-1 bg-black/50 text-white p-1 rounded-full opacity-0 group-hover:opacity-100">
-                               <X size={12} />
-                            </button>
-                         </div>
-                      ) : (
-                         <div 
-                           className={`aspect-video border-2 border-dashed rounded-lg flex flex-col items-center justify-center cursor-pointer ${dragTarget === 'videoEnd' ? 'border-brand-500 bg-brand-500/10' : 'border-dark-border hover:border-brand-500 hover:bg-white/5'}`}
-                           onClick={() => endFrameInputRef.current?.click()}
-                           onDragOver={(e) => handleDragOver(e, 'videoEnd')}
-                           onDragLeave={handleDragLeave}
-                           onDrop={(e) => handleDrop(e, 'videoEnd')}
-                         >
-                            <Frame size={16} className="text-gray-500 mb-1" />
-                            <span className="text-[10px] text-gray-500">End</span>
-                         </div>
-                      )}
-                      <input ref={endFrameInputRef} type="file" accept="image/*" className="hidden" onChange={(e) => handleUpload(e, 'end')} />
-                   </div>
-                </div>
-             </div>
-          )}
-          
-          {/* Advanced & Ratios */}
-          <div className="space-y-4">
-             <div className="flex items-center gap-2 mb-2">
-                <SlidersHorizontal size={14} className="text-gray-400" />
-                <span className="text-xs font-bold text-gray-400 uppercase tracking-wider">{t('lbl.advanced')}</span>
-             </div>
-             
-             <div className="space-y-6 pt-2">
-                {/* 1. Aspect Ratio */}
-                <div className="space-y-3">
-                   <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">{t('lbl.aspect_ratio')}</label>
-                   <div className="grid grid-cols-5 gap-2">
-                      {Object.values(AspectRatio).map(renderRatioVisual)}
-                   </div>
-                </div>
-
-                {/* 2. Resolution & Count/Duration */}
-                <div className="grid grid-cols-2 gap-4">
-                   <div className="space-y-2">
-                      <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">{t('lbl.resolution')}</label>
-                      <div className="relative">
-                         <select 
-                           value={mode === AppMode.IMAGE ? params.imageResolution : params.videoResolution}
-                           onChange={(e) => setParams(prev => mode === AppMode.IMAGE ? ({...prev, imageResolution: e.target.value as ImageResolution}) : ({...prev, videoResolution: e.target.value as VideoResolution}))}
-                           className="w-full bg-dark-surface border border-dark-border rounded-lg px-3 py-2 text-xs text-white appearance-none focus:border-brand-500 focus:outline-none"
-                         >
-                            {mode === AppMode.IMAGE ? (
-                               <>
-                                 <option value={ImageResolution.RES_1K}>1K (Square)</option>
-                                 <option value={ImageResolution.RES_2K}>2K (Pro Only)</option>
-                                 <option value={ImageResolution.RES_4K}>4K (Pro Only)</option>
-                               </>
-                            ) : (
-                               <>
-                                 <option value={VideoResolution.RES_720P}>720p HD</option>
-                                 <option value={VideoResolution.RES_1080P}>1080p FHD</option>
-                               </>
-                            )}
-                         </select>
-                         <Monitor size={14} className="absolute right-3 top-2.5 text-gray-500 pointer-events-none" />
-                      </div>
-                   </div>
-                   
-                   <div className="space-y-2">
-                      <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">{mode === AppMode.IMAGE ? t('lbl.count') : t('lbl.duration')}</label>
-                      {mode === AppMode.IMAGE ? (
-                         <div className="grid grid-cols-4 gap-1">
-                            {[1, 2, 3, 4].map(num => (
-                               <button
-                                 key={num}
-                                 onClick={() => setParams(prev => ({ ...prev, numberOfImages: num }))}
-                                 className={`py-2 rounded-lg border text-xs font-medium transition-all ${
-                                   (params.numberOfImages || 1) === num 
-                                      ? 'border-brand-500 bg-brand-500/20 text-brand-400' 
-                                      : 'border-dark-border bg-dark-surface text-gray-500 hover:border-gray-500'
-                                 }`}
+                {/* VIDEO EXTENSION BANNER */}
+                {isVideoExtension ? (
+                   <div className="bg-purple-500/10 border border-purple-500/30 rounded-lg p-4 relative overflow-hidden">
+                       <div className="flex items-start gap-3">
+                           <div className="p-2 bg-purple-500/20 rounded-lg shrink-0">
+                               <Clapperboard size={20} className="text-purple-400" />
+                           </div>
+                           <div className="flex-1 min-w-0">
+                               <h4 className="text-xs font-bold text-purple-200 uppercase mb-1">{t('lbl.video_extend')}</h4>
+                               <p className="text-[10px] text-gray-400 leading-relaxed mb-2">
+                                  You are extending an existing video. The model will generate the next 5-7 seconds based on your prompt.
+                               </p>
+                               <button 
+                                 onClick={cancelVideoExtension}
+                                 className="flex items-center gap-1.5 px-3 py-1.5 bg-white/5 hover:bg-white/10 rounded border border-white/10 text-[10px] text-gray-300 transition-colors"
                                >
-                                 {num}
+                                  <XCircle size={12} /> Cancel Extension
                                </button>
-                            ))}
-                         </div>
-                      ) : (
-                         <div className="relative">
-                            <select 
-                              value={params.videoDuration}
-                              onChange={(e) => setParams(prev => ({...prev, videoDuration: e.target.value as VideoDuration}))}
-                              className="w-full bg-dark-surface border border-dark-border rounded-lg px-3 py-2 text-xs text-white appearance-none focus:border-brand-500 focus:outline-none"
-                            >
-                               <option value={VideoDuration.SHORT}>5s (Standard)</option>
-                               <option value={VideoDuration.LONG}>10s (Pro Only)</option>
-                            </select>
-                            <Clock size={14} className="absolute right-3 top-2.5 text-gray-500 pointer-events-none" />
-                         </div>
-                      )}
-                   </div>
-                </div>
-
-                {/* 3. Negative Prompt */}
-                <div className="space-y-2">
-                   <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">{t('lbl.negative_prompt')}</label>
-                   <textarea 
-                     value={params.negativePrompt || ''}
-                     onChange={(e) => setParams(prev => ({...prev, negativePrompt: e.target.value}))}
-                     placeholder={t('ph.negative')}
-                     className="w-full h-20 bg-dark-surface border border-dark-border rounded-lg p-3 text-xs text-white placeholder-gray-600 focus:border-brand-500 focus:outline-none resize-none"
-                   />
-                </div>
-
-                {/* 4. Seed (Image Mode Only) */}
-                {mode === AppMode.IMAGE && (
-                    <div className="space-y-2">
-                       <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">{t('lbl.seed')}</label>
-                       <div className="flex gap-2">
-                          <div className="relative flex-1">
-                             <input 
-                               type="number" 
-                               value={params.seed !== undefined ? params.seed : ''}
-                               onChange={(e) => setParams(prev => ({...prev, seed: e.target.value ? parseInt(e.target.value) : undefined}))}
-                               placeholder={t('ph.seed_random')}
-                               className="w-full bg-dark-surface border border-dark-border rounded-lg pl-3 pr-10 py-2 text-xs text-white placeholder-gray-600 focus:border-brand-500 focus:outline-none font-mono"
-                             />
-                             {params.seed !== undefined && (
-                                <button onClick={handleRandomizeSeed} className="absolute right-2 top-2 text-gray-500 hover:text-white">
-                                   <X size={14} />
-                                </button>
-                             )}
-                          </div>
-                          <button onClick={handleLockSeed} className={`p-2 rounded-lg border transition-colors ${params.seed !== undefined ? 'bg-brand-500/20 border-brand-500 text-brand-400' : 'bg-dark-surface border-dark-border text-gray-400 hover:text-white'}`} title="Randomize / Lock Seed">
-                             <Dice5 size={18} />
-                          </button>
+                           </div>
                        </div>
-                    </div>
+                   </div>
+                ) : (
+                    /* NORMAL VIDEO GENERATION */
+                    <>
+                        {/* Tab Switcher for Veo HQ */}
+                        {isVeoHQ && (
+                            <div className="flex bg-dark-bg p-1 rounded-lg border border-dark-border mb-3">
+                                <button
+                                    onClick={() => handleVideoTabSwitch('keyframes')}
+                                    className={`flex-1 py-1.5 text-[10px] font-bold uppercase tracking-wider rounded-md transition-all ${
+                                        activeVideoTab === 'keyframes' ? 'bg-brand-500/20 text-brand-400 border border-brand-500/30' : 'text-gray-500 hover:text-gray-300'
+                                    }`}
+                                >
+                                    {t('lbl.video_keyframes')}
+                                </button>
+                                <button
+                                    onClick={() => handleVideoTabSwitch('style')}
+                                    className={`flex-1 py-1.5 text-[10px] font-bold uppercase tracking-wider rounded-md transition-all ${
+                                        activeVideoTab === 'style' ? 'bg-purple-500/20 text-purple-400 border border-purple-500/30' : 'text-gray-500 hover:text-gray-300'
+                                    }`}
+                                >
+                                    {t('lbl.video_subject_ref')}
+                                </button>
+                            </div>
+                        )}
+
+                        {/* KEYFRAMES TAB */}
+                        {(!isVeoHQ || activeVideoTab === 'keyframes') && (
+                            <div className="space-y-3 animate-in fade-in slide-in-from-right-2">
+                                <p className="text-[10px] text-gray-500">{t('help.video_frames')}</p>
+                                <div className="grid grid-cols-2 gap-3">
+                                   {/* Start Frame */}
+                                   <div className="space-y-2">
+                                      <label className="text-[10px] font-bold text-gray-400 uppercase">Start Frame</label>
+                                      {params.videoStartImage ? (
+                                         <div className="relative aspect-video rounded-lg overflow-hidden border border-dark-border group">
+                                            <img src={`data:${params.videoStartImageMimeType};base64,${params.videoStartImage}`} className="w-full h-full object-cover" />
+                                            <button onClick={() => removeImage('start')} className="absolute top-1 right-1 bg-black/50 text-white p-1 rounded-full opacity-0 group-hover:opacity-100">
+                                               <X size={12} />
+                                            </button>
+                                         </div>
+                                      ) : (
+                                         <div 
+                                           className={`aspect-video border-2 border-dashed rounded-lg flex flex-col items-center justify-center cursor-pointer ${dragTarget === 'videoStart' ? 'border-brand-500 bg-brand-500/10' : 'border-dark-border hover:border-brand-500 hover:bg-white/5'}`}
+                                           onClick={() => startFrameInputRef.current?.click()}
+                                           onDragOver={(e) => handleDragOver(e, 'videoStart')}
+                                           onDragLeave={handleDragLeave}
+                                           onDrop={(e) => handleDrop(e, 'videoStart')}
+                                         >
+                                            <ArrowRight size={16} className="text-gray-500 mb-1" />
+                                            <span className="text-[10px] text-gray-500">Start</span>
+                                         </div>
+                                      )}
+                                      <input ref={startFrameInputRef} type="file" accept="image/*" className="hidden" onChange={(e) => handleUpload(e, 'start')} />
+                                   </div>
+
+                                   {/* End Frame */}
+                                   <div className="space-y-2">
+                                      <label className="text-[10px] font-bold text-gray-400 uppercase">End Frame</label>
+                                      {params.videoEndImage ? (
+                                         <div className="relative aspect-video rounded-lg overflow-hidden border border-dark-border group">
+                                            <img src={`data:${params.videoEndImageMimeType};base64,${params.videoEndImage}`} className="w-full h-full object-cover" />
+                                            <button onClick={() => removeImage('end')} className="absolute top-1 right-1 bg-black/50 text-white p-1 rounded-full opacity-0 group-hover:opacity-100">
+                                               <X size={12} />
+                                            </button>
+                                         </div>
+                                      ) : (
+                                         <div 
+                                           className={`aspect-video border-2 border-dashed rounded-lg flex flex-col items-center justify-center cursor-pointer ${dragTarget === 'videoEnd' ? 'border-brand-500 bg-brand-500/10' : 'border-dark-border hover:border-brand-500 hover:bg-white/5'}`}
+                                           onClick={() => endFrameInputRef.current?.click()}
+                                           onDragOver={(e) => handleDragOver(e, 'videoEnd')}
+                                           onDragLeave={handleDragLeave}
+                                           onDrop={(e) => handleDrop(e, 'videoEnd')}
+                                         >
+                                            <Frame size={16} className="text-gray-500 mb-1" />
+                                            <span className="text-[10px] text-gray-500">End</span>
+                                         </div>
+                                      )}
+                                      <input ref={endFrameInputRef} type="file" accept="image/*" className="hidden" onChange={(e) => handleUpload(e, 'end')} />
+                                   </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* STYLE REF TAB (Veo HQ Only) - Now labeled as Subject/Character Ref */}
+                        {isVeoHQ && activeVideoTab === 'style' && (
+                             <div className="space-y-3 animate-in fade-in slide-in-from-right-2">
+                                 <p className="text-[10px] text-gray-500">{t('help.video_subject_desc')}</p>
+                                 
+                                 <div className="grid grid-cols-3 gap-2">
+                                     {params.videoStyleReferences?.map((ref, idx) => (
+                                        <div key={idx} className="relative aspect-square rounded-lg border border-dark-border overflow-hidden group">
+                                           <img src={`data:${ref.mimeType};base64,${ref.data}`} alt="ref" className="w-full h-full object-cover" />
+                                           <button onClick={() => removeVideoStyleRef(idx)} className="absolute top-1 right-1 bg-black/50 text-white p-1 rounded-full opacity-0 group-hover:opacity-100 transition-opacity">
+                                              <X size={12} />
+                                           </button>
+                                        </div>
+                                     ))}
+                                     {(params.videoStyleReferences?.length || 0) < 3 && (
+                                        <div 
+                                           className={`aspect-square border-2 border-dashed rounded-lg flex flex-col items-center justify-center cursor-pointer transition-colors ${dragTarget === 'videoStyle' ? 'border-purple-500 bg-purple-500/10' : 'border-dark-border hover:border-purple-500 hover:bg-white/5'}`}
+                                           onClick={() => videoStyleRefsInputRef.current?.click()}
+                                           onDragOver={(e) => handleDragOver(e, 'videoStyle')}
+                                           onDragLeave={handleDragLeave}
+                                           onDrop={(e) => handleDrop(e, 'videoStyle')}
+                                        >
+                                           <ScanFace size={20} className="text-gray-500 mb-1" />
+                                           <span className="text-[10px] text-gray-500 text-center">{t('help.upload')}</span>
+                                        </div>
+                                     )}
+                                  </div>
+                                  <input ref={videoStyleRefsInputRef} type="file" multiple accept="image/*" className="hidden" onChange={(e) => handleUpload(e, 'videoStyle')} />
+                                  <div className="p-2 bg-yellow-500/10 border border-yellow-500/20 rounded text-[10px] text-yellow-500">
+                                      {t('note.video_ref_limit')}
+                                  </div>
+                             </div>
+                        )}
+                    </>
                 )}
              </div>
+          )}
+
+          {/* PRIMARY SETTINGS (Moved to Bottom) */}
+          <div className="space-y-4 pt-4 border-t border-dark-border/30">
+            {/* Aspect Ratio */}
+            <div className="space-y-3">
+               <div className="flex justify-between">
+                   <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">{t('lbl.aspect_ratio')}</label>
+                   {(isVeoHQ && params.videoStyleReferences && params.videoStyleReferences.length > 0) && (
+                       <span className="text-[10px] text-purple-400 flex items-center gap-1"><Lock size={8}/> {t('lbl.locked_subject')}</span>
+                   )}
+                   {isVideoExtension && (
+                       <span className="text-[10px] text-purple-400 flex items-center gap-1"><Lock size={8}/> Locked (Extension)</span>
+                   )}
+               </div>
+               <div className={`grid gap-2 ${mode === AppMode.VIDEO ? 'grid-cols-2' : 'grid-cols-5'} ${
+                   (isVeoHQ && params.videoStyleReferences?.length) || isVideoExtension ? 'opacity-50 pointer-events-none' : ''
+               }`}>
+                  {displayedRatios.map(renderRatioVisual)}
+               </div>
+            </div>
+
+            {/* Style Selector (NEW) */}
+            <div className="space-y-3">
+               <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">{t('lbl.style')}</label>
+               <div className="relative">
+                  <select 
+                    value={mode === AppMode.IMAGE ? (params.imageStyle || ImageStyle.NONE) : (params.videoStyle || VideoStyle.NONE)}
+                    onChange={(e) => setParams(prev => mode === AppMode.IMAGE ? ({...prev, imageStyle: e.target.value as ImageStyle}) : ({...prev, videoStyle: e.target.value as VideoStyle}))}
+                    className="w-full bg-dark-surface border border-dark-border rounded-lg px-3 py-2 text-xs text-white appearance-none focus:border-brand-500 focus:outline-none transition-colors"
+                  >
+                     {mode === AppMode.IMAGE ? (
+                        Object.values(ImageStyle).map(style => (
+                           <option key={style} value={style}>{style}</option>
+                        ))
+                     ) : (
+                        Object.values(VideoStyle).map(style => (
+                           <option key={style} value={style}>{style}</option>
+                        ))
+                     )}
+                  </select>
+                  <Palette size={14} className="absolute right-3 top-2.5 text-gray-500 pointer-events-none" />
+               </div>
+            </div>
+
+            {/* Resolution & Count */}
+            <div className={`grid gap-4 ${mode === AppMode.IMAGE ? 'grid-cols-2' : 'grid-cols-1'}`}>
+               <div className="space-y-2">
+                  <div className="flex justify-between">
+                      <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">{t('lbl.resolution')}</label>
+                      {(isVeoHQ && params.videoStyleReferences && params.videoStyleReferences.length > 0) && (
+                           <span className="text-[10px] text-purple-400 flex items-center gap-1"><Lock size={8}/> Locked to 720p</span>
+                       )}
+                  </div>
+                  <div className={`relative ${
+                       (isVeoHQ && params.videoStyleReferences?.length) || isVideoExtension ? 'opacity-50 pointer-events-none' : ''
+                  }`}>
+                     <select 
+                       value={mode === AppMode.IMAGE ? params.imageResolution : params.videoResolution}
+                       onChange={(e) => setParams(prev => mode === AppMode.IMAGE ? ({...prev, imageResolution: e.target.value as ImageResolution}) : ({...prev, videoResolution: e.target.value as VideoResolution}))}
+                       className="w-full bg-dark-surface border border-dark-border rounded-lg px-3 py-2 text-xs text-white appearance-none focus:border-brand-500 focus:outline-none"
+                     >
+                        {mode === AppMode.IMAGE ? (
+                           <>
+                             <option value={ImageResolution.RES_1K}>1K (Square)</option>
+                             <option value={ImageResolution.RES_2K}>2K (Pro Only)</option>
+                             <option value={ImageResolution.RES_4K}>4K (Pro Only)</option>
+                           </>
+                        ) : (
+                           <>
+                             <option value={VideoResolution.RES_720P}>720p HD</option>
+                             <option value={VideoResolution.RES_1080P}>1080p FHD</option>
+                           </>
+                        )}
+                     </select>
+                     <Monitor size={14} className="absolute right-3 top-2.5 text-gray-500 pointer-events-none" />
+                  </div>
+               </div>
+               
+               {mode === AppMode.IMAGE && (
+                  <div className="space-y-2">
+                     <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">{t('lbl.count')}</label>
+                     <div className="grid grid-cols-4 gap-1">
+                        {[1, 2, 3, 4].map(num => (
+                           <button
+                             key={num}
+                             onClick={() => setParams(prev => ({ ...prev, numberOfImages: num }))}
+                             className={`py-2 rounded-lg border text-xs font-medium transition-all ${
+                               (params.numberOfImages || 1) === num 
+                                  ? 'border-brand-500 bg-brand-500/20 text-brand-400' 
+                                  : 'border-dark-border bg-dark-surface text-gray-500 hover:border-gray-500'
+                             }`}
+                           >
+                             {num}
+                           </button>
+                        ))}
+                     </div>
+                  </div>
+               )}
+            </div>
           </div>
           
           <div className="pb-6" />
         </div>
       </div>
       
-      {/* Footer Button - Fixed at Bottom */}
-      <div className="p-4 bg-dark-panel border-t border-dark-border z-20 shrink-0">
-          <button
-            onClick={handleGenerateClick}
-            disabled={isBtnDisabled}
-            className={`w-full py-4 font-bold rounded-xl shadow-lg transition-all transform hover:-translate-y-0.5 flex flex-col items-center justify-center gap-1 ${
-               isBtnDisabled
-                ? 'bg-gray-700 text-gray-400 cursor-not-allowed transform-none' 
-                : 'bg-gradient-to-r from-brand-600 to-indigo-600 hover:from-brand-500 hover:to-indigo-500 text-white shadow-brand-900/20'
-            }`}
-          >
-            {isCoolingDown ? (
-               <div className="flex items-center gap-2 text-yellow-400">
-                  <Clock size={20} className="animate-pulse" />
-                  <span>System Busy (Wait {cooldownRemaining}s)</span>
-               </div>
-            ) : isGenerating || isAnalyzing ? (
-              <div className="flex items-center gap-2">
-                 {isAnalyzing ? (
-                    <>
-                       <Sparkles size={20} className="animate-pulse" />
-                       <span>{t('btn.analyzing')}</span>
-                    </>
-                 ) : (
-                    mode === AppMode.VIDEO ? (
-                       <>
-                          <Loader2 size={20} className="animate-spin" />
-                          <span>{t('nav.generating')}</span>
-                       </>
-                    ) : (
-                       <>
-                          <Layers size={20} className="animate-pulse" />
-                          <span>{t('btn.queue')}</span>
-                       </>
-                    )
-                 )}
-              </div>
-            ) : (
-              <div className="flex items-center gap-2">
-                {mode === AppMode.IMAGE ? <ImageIcon size={20} /> : <VideoIcon size={20} />}
-                <span>{params.inputVideoData ? t('btn.extend') : t('btn.generate')} {mode === AppMode.IMAGE ? (params.numberOfImages || 1) : ''}</span>
-              </div>
-            )}
-            {!isCoolingDown && <span className="text-[10px] font-normal opacity-70">{t('msg.cost_warning')}</span>}
-          </button>
-      </div>
+      {/* Footer Button - Fixed at Bottom - Only show if NOT in Video Mode + Chat Tab */}
+      {!(activeTab === 'chat' && mode === AppMode.VIDEO) && (
+        <div className="p-4 bg-dark-panel border-t border-dark-border z-20 shrink-0">
+            <button
+              onClick={handleGenerateClick}
+              disabled={isBtnDisabled}
+              className={`w-full py-4 font-bold rounded-xl shadow-lg transition-all transform hover:-translate-y-0.5 flex flex-col items-center justify-center gap-1 ${
+                isBtnDisabled
+                  ? 'bg-gray-700 text-gray-400 cursor-not-allowed transform-none' 
+                  : 'bg-gradient-to-r from-brand-600 to-indigo-600 hover:from-brand-500 hover:to-indigo-500 text-white shadow-brand-900/20'
+              }`}
+            >
+              {isCoolingDown ? (
+                <div className="flex items-center gap-2 text-yellow-400">
+                    <Clock size={20} className="animate-pulse" />
+                    <span>System Busy (Wait {cooldownRemaining}s)</span>
+                </div>
+              ) : isGenerating || isAnalyzing ? (
+                <div className="flex items-center gap-2">
+                  {isAnalyzing ? (
+                      <>
+                        <Sparkles size={20} className="animate-pulse" />
+                        <span>{t('btn.analyzing')}</span>
+                      </>
+                  ) : (
+                      mode === AppMode.VIDEO ? (
+                        <>
+                            <Loader2 size={20} className="animate-spin" />
+                            <span>{t('nav.generating')}</span>
+                        </>
+                      ) : (
+                        <>
+                            <Layers size={20} className="animate-pulse" />
+                            <span>{t('btn.queue')}</span>
+                        </>
+                      )
+                  )}
+                </div>
+              ) : (
+                <div className="flex items-center gap-2">
+                  {mode === AppMode.IMAGE ? <ImageIcon size={20} /> : <VideoIcon size={20} />}
+                  <span>{params.inputVideoData ? t('btn.extend') : t('btn.generate')} {mode === AppMode.IMAGE ? (params.numberOfImages || 1) : ''}</span>
+                </div>
+              )}
+              {!isCoolingDown && <span className="text-[10px] font-normal opacity-70">{t('msg.cost_warning')}</span>}
+            </button>
+        </div>
+      )}
     </div>
   );
 };

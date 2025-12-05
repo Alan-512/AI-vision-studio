@@ -1,5 +1,3 @@
-
-
 import React, { useState, useRef, useEffect } from 'react';
 import { Send, User, Sparkles, ChevronDown, ChevronRight, BrainCircuit, Zap, X, SlidersHorizontal, ChevronUp, Copy, Check, Plus, Layers, Clock, MonitorPlay, Palette, Film, RefreshCw, Trash2, Bot, Square } from 'lucide-react';
 import { ChatMessage, ChatModel, GenerationParams, ImageStyle, ImageResolution, AppMode, ImageModel, VideoResolution, VideoDuration, VideoModel, VideoStyle } from '../types';
@@ -315,122 +313,125 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                        <Plus size={20} />
                      </button>
                      
-                     <div className="relative">
-                       <button 
-                         className="settings-trigger p-2 text-gray-400 hover:text-white hover:bg-white/10 rounded-full transition-colors flex items-center gap-1.5"
-                         onClick={() => setShowSettings(!showSettings)}
-                         title="Generation Settings"
-                       >
-                         <SlidersHorizontal size={18} />
-                         <span className="text-xs font-medium">Tools</span>
-                       </button>
-                       
-                       {/* Settings Popover */}
-                       {showSettings && (
-                         <div className="settings-popover absolute bottom-12 left-0 w-64 bg-dark-surface border border-dark-border rounded-xl shadow-xl p-4 z-50 animate-in slide-in-from-bottom-2 fade-in">
-                            <div className="flex items-center justify-between mb-3 pb-2 border-b border-dark-border">
-                              <span className="text-xs font-bold text-gray-400 uppercase">Settings</span>
-                              <button onClick={() => setShowSettings(false)} className="text-gray-500 hover:text-white"><X size={14}/></button>
+                     {/* Tools Button - Hidden in Video Mode */}
+                     {mode !== AppMode.VIDEO && (
+                        <div className="relative">
+                          <button 
+                            className="settings-trigger p-2 text-gray-400 hover:text-white hover:bg-white/10 rounded-full transition-colors flex items-center gap-1.5"
+                            onClick={() => setShowSettings(!showSettings)}
+                            title="Generation Settings"
+                          >
+                            <SlidersHorizontal size={18} />
+                            <span className="text-xs font-medium">Tools</span>
+                          </button>
+                          
+                          {/* Settings Popover */}
+                          {showSettings && (
+                            <div className="settings-popover absolute bottom-12 left-0 w-64 bg-dark-surface border border-dark-border rounded-xl shadow-xl p-4 z-50 animate-in slide-in-from-bottom-2 fade-in">
+                                <div className="flex items-center justify-between mb-3 pb-2 border-b border-dark-border">
+                                  <span className="text-xs font-bold text-gray-400 uppercase">Settings</span>
+                                  <button onClick={() => setShowSettings(false)} className="text-gray-500 hover:text-white"><X size={14}/></button>
+                                </div>
+                                
+                                <div className="space-y-4 max-h-[300px] overflow-y-auto pr-1 custom-scrollbar">
+                                  {/* Model Selection */}
+                                  <div className="space-y-1.5">
+                                      <label className="text-[10px] text-gray-400 font-bold flex items-center gap-1"><Bot size={10} /> MODEL</label>
+                                      <select 
+                                        value={mode === AppMode.IMAGE ? params.imageModel : params.videoModel}
+                                        onChange={(e) => setParams(prev => mode === AppMode.IMAGE ? ({...prev, imageModel: e.target.value as ImageModel}) : ({...prev, videoModel: e.target.value as VideoModel}))}
+                                        className="w-full bg-dark-bg border border-dark-border rounded-lg px-2 py-1.5 text-xs text-white"
+                                      >
+                                        {mode === AppMode.IMAGE ? (
+                                          <>
+                                            <option value={ImageModel.FLASH}>{t('model.flash')}</option>
+                                            <option value={ImageModel.PRO}>{t('model.pro')}</option>
+                                          </>
+                                        ) : (
+                                          <>
+                                            <option value={VideoModel.VEO_FAST}>{t('model.veo_fast')}</option>
+                                            <option value={VideoModel.VEO_HQ}>{t('model.veo_hq')}</option>
+                                          </>
+                                        )}
+                                      </select>
+                                  </div>
+
+                                  {/* Style */}
+                                  <div className="space-y-1.5">
+                                      <label className="text-[10px] text-gray-400 font-bold flex items-center gap-1"><Palette size={10} /> STYLE</label>
+                                      <select 
+                                        value={mode === AppMode.IMAGE ? params.imageStyle : params.videoStyle}
+                                        onChange={(e) => setParams(prev => mode === AppMode.IMAGE ? ({...prev, imageStyle: e.target.value as ImageStyle}) : ({...prev, videoStyle: e.target.value as VideoStyle}))}
+                                        className="w-full bg-dark-bg border border-dark-border rounded-lg px-2 py-1.5 text-xs text-white"
+                                      >
+                                        {mode === AppMode.IMAGE 
+                                          ? Object.values(ImageStyle).map(s => <option key={s} value={s}>{s}</option>)
+                                          : Object.values(VideoStyle).map(s => <option key={s} value={s}>{s}</option>)
+                                        }
+                                      </select>
+                                  </div>
+
+                                  {/* Resolution */}
+                                  <div className="space-y-1.5">
+                                      <label className="text-[10px] text-gray-400 font-bold flex items-center gap-1"><MonitorPlay size={10} /> RESOLUTION</label>
+                                      <select 
+                                        value={mode === AppMode.IMAGE ? params.imageResolution : params.videoResolution}
+                                        onChange={(e) => setParams(prev => mode === AppMode.IMAGE ? ({...prev, imageResolution: e.target.value as ImageResolution}) : ({...prev, videoResolution: e.target.value as VideoResolution}))}
+                                        className="w-full bg-dark-bg border border-dark-border rounded-lg px-2 py-1.5 text-xs text-white"
+                                      >
+                                        {mode === AppMode.IMAGE ? (
+                                          <>
+                                            <option value={ImageResolution.RES_1K}>1K</option>
+                                            <option value={ImageResolution.RES_2K}>2K (Pro)</option>
+                                            <option value={ImageResolution.RES_4K}>4K (Pro)</option>
+                                          </>
+                                        ) : (
+                                          <>
+                                            <option value={VideoResolution.RES_720P}>720p</option>
+                                            <option value={VideoResolution.RES_1080P}>1080p</option>
+                                          </>
+                                        )}
+                                      </select>
+                                  </div>
+
+                                  {/* Count / Duration */}
+                                  <div className="space-y-1.5">
+                                      <label className="text-[10px] text-gray-400 font-bold flex items-center gap-1">
+                                        {mode === AppMode.IMAGE ? <Layers size={10} /> : <Clock size={10} />}
+                                        {mode === AppMode.IMAGE ? 'COUNT' : 'DURATION'}
+                                      </label>
+                                      {mode === AppMode.IMAGE ? (
+                                        <div className="grid grid-cols-4 gap-1">
+                                          {[1, 2, 3, 4].map(num => (
+                                            <button
+                                              key={num}
+                                              onClick={() => setParams(prev => ({ ...prev, numberOfImages: num }))}
+                                              className={`py-1 rounded border text-xs font-medium transition-all ${
+                                                (params.numberOfImages || 1) === num 
+                                                    ? 'border-brand-500 bg-brand-500/20 text-brand-400' 
+                                                    : 'border-dark-border bg-dark-bg text-gray-500 hover:border-gray-500'
+                                              }`}
+                                            >
+                                              {num}
+                                            </button>
+                                          ))}
+                                        </div>
+                                      ) : (
+                                        <select 
+                                          value={params.videoDuration}
+                                          onChange={(e) => setParams(prev => ({...prev, videoDuration: e.target.value as VideoDuration}))}
+                                          className="w-full bg-dark-bg border border-dark-border rounded-lg px-2 py-1.5 text-xs text-white"
+                                        >
+                                          <option value={VideoDuration.SHORT}>5s</option>
+                                          <option value={VideoDuration.LONG}>10s (Pro)</option>
+                                        </select>
+                                      )}
+                                  </div>
+                                </div>
                             </div>
-                            
-                            <div className="space-y-4 max-h-[300px] overflow-y-auto pr-1 custom-scrollbar">
-                               {/* Model Selection */}
-                               <div className="space-y-1.5">
-                                  <label className="text-[10px] text-gray-400 font-bold flex items-center gap-1"><Bot size={10} /> MODEL</label>
-                                  <select 
-                                    value={mode === AppMode.IMAGE ? params.imageModel : params.videoModel}
-                                    onChange={(e) => setParams(prev => mode === AppMode.IMAGE ? ({...prev, imageModel: e.target.value as ImageModel}) : ({...prev, videoModel: e.target.value as VideoModel}))}
-                                    className="w-full bg-dark-bg border border-dark-border rounded-lg px-2 py-1.5 text-xs text-white"
-                                  >
-                                    {mode === AppMode.IMAGE ? (
-                                       <>
-                                         <option value={ImageModel.FLASH}>{t('model.flash')}</option>
-                                         <option value={ImageModel.PRO}>{t('model.pro')}</option>
-                                       </>
-                                    ) : (
-                                       <>
-                                         <option value={VideoModel.VEO_FAST}>{t('model.veo_fast')}</option>
-                                         <option value={VideoModel.VEO_HQ}>{t('model.veo_hq')}</option>
-                                       </>
-                                    )}
-                                  </select>
-                               </div>
-
-                               {/* Style */}
-                               <div className="space-y-1.5">
-                                  <label className="text-[10px] text-gray-400 font-bold flex items-center gap-1"><Palette size={10} /> STYLE</label>
-                                  <select 
-                                    value={mode === AppMode.IMAGE ? params.imageStyle : params.videoStyle}
-                                    onChange={(e) => setParams(prev => mode === AppMode.IMAGE ? ({...prev, imageStyle: e.target.value as ImageStyle}) : ({...prev, videoStyle: e.target.value as VideoStyle}))}
-                                    className="w-full bg-dark-bg border border-dark-border rounded-lg px-2 py-1.5 text-xs text-white"
-                                  >
-                                    {mode === AppMode.IMAGE 
-                                      ? Object.values(ImageStyle).map(s => <option key={s} value={s}>{s}</option>)
-                                      : Object.values(VideoStyle).map(s => <option key={s} value={s}>{s}</option>)
-                                    }
-                                  </select>
-                               </div>
-
-                               {/* Resolution */}
-                               <div className="space-y-1.5">
-                                  <label className="text-[10px] text-gray-400 font-bold flex items-center gap-1"><MonitorPlay size={10} /> RESOLUTION</label>
-                                  <select 
-                                    value={mode === AppMode.IMAGE ? params.imageResolution : params.videoResolution}
-                                    onChange={(e) => setParams(prev => mode === AppMode.IMAGE ? ({...prev, imageResolution: e.target.value as ImageResolution}) : ({...prev, videoResolution: e.target.value as VideoResolution}))}
-                                    className="w-full bg-dark-bg border border-dark-border rounded-lg px-2 py-1.5 text-xs text-white"
-                                  >
-                                    {mode === AppMode.IMAGE ? (
-                                       <>
-                                         <option value={ImageResolution.RES_1K}>1K</option>
-                                         <option value={ImageResolution.RES_2K}>2K (Pro)</option>
-                                         <option value={ImageResolution.RES_4K}>4K (Pro)</option>
-                                       </>
-                                    ) : (
-                                       <>
-                                         <option value={VideoResolution.RES_720P}>720p</option>
-                                         <option value={VideoResolution.RES_1080P}>1080p</option>
-                                       </>
-                                    )}
-                                  </select>
-                               </div>
-
-                               {/* Count / Duration */}
-                               <div className="space-y-1.5">
-                                  <label className="text-[10px] text-gray-400 font-bold flex items-center gap-1">
-                                     {mode === AppMode.IMAGE ? <Layers size={10} /> : <Clock size={10} />}
-                                     {mode === AppMode.IMAGE ? 'COUNT' : 'DURATION'}
-                                  </label>
-                                  {mode === AppMode.IMAGE ? (
-                                    <div className="grid grid-cols-4 gap-1">
-                                      {[1, 2, 3, 4].map(num => (
-                                         <button
-                                           key={num}
-                                           onClick={() => setParams(prev => ({ ...prev, numberOfImages: num }))}
-                                           className={`py-1 rounded border text-xs font-medium transition-all ${
-                                             (params.numberOfImages || 1) === num 
-                                                ? 'border-brand-500 bg-brand-500/20 text-brand-400' 
-                                                : 'border-dark-border bg-dark-bg text-gray-500 hover:border-gray-500'
-                                           }`}
-                                         >
-                                           {num}
-                                         </button>
-                                      ))}
-                                    </div>
-                                  ) : (
-                                    <select 
-                                      value={params.videoDuration}
-                                      onChange={(e) => setParams(prev => ({...prev, videoDuration: e.target.value as VideoDuration}))}
-                                      className="w-full bg-dark-bg border border-dark-border rounded-lg px-2 py-1.5 text-xs text-white"
-                                    >
-                                      <option value={VideoDuration.SHORT}>5s</option>
-                                      <option value={VideoDuration.LONG}>10s (Pro)</option>
-                                    </select>
-                                  )}
-                               </div>
-                            </div>
-                         </div>
-                       )}
-                     </div>
+                          )}
+                        </div>
+                     )}
                  </div>
 
                  {/* Right Actions: Model & Send */}

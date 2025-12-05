@@ -39,15 +39,18 @@ const translations = {
     'lbl.duration': 'Duration',
     'lbl.style': 'Style',
     'lbl.advanced': 'Advanced Settings',
+    'lbl.video_controls': 'Video Controls',
     
     // Visual Control Center Labels
     'lbl.subject_ref': 'Subject / Identity',
     'lbl.comp_ref': 'Base Image / Composition',
     'lbl.style_ref': 'Style / Vibe',
-    'lbl.video_keyframes': 'Video Keyframes (Optional)',
+    'lbl.video_keyframes': 'Keyframes',
+    'lbl.video_subject_ref': 'Subject / Character Ref', // New
     'lbl.video_extend': 'Extend Video',
     'lbl.continuous_mode': 'Continuous Mode',
     'lbl.text_render': 'Text to Render',
+    'lbl.locked_subject': 'Locked (Subject Ref)', // New
     
     // Subject Types
     'subj.person': 'Person',
@@ -68,6 +71,8 @@ const translations = {
     'help.subject_desc': 'Defines "WHO/WHAT". Keeps facial features, product details, or character identity consistent.',
     'help.comp_desc': 'Defines "WHERE/HOW". Keeps the pose, layout, depth, and structure of the scene.',
     'help.style_desc': 'Defines "ART STYLE". Extracts colors, lighting, texture, and brush strokes.',
+    'help.video_subject_desc': 'Upload images (max 3) to preserve the identity of a person, character, or object in the video.', // New
+    'note.video_ref_limit': 'Note: Subject references lock resolution to 720p.', // New
     
     'help.video_frames': 'Define the start or end of your video (optional).',
     
@@ -148,15 +153,18 @@ const translations = {
     'lbl.duration': '时长',
     'lbl.style': '艺术风格',
     'lbl.advanced': '高级设置',
+    'lbl.video_controls': '视频控制',
     
     // Visual Control Center Labels
     'lbl.subject_ref': '主体 / 角色参考',
     'lbl.comp_ref': '垫图 / 构图参考',
     'lbl.style_ref': '风格参考 / 滤镜',
-    'lbl.video_keyframes': '视频关键帧 (可选)',
-    'lbl.video_extend': '视频扩充 (Extend)',
+    'lbl.video_keyframes': '关键帧控制',
+    'lbl.video_subject_ref': '主体 / 角色参考', // New
+    'lbl.video_extend': '视频续写 (Extension)',
     'lbl.continuous_mode': '连续模式',
     'lbl.text_render': '画面文字 (Text)',
+    'lbl.locked_subject': '已锁定 (角色参考)', // New
     
     // Subject Types
     'subj.person': '人物',
@@ -177,6 +185,8 @@ const translations = {
     'help.subject_desc': '决定“是谁/画什么”。保持面部特征、产品细节或角色身份的一致性。',
     'help.comp_desc': '决定“在哪/怎么摆”。保持画面的构图、姿势、深度和结构。',
     'help.style_desc': '决定“画风/色调”。提取图片的色彩、光影、纹理和笔触。',
+    'help.video_subject_desc': '上传图片 (最多3张) 以在视频中保持人物、角色或物体的一致性。', // New
+    'note.video_ref_limit': '注意：使用角色参考会将分辨率锁定为 720p。', // New
     
     'help.video_frames': '定义视频的起始或结束画面（可选）。',
     

@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Image as ImageIcon, Video, LayoutGrid, Folder, Sparkles, Settings, Star, CheckSquare, MoveHorizontal, Brush, X, Languages, Trash2, Recycle } from 'lucide-react';
 import { AppMode, AspectRatio, GenerationParams, AssetItem, ImageResolution, VideoResolution, ImageModel, VideoModel, ImageStyle, Project, ChatMessage, BackgroundTask } from './types';
@@ -323,11 +324,21 @@ export function App() {
     }
   };
 
-  const handleVideoContinue = async (imageData: string, mimeType: string) => {
+  // UPDATED: Now accepts full video data blob
+  const handleVideoContinue = async (videoData: string, mimeType: string) => {
       if (mode !== AppMode.VIDEO) handleModeSwitch(AppMode.VIDEO);
       setActiveTab('studio');
-      setParams(prev => ({ ...prev, videoStartImage: imageData, videoStartImageMimeType: mimeType, prompt: `${prev.prompt} . Continue the scene smoothly` }));
-      addToast('info', 'Video Continuation', 'Captured frame set as Start Frame. Adjust prompt to continue.');
+      setParams(prev => ({ 
+          ...prev, 
+          // Set extension data
+          inputVideoData: videoData, 
+          inputVideoMimeType: mimeType,
+          // Reset conflict params
+          videoStartImage: undefined, videoEndImage: undefined, videoStyleReferences: [],
+          // Enhance Prompt
+          prompt: `${prev.prompt || 'Continue the video'}. Next scene: ` 
+      }));
+      addToast('info', 'Video Extension Mode', 'Video loaded. Describe what happens next.');
   };
 
   const handleGenerate = async (overrideParams?: Partial<GenerationParams>) => {

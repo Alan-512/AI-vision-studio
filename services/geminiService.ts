@@ -1,3 +1,4 @@
+
 import { GoogleGenAI, GenerateContentResponse, Content, Part } from "@google/genai";
 import { GenerationParams, AspectRatio, ImageResolution, VideoResolution, AssetItem, ImageModel, ImageStyle, VideoStyle, VideoDuration, VideoModel, ChatMessage, ChatModel, AppMode } from "../types";
 
@@ -910,6 +911,8 @@ export const generateVideo = async (
     
     const ai = getClient();
     const modelName = params.videoModel; 
+    const isHQ = modelName === VideoModel.VEO_HQ;
+    const isExtension = !!params.inputVideoData;
 
     try {
       if (onStart) onStart();
@@ -939,18 +942,46 @@ export const generateVideo = async (
         }
       };
 
-      if (params.videoStartImage && params.videoStartImageMimeType) {
-        request.image = {
-          imageBytes: params.videoStartImage,
-          mimeType: params.videoStartImageMimeType
-        };
+      // --- SCENARIO 1: VIDEO EXTENSION (Highest Priority) ---
+      if (isExtension) {
+          request.video = {
+              videoBytes: params.inputVideoData, // Base64
+              mimeType: params.inputVideoMimeType || 'video/mp4'
+          };
+          // Force resolution/aspect match usually, but Veo is strict.
+          // We rely on user settings matching source, or trust API to handle minor mismatch.
+          // Note: Extension ignores 'image' (start frame).
+      } 
+      // --- SCENARIO 2: STYLE REFERENCE (HQ Only) ---
+      else if (isHQ && params.videoStyleReferences && params.videoStyleReferences.length > 0) {
+          const refImagesPayload = params.videoStyleReferences.map(ref => ({
+              image: {
+                  imageBytes: ref.data,
+                  mimeType: ref.mimeType
+              },
+              referenceType: 'ASSET'
+          }));
+          
+          request.config.referenceImages = refImagesPayload;
+          
+          // Style Ref requires specific resolution (usually 720p)
+          request.config.resolution = '720p'; 
       }
+      // --- SCENARIO 3: KEYFRAMES (Start/End) ---
+      else {
+          if (params.videoStartImage && params.videoStartImageMimeType) {
+            request.image = {
+              imageBytes: params.videoStartImage,
+              mimeType: params.videoStartImageMimeType
+            };
+          }
 
-      if (params.videoEndImage && params.videoEndImageMimeType) {
-        request.config.lastFrame = {
-          imageBytes: params.videoEndImage,
-          mimeType: params.videoEndImageMimeType
-        };
+          if (params.videoEndImage && params.videoEndImageMimeType) {
+            request.config.lastFrame = {
+              imageBytes: params.videoEndImage,
+              mimeType: params.videoEndImageMimeType
+            };
+          }
       }
 
       // 3. Start Generation
