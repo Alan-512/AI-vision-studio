@@ -1,7 +1,8 @@
 
 import React, { useState, useRef, useEffect } from 'react';
-import { X, ZoomIn, ZoomOut, RotateCcw, Download, RefreshCcw, MessageSquarePlus, Brush, Trash2, ArrowRight, Video } from 'lucide-react';
+import { X, ZoomIn, ZoomOut, RotateCcw, Download, RefreshCcw, MessageSquarePlus, Brush, Trash2, ArrowRight, Video, Wand2 } from 'lucide-react';
 import { AssetItem } from '../types';
+import { useLanguage } from '../contexts/LanguageContext';
 
 interface LightboxViewerProps {
   asset: AssetItem;
@@ -12,10 +13,12 @@ interface LightboxViewerProps {
   onDelete?: () => void;
   onAddToChat?: (asset: AssetItem) => void;
   onInpaint?: (asset: AssetItem) => void; 
-  onExtendVideo?: (videoData: string, mimeType: string) => void; // Updated Callback to take Video Data
+  onExtendVideo?: (videoData: string, mimeType: string) => void;
+  onRemix?: (asset: AssetItem) => void; // New Remix Callback
 }
 
-export const LightboxViewer: React.FC<LightboxViewerProps> = ({ asset, onClose, onUseAsReference, onDelete, onAddToChat, onInpaint, onExtendVideo }) => {
+export const LightboxViewer: React.FC<LightboxViewerProps> = ({ asset, onClose, onUseAsReference, onDelete, onAddToChat, onInpaint, onExtendVideo, onRemix }) => {
+  const { t } = useLanguage();
   const [scale, setScale] = useState(1);
   const [position, setPosition] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
@@ -78,24 +81,28 @@ export const LightboxViewer: React.FC<LightboxViewerProps> = ({ asset, onClose, 
   };
 
   const handleExtendClick = async () => {
-      if (asset.type === 'VIDEO' && onExtendVideo) {
+      if (asset.type === 'VIDEO' && onExtendVideo && asset.url) {
           setIsPreparingExtension(true);
           try {
-             // We need to fetch the blob from the asset URL (which should be a blob: url)
-             // and convert it to base64
              const response = await fetch(asset.url);
              const blob = await response.blob();
              
              const reader = new FileReader();
              reader.onloadend = () => {
                  const base64data = reader.result as string;
-                 // Extract clean base64
                  const matches = base64data.match(/^data:(.+);base64,(.+)$/);
                  if (matches) {
-                     onExtendVideo(matches[2], matches[1]); // Data, Mime
+                     onExtendVideo(matches[2], matches[1]); 
                      onClose();
                  } else {
-                     throw new Error("Failed to parse base64 video");
+                     if (base64data.startsWith('data:video')) {
+                        const parts = base64data.split(',');
+                        const mime = parts[0].match(/:(.*?);/)?.[1] || 'video/mp4';
+                        onExtendVideo(parts[1], mime);
+                        onClose();
+                     } else {
+                        throw new Error("Failed to parse base64 video");
+                     }
                  }
                  setIsPreparingExtension(false);
              };
@@ -137,7 +144,6 @@ export const LightboxViewer: React.FC<LightboxViewerProps> = ({ asset, onClose, 
         }
       };
       img.onerror = () => {
-        // Fallback
         const link = document.createElement('a');
         link.href = asset.url;
         link.download = `lumina-image-${asset.id}.png`;
@@ -212,7 +218,6 @@ export const LightboxViewer: React.FC<LightboxViewerProps> = ({ asset, onClose, 
                   
                   <div className="w-px h-4 bg-white/20 mx-1" />
                   
-                  {/* Edit Button moved here */}
                   {asset.type === 'IMAGE' && onInpaint && (
                     <button onClick={handleInpaintClick} className="p-1.5 hover:bg-white/10 rounded-full text-white transition-colors" title="Edit / Inpaint">
                       <Brush size={16} />
@@ -250,7 +255,11 @@ export const LightboxViewer: React.FC<LightboxViewerProps> = ({ asset, onClose, 
                 <span>{new Date(asset.createdAt).toLocaleDateString()}</span>
                 <span>{asset.metadata?.model}</span>
                 <span className="font-medium text-gray-400">
-                  {[asset.metadata?.resolution, asset.metadata?.aspectRatio].filter(Boolean).join(' • ')}
+                  {[
+                    asset.metadata?.resolution, 
+                    asset.metadata?.aspectRatio,
+                    asset.metadata?.seed !== undefined ? `Seed: ${asset.metadata.seed}` : null
+                  ].filter(Boolean).join(' • ')}
                 </span>
               </div>
 
@@ -258,12 +267,13 @@ export const LightboxViewer: React.FC<LightboxViewerProps> = ({ asset, onClose, 
                  {/* Actions */}
                  {asset.type === 'IMAGE' && (
                    <>
-                     {onUseAsReference && (
+                     {/* Remix Button */}
+                     {onRemix && (
                        <button 
-                         onClick={() => { onUseAsReference(asset); onClose(); }} 
-                         className="flex items-center gap-1.5 px-3 py-1.5 bg-brand-600 hover:bg-brand-500 text-white rounded-lg text-xs font-bold transition-colors"
+                         onClick={() => { onRemix(asset); onClose(); }} 
+                         className="flex items-center gap-1.5 px-3 py-1.5 bg-purple-600 hover:bg-purple-500 text-white rounded-lg text-xs font-bold transition-colors"
                        >
-                         <RefreshCcw size={14} /> Use as Ref
+                         <Wand2 size={14} /> {t('btn.remix')}
                        </button>
                      )}
                      
@@ -287,7 +297,7 @@ export const LightboxViewer: React.FC<LightboxViewerProps> = ({ asset, onClose, 
                       title="Generate next 5 seconds for this video"
                     >
                       {isPreparingExtension ? <div className="w-3 h-3 border-2 border-white/50 border-t-white rounded-full animate-spin" /> : <Video size={14} />} 
-                      Extend Video
+                      {t('btn.extend')}
                     </button>
                  )}
                  

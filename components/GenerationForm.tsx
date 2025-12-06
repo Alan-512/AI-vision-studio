@@ -1,4 +1,3 @@
-
 import React, { useRef, useState, useEffect } from 'react';
 import { AppMode, AspectRatio, GenerationParams, ImageResolution, VideoResolution, ImageModel, VideoModel, ImageStyle, VideoStyle, VideoDuration, ChatMessage, AssetItem } from '../types';
 import { Settings2, Sparkles, Image as ImageIcon, Video as VideoIcon, Upload, X, Camera, Palette, Film, RefreshCw, MessageSquare, Layers, ChevronDown, ChevronUp, SlidersHorizontal, Monitor, Eye, Lock, Dice5, Type, User, ScanFace, Frame, ArrowRight, Loader2, Clock, BookTemplate, Clapperboard, XCircle } from 'lucide-react';
@@ -86,6 +85,15 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
        }
     }
   }, [mode, params.aspectRatio, setParams]);
+
+  // Enforce valid Resolution for Image Flash Model
+  useEffect(() => {
+    if (mode === AppMode.IMAGE && params.imageModel === ImageModel.FLASH) {
+       if (params.imageResolution !== ImageResolution.RES_1K) {
+           setParams(prev => ({ ...prev, imageResolution: ImageResolution.RES_1K }));
+       }
+    }
+  }, [mode, params.imageModel, params.imageResolution, setParams]);
 
   // Persistent Timer Logic
   useEffect(() => {
@@ -255,7 +263,17 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
 
   const removeImage = (field: 'reference' | 'start' | 'end') => {
     setParams(prev => {
-      if (field === 'reference') return { ...prev, referenceImage: undefined, referenceImageMimeType: undefined, isAnnotatedReference: false };
+      if (field === 'reference') {
+        return { 
+            ...prev, 
+            referenceImage: undefined, 
+            referenceImageMimeType: undefined, 
+            isAnnotatedReference: false,
+            // Reset seed to random when reference is removed
+            // This prevents "orphaned seeds" from Remix mode causing confusion
+            seed: undefined 
+        };
+      }
       if (field === 'start') return { ...prev, videoStartImage: undefined, videoStartImageMimeType: undefined };
       if (field === 'end') return { ...prev, videoEndImage: undefined, videoEndImageMimeType: undefined };
       return prev;
@@ -592,7 +610,7 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
                                    value={params.seed !== undefined ? params.seed : ''}
                                    onChange={(e) => setParams(prev => ({...prev, seed: e.target.value ? parseInt(e.target.value) : undefined}))}
                                    placeholder={t('ph.seed_random')}
-                                   className="w-full bg-dark-surface border border-dark-border rounded-lg pl-3 pr-10 py-2 text-xs text-white placeholder-gray-600 focus:border-brand-500 focus:outline-none font-mono"
+                                   className="w-full bg-dark-surface border border-dark-border rounded-lg pl-3 pr-10 py-2 text-xs text-white placeholder-gray-600 focus:border-brand-500 focus:outline-none font-mono [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                                  />
                                  {params.seed !== undefined && (
                                     <button onClick={handleRandomizeSeed} className="absolute right-2 top-2 text-gray-500 hover:text-white">
@@ -604,6 +622,7 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
                                  {params.seed !== undefined ? <Lock size={18} /> : <Dice5 size={18} />}
                               </button>
                            </div>
+                           <p className="text-[10px] text-gray-500">{t('help.seed_desc')}</p>
                         </div>
                     )}
                 </div>
@@ -789,7 +808,7 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
                                <h4 className="text-xs font-bold text-purple-200 uppercase mb-1">{t('lbl.video_extend')}</h4>
                                <p className="text-[10px] text-gray-400 leading-relaxed mb-2">
                                   You are extending an existing video. The model will generate the next 5-7 seconds based on your prompt.
-                               </p>
+                                </p>
                                <button 
                                  onClick={cancelVideoExtension}
                                  className="flex items-center gap-1.5 px-3 py-1.5 bg-white/5 hover:bg-white/10 rounded border border-white/10 text-[10px] text-gray-300 transition-colors"
@@ -982,9 +1001,9 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
                      >
                         {mode === AppMode.IMAGE ? (
                            <>
-                             <option value={ImageResolution.RES_1K}>1K (Square)</option>
-                             <option value={ImageResolution.RES_2K}>2K (Pro Only)</option>
-                             <option value={ImageResolution.RES_4K}>4K (Pro Only)</option>
+                             <option value={ImageResolution.RES_1K}>1K (Standard)</option>
+                             <option value={ImageResolution.RES_2K} disabled={params.imageModel === ImageModel.FLASH}>2K (Pro Only)</option>
+                             <option value={ImageResolution.RES_4K} disabled={params.imageModel === ImageModel.FLASH}>4K (Pro Only)</option>
                            </>
                         ) : (
                            <>

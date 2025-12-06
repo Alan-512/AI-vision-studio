@@ -281,16 +281,7 @@ export const AssetCard: React.FC<AssetCardProps> = ({
                     <MessageSquarePlus size={16} />
                   </button>
                 )}
-                {asset.type === 'IMAGE' && onUseAsReference && (
-                  <button 
-                    type="button"
-                    onClick={handleUseRef}
-                    className="p-1.5 bg-brand-500/80 hover:bg-brand-500 rounded-lg text-white backdrop-blur-md transition-colors"
-                    title="Use as Reference Image"
-                  >
-                    <RefreshCcw size={16} />
-                  </button>
-                )}
+                
                 <button 
                   type="button"
                   onClick={handleDownload}

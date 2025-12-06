@@ -1,0 +1,16 @@
+{
+  "name": "Lumina AI Creative Studio",
+  "short_name": "Lumina",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0f0f11",
+  "theme_color": "#0f0f11",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "https://www.gstatic.com/lamda/images/gemini_sparkle_v002_d4735304ff6292a690345.svg",
+      "type": "image/svg+xml",
+      "sizes": "any"
+    }
+  ]
+}

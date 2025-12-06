@@ -173,9 +173,8 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose,
                          style={{ width: `${storageInfo.percentage}%` }}
                       />
                    </div>
-                   <div className="flex justify-between text-[10px] text-gray-400">
-                      <span>{t('settings.used')}: {formatBytes(storageInfo.usage)}</span>
-                      <span>{t('settings.free')}: {formatBytes(storageInfo.quota - storageInfo.usage)}</span>
+                   <div className="flex justify-start items-center text-[10px] text-gray-400">
+                      <span className="font-mono">{t('settings.used')}: <span className="text-white">{formatBytes(storageInfo.usage)}</span></span>
                    </div>
                    {storageInfo.percentage > 80 && (
                       <div className="text-[10px] text-red-400 font-medium">

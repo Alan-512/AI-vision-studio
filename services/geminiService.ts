@@ -1,4 +1,3 @@
-
 import { GoogleGenAI, GenerateContentResponse, Content, Part } from "@google/genai";
 import { GenerationParams, AspectRatio, ImageResolution, VideoResolution, AssetItem, ImageModel, ImageStyle, VideoStyle, VideoDuration, VideoModel, ChatMessage, ChatModel, AppMode } from "../types";
 
@@ -641,11 +640,12 @@ export const generateImage = async (params: GenerationParams, projectId: string,
         });
     }
 
-    // 2. STYLE REFERENCES (Vibe)
+    // 2. STYLE REFERENCES (Vibe) - REFINED
     if (params.styleReferences && params.styleReferences.length > 0) {
        promptPrefix += `\n[ARTISTIC STYLE]: The user has provided ${params.styleReferences.length} reference image(s) for STYLE. `;
-       promptPrefix += `Use these images primarily for COLOR PALETTE, TEXTURE, ARTISTIC STYLE, and LIGHTING. `;
-       promptPrefix += `Do not copy the exact composition of these style images. Apply this style to the subject.\n`;
+       // CRITICAL: Force ignore content
+       promptPrefix += `Use these images ONLY for COLOR PALETTE, TEXTURE, ARTISTIC STYLE, and LIGHTING. `;
+       promptPrefix += `CRITICAL: IGNORE the subject matter (objects, people, animals) inside these style images. Do NOT copy the content. Apply only the style.\n`;
        
        params.styleReferences.forEach(ref => {
          parts.push({
@@ -654,7 +654,7 @@ export const generateImage = async (params: GenerationParams, projectId: string,
        });
     }
 
-    // 3. COMPOSITION / BASE IMAGE (Structure)
+    // 3. COMPOSITION / BASE IMAGE (Structure) - REFINED
     if (params.referenceImage && params.referenceImageMimeType) {
        // Check for annotations first
        if (params.isAnnotatedReference) {
@@ -663,8 +663,9 @@ export const generateImage = async (params: GenerationParams, projectId: string,
           promptPrefix += `COMPLETELY REMOVE all red boxes and numbers. Seamlessly inpaint the area.\n`;
        } else {
           promptPrefix += `\n[COMPOSITION / STRUCTURE]: The user has provided a BASE IMAGE. `;
-          promptPrefix += `Use this image for the POSE, LAYOUT, DEPTH, and COMPOSITION of the scene. `;
-          promptPrefix += `Maintain the visual structure of this base image, but render it with the Subject and Style defined above.\n`;
+          // CRITICAL: Force structural adherence
+          promptPrefix += `This image is the STRUCTURAL GROUND TRUTH. The output MUST match this image's perspective, pose, layout, and geometry exactly. `;
+          promptPrefix += `Do not change the composition. Render this exact structure using the Style defined above.\n`;
        }
 
        parts.push({
@@ -782,7 +783,8 @@ export const generateImage = async (params: GenerationParams, projectId: string,
           aspectRatio: params.aspectRatio,
           model: modelName,
           style: params.imageStyle !== ImageStyle.NONE ? params.imageStyle : undefined,
-          resolution: params.imageResolution
+          resolution: params.imageResolution,
+          seed: params.seed
         }
       };
 

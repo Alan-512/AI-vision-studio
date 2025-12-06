@@ -328,6 +328,52 @@ export function App() {
     }
   };
 
+  const handleRemix = async (asset: AssetItem) => {
+    if (asset.type !== 'IMAGE') return;
+    
+    try {
+      const response = await fetch(asset.url);
+      const blob = await response.blob();
+      
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const base64data = reader.result as string;
+        const matches = base64data.match(/^data:(.+);base64,(.+)$/);
+        
+        if (matches) {
+           const mimeType = matches[1];
+           const data = matches[2];
+           
+           if (mode !== AppMode.IMAGE) handleModeSwitch(AppMode.IMAGE);
+           setActiveTab('studio');
+           
+           setParams(prev => ({
+             ...prev,
+             prompt: asset.prompt,
+             seed: asset.metadata?.seed,
+             aspectRatio: (asset.metadata?.aspectRatio as AspectRatio) || prev.aspectRatio,
+             imageModel: (asset.metadata?.model as ImageModel) || prev.imageModel,
+             imageStyle: (asset.metadata?.style as ImageStyle) || ImageStyle.NONE,
+             imageResolution: (asset.metadata?.resolution as ImageResolution) || prev.imageResolution,
+             
+             referenceImage: data,
+             referenceImageMimeType: mimeType,
+             isAnnotatedReference: false,
+             
+             subjectReferences: [],
+             styleReferences: []
+           }));
+           
+           addToast('success', 'Remix Ready', 'Parameters and seed loaded for fine-tuning.');
+        }
+      };
+      reader.readAsDataURL(blob);
+    } catch (e) {
+      console.error("Remix failed", e);
+      addToast('error', 'Remix Failed', 'Could not load image data.');
+    }
+  };
+
   // UPDATED: Now accepts full video data blob
   const handleVideoContinue = async (videoData: string, mimeType: string) => {
       if (mode !== AppMode.VIDEO) handleModeSwitch(AppMode.VIDEO);
@@ -662,7 +708,7 @@ export function App() {
       <TaskCenter tasks={tasks} onRemoveTask={handleCancelTask} onClearCompleted={handleClearCompletedTasks} />
       <SettingsDialog isOpen={showSettings} onClose={() => setShowSettings(false)} onApiKeyChange={() => setVeoVerified(!!getUserApiKey())} />
       <ConfirmDialog isOpen={confirmDialog.isOpen} title={confirmDialog.title} message={confirmDialog.message} onConfirm={confirmDialog.action} onCancel={() => setConfirmDialog(prev => ({ ...prev, isOpen: false }))} confirmLabel={confirmDialog.confirmLabel} cancelLabel={confirmDialog.cancelLabel} isDestructive={confirmDialog.isDestructive} />
-      {selectedAsset && <LightboxViewer asset={selectedAsset} onClose={() => setSelectedAsset(null)} onUseAsReference={viewMode === 'TRASH' ? undefined : handleUseAsReference} onExtendVideo={viewMode === 'TRASH' ? undefined : handleVideoContinue} onDelete={() => { if (viewMode === 'TRASH') openConfirmDeleteForever(selectedAsset.id); else openConfirmDelete(selectedAsset.id); setSelectedAsset(null); }} onAddToChat={viewMode === 'TRASH' ? undefined : (a) => { setActiveTab('chat'); setChatSelectedImages(prev => [...prev, a.url]); }} onInpaint={viewMode === 'TRASH' ? undefined : (asset) => setCanvasAsset(asset)} />}
+      {selectedAsset && <LightboxViewer asset={selectedAsset} onClose={() => setSelectedAsset(null)} onUseAsReference={viewMode === 'TRASH' ? undefined : handleUseAsReference} onExtendVideo={viewMode === 'TRASH' ? undefined : handleVideoContinue} onRemix={viewMode === 'TRASH' ? undefined : handleRemix} onDelete={() => { if (viewMode === 'TRASH') openConfirmDeleteForever(selectedAsset.id); else openConfirmDelete(selectedAsset.id); setSelectedAsset(null); }} onAddToChat={viewMode === 'TRASH' ? undefined : (a) => { setActiveTab('chat'); setChatSelectedImages(prev => [...prev, a.url]); }} onInpaint={viewMode === 'TRASH' ? undefined : (asset) => setCanvasAsset(asset)} />}
       {comparisonAssets && <ComparisonView assetA={comparisonAssets[0]} assetB={comparisonAssets[1]} onClose={() => setComparisonAssets(null)} />}
       {canvasAsset && <CanvasEditor imageUrl={canvasAsset.url} onSave={handleCanvasSave} onClose={() => setCanvasAsset(null)} />}
       <ToastContainer toasts={toasts} onDismiss={removeToast} />

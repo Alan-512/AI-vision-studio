@@ -2,8 +2,32 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta name="theme-color" content="#0f0f11" />
+    
+    <!-- Primary Meta Tags -->
     <title>Lumina AI Creative Studio</title>
+    <meta name="title" content="Lumina AI Creative Studio" />
+    <meta name="description" content="A professional-grade AI creation suite for generating high-fidelity images and videos using Google Gemini and Veo models. Experience the future of creativity." />
+
+    <!-- Open Graph / Facebook -->
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://lumina-studio.com/" />
+    <meta property="og:title" content="Lumina AI Creative Studio" />
+    <meta property="og:description" content="Generate stunning 4K images and cinematic videos with Google's latest Gemini & Veo AI models. Professional controls, zero latency." />
+    <meta property="og:image" content="https://www.gstatic.com/lamda/images/gemini_sparkle_v002_d4735304ff6292a690345.svg" />
+
+    <!-- Twitter -->
+    <meta property="twitter:card" content="summary_large_image" />
+    <meta property="twitter:url" content="https://lumina-studio.com/" />
+    <meta property="twitter:title" content="Lumina AI Creative Studio" />
+    <meta property="twitter:description" content="Generate stunning 4K images and cinematic videos with Google's latest Gemini & Veo AI models." />
+    <meta property="twitter:image" content="https://www.gstatic.com/lamda/images/gemini_sparkle_v002_d4735304ff6292a690345.svg" />
+
+    <!-- PWA -->
+    <link rel="manifest" href="/manifest.json" />
+    <link rel="apple-touch-icon" href="https://www.gstatic.com/lamda/images/gemini_sparkle_v002_d4735304ff6292a690345.svg" />
+
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
       tailwind.config = {
@@ -36,6 +60,7 @@
       body {
         background-color: #0f0f11;
         color: #e4e4e7;
+        overscroll-behavior-y: none; /* Prevent pull-to-refresh on mobile */
       }
       /* Custom scrollbar */
       ::-webkit-scrollbar {

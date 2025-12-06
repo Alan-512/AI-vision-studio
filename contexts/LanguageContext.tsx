@@ -66,6 +66,7 @@ const translations = {
     'help.continuous': 'Auto-use result as next Composition Reference',
     'help.upload': 'Click to upload',
     'help.extend_desc': 'Upload a video to extend it by 5-7 seconds. Resolution will be set to 720p.',
+    'help.seed_desc': 'Locking the seed ensures consistent generation results, useful for refining prompts.',
     
     // Detailed Explanations
     'help.subject_desc': 'Defines "WHO/WHAT". Keeps facial features, product details, or character identity consistent.',
@@ -85,6 +86,7 @@ const translations = {
     'btn.download': 'Download',
     'btn.delete': 'Delete',
     'btn.use_ref': 'Use as Ref',
+    'btn.remix': 'Remix',
     'btn.verify': 'Verify Paid Account',
     'btn.save_key': 'Save Key',
     'btn.remove_key': 'Remove Key',
@@ -126,10 +128,10 @@ const translations = {
     'settings.key_desc': 'Your API key is stored locally in your browser and used directly for requests. This allows you to bypass the shared quota and use your own billing account for Pro/Veo models.',
     'settings.get_key': 'Get an API Key',
     'settings.custom_key_alert': 'You are currently using your custom API Key. Remove it to revert to the system default key.',
-    'settings.storage_title': 'Browser Storage Usage',
-    'settings.storage_full': 'Storage is getting full. Please delete old projects to avoid data loss.',
-    'settings.calculating': 'Calculating storage...',
-    'settings.used': 'Used',
+    'settings.storage_title': 'Browser Cache',
+    'settings.storage_full': 'Cache is getting full. Please empty trash or delete old projects.',
+    'settings.calculating': 'Calculating usage...',
+    'settings.used': 'Cache Used',
     'settings.free': 'Free',
     
     // Chat
@@ -272,6 +274,7 @@ const translations = {
     'help.continuous': '自动将生成结果作为下一张的构图参考',
     'help.upload': '点击上传',
     'help.extend_desc': '上传视频进行内容续写 (扩充 5-7秒)。注意：分辨率将锁定为 720p。',
+    'help.seed_desc': '锁定种子可固定生成结果，便于在保持画面结构的同时微调细节。',
     
     // Detailed Explanations
     'help.subject_desc': '决定“是谁/画什么”。保持面部特征、产品细节或角色身份的一致性。',
@@ -291,6 +294,7 @@ const translations = {
     'btn.download': '下载',
     'btn.delete': '删除',
     'btn.use_ref': '设为参考图',
+    'btn.remix': '重绘 (Remix)',
     'btn.verify': '验证付费账户',
     'btn.save_key': '保存密钥',
     'btn.remove_key': '移除密钥',
@@ -332,10 +336,10 @@ const translations = {
     'settings.key_desc': '您的 API 密钥存储在本地浏览器中，直接用于请求。这允许您绕过共享配额，使用自己的计费账户来调用 Pro/Veo 模型。',
     'settings.get_key': '获取 API Key',
     'settings.custom_key_alert': '您当前正在使用自定义 API Key。移除它以恢复使用系统默认 Key。',
-    'settings.storage_title': '浏览器存储使用情况',
-    'settings.storage_full': '存储空间即将耗尽。请删除旧项目以避免数据丢失。',
-    'settings.calculating': '正在计算存储...',
-    'settings.used': '已用',
+    'settings.storage_title': '浏览器缓存',
+    'settings.storage_full': '缓存空间即将耗尽。请清空回收站或删除旧项目。',
+    'settings.calculating': '正在计算缓存...',
+    'settings.used': '已用缓存',
     'settings.free': '剩余',
     
     // Chat

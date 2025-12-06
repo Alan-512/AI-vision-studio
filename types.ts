@@ -158,6 +158,7 @@ export interface AssetItem {
     style?: string;
     duration?: string;
     resolution?: string;
+    seed?: number; // Added seed
   };
 }
 

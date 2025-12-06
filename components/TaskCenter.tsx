@@ -138,6 +138,13 @@ export const TaskCenter: React.FC<TaskCenterProps> = ({ tasks, onClearCompleted,
                                <span className="text-[10px] text-gray-600">{t('task.waiting')}</span>
                            )}
                         </div>
+
+                        {/* Error Message */}
+                        {task.status === 'FAILED' && task.error && (
+                            <div className="mt-2 text-[10px] text-red-300 bg-red-500/10 border border-red-500/20 p-2 rounded leading-tight break-words font-mono">
+                                {task.error}
+                            </div>
+                        )}
                      </div>
 
                      {/* Remove/Cancel Button */}
