@@ -2,74 +2,76 @@
 import React, { useState } from 'react';
 import { Sun, Camera, Box, Move, ChevronDown, ChevronUp, Tag, Palette, Layers, Video, Zap, Aperture } from 'lucide-react';
 import { AppMode } from '../types';
+import { useLanguage } from '../contexts/LanguageContext';
 
 interface PromptBuilderProps {
   onAppend: (text: string) => void;
   mode?: AppMode; // New optional prop to switch between Image/Video modes
 }
 
-const IMAGE_CATEGORIES = [
-  {
-    id: 'lighting',
-    label: 'Lighting',
-    icon: <Sun size={14} />,
-    tags: ['Cinematic Lighting', 'Volumetric Fog', 'Golden Hour', 'Neon Lights', 'Rembrandt Lighting', 'Soft Studio Lighting', 'Bioluminescence', 'Dark Moody', 'God Rays', 'Rim Lighting']
-  },
-  {
-    id: 'camera',
-    label: 'Camera',
-    icon: <Camera size={14} />,
-    tags: ['Wide Angle', 'Macro Lens', 'Drone View', 'GoPro Footage', 'Bokeh Depth of Field', 'Fish-eye', 'Isometric View', 'Low Angle Shot', 'Telephoto', 'Motion Blur']
-  },
-  {
-    id: 'material',
-    label: 'Material',
-    icon: <Box size={14} />,
-    tags: ['Metallic', 'Translucent', 'Matte Finish', 'Hyper-realistic Skin', 'Glass Texture', 'Rough Concrete', 'Silk Fabric', 'Holographic', 'Iridescent', 'Liquid Chrome']
-  },
-  {
-    id: 'style',
-    label: 'Style',
-    icon: <Palette size={14} />,
-    tags: ['Minimalist', 'Abstract', 'Surrealism', 'Cyberpunk', 'Steampunk', 'Vaporwave', 'Gothic', 'Pop Art', 'Ukiyo-e', 'Noir']
-  },
-  {
-    id: 'vibe',
-    label: 'Vibe',
-    icon: <Move size={14} />,
-    tags: ['Chaos', 'Ethereal', 'Gritty', 'Dreamy', 'Epic Scale', 'Whimsical', 'Melancholic', 'Serene', 'Action Packed']
-  }
-];
-
-const VIDEO_CATEGORIES = [
-  {
-    id: 'camera_move',
-    label: 'Camera',
-    icon: <Video size={14} />,
-    tags: ['Drone Shot / Aerial', 'Pan Left', 'Pan Right', 'Tilt Up', 'Tilt Down', 'Dolly In (Zoom In)', 'Dolly Out (Zoom Out)', 'Tracking Shot', 'Handheld Shake', 'FPV View', 'Low Angle / Worms Eye']
-  },
-  {
-    id: 'motion',
-    label: 'Motion',
-    icon: <Zap size={14} />,
-    tags: ['Slow Motion', 'Time-lapse', 'Hyper-lapse', 'High Speed Action', 'Static Camera', 'Motion Blur', 'Freeze Frame', 'Loop', 'Fluid Motion', 'Explosive Action']
-  },
-  {
-    id: 'atmosphere',
-    label: 'Atmosphere',
-    icon: <Sun size={14} />,
-    tags: ['Cinematic', 'Vintage Film Grain', 'Foggy / Hazy', 'Rainy / Stormy', 'Sunny Day', 'Night City Neon', 'Underwater', 'Dusty / Sandy', 'Sci-Fi Clean', 'Horror / Dark']
-  },
-  {
-    id: 'lens',
-    label: 'Lens/Focus',
-    icon: <Aperture size={14} />,
-    tags: ['Shallow Depth of Field', 'Deep Focus', 'Rack Focus', 'Macro Close-up', 'Wide Angle Lens', 'Telephoto Lens', 'Fish-Eye Lens', 'Anamorphic Lens']
-  }
-];
-
 export const PromptBuilder: React.FC<PromptBuilderProps> = ({ onAppend, mode = AppMode.IMAGE }) => {
+  const { t } = useLanguage();
   const [activeCategory, setActiveCategory] = useState<string | null>(null);
+
+  const IMAGE_CATEGORIES = [
+    {
+      id: 'lighting',
+      label: t('builder.lighting'),
+      icon: <Sun size={14} />,
+      tags: ['Cinematic Lighting', 'Volumetric Fog', 'Golden Hour', 'Neon Lights', 'Rembrandt Lighting', 'Soft Studio Lighting', 'Bioluminescence', 'Dark Moody', 'God Rays', 'Rim Lighting']
+    },
+    {
+      id: 'camera',
+      label: t('builder.camera'),
+      icon: <Camera size={14} />,
+      tags: ['Wide Angle', 'Macro Lens', 'Drone View', 'GoPro Footage', 'Bokeh Depth of Field', 'Fish-eye', 'Isometric View', 'Low Angle Shot', 'Telephoto', 'Motion Blur']
+    },
+    {
+      id: 'material',
+      label: t('builder.material'),
+      icon: <Box size={14} />,
+      tags: ['Metallic', 'Translucent', 'Matte Finish', 'Hyper-realistic Skin', 'Glass Texture', 'Rough Concrete', 'Silk Fabric', 'Holographic', 'Iridescent', 'Liquid Chrome']
+    },
+    {
+      id: 'style',
+      label: t('builder.style'),
+      icon: <Palette size={14} />,
+      tags: ['Minimalist', 'Abstract', 'Surrealism', 'Cyberpunk', 'Steampunk', 'Vaporwave', 'Gothic', 'Pop Art', 'Ukiyo-e', 'Noir']
+    },
+    {
+      id: 'vibe',
+      label: t('builder.vibe'),
+      icon: <Move size={14} />,
+      tags: ['Chaos', 'Ethereal', 'Gritty', 'Dreamy', 'Epic Scale', 'Whimsical', 'Melancholic', 'Serene', 'Action Packed']
+    }
+  ];
+
+  const VIDEO_CATEGORIES = [
+    {
+      id: 'camera_move',
+      label: t('builder.camera_move'),
+      icon: <Video size={14} />,
+      tags: ['Drone Shot / Aerial', 'Pan Left', 'Pan Right', 'Tilt Up', 'Tilt Down', 'Dolly In (Zoom In)', 'Dolly Out (Zoom Out)', 'Tracking Shot', 'Handheld Shake', 'FPV View', 'Low Angle / Worms Eye']
+    },
+    {
+      id: 'motion',
+      label: t('builder.motion'),
+      icon: <Zap size={14} />,
+      tags: ['Slow Motion', 'Time-lapse', 'Hyper-lapse', 'High Speed Action', 'Static Camera', 'Motion Blur', 'Freeze Frame', 'Loop', 'Fluid Motion', 'Explosive Action']
+    },
+    {
+      id: 'atmosphere',
+      label: t('builder.atmosphere'),
+      icon: <Sun size={14} />,
+      tags: ['Cinematic', 'Vintage Film Grain', 'Foggy / Hazy', 'Rainy / Stormy', 'Sunny Day', 'Night City Neon', 'Underwater', 'Dusty / Sandy', 'Sci-Fi Clean', 'Horror / Dark']
+    },
+    {
+      id: 'lens',
+      label: t('builder.lens'),
+      icon: <Aperture size={14} />,
+      tags: ['Shallow Depth of Field', 'Deep Focus', 'Rack Focus', 'Macro Close-up', 'Wide Angle Lens', 'Telephoto Lens', 'Fish-Eye Lens', 'Anamorphic Lens']
+    }
+  ];
 
   const categories = mode === AppMode.VIDEO ? VIDEO_CATEGORIES : IMAGE_CATEGORIES;
 

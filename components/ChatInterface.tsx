@@ -1,6 +1,7 @@
+
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, User, Sparkles, ChevronDown, ChevronRight, BrainCircuit, Zap, X, SlidersHorizontal, ChevronUp, Copy, Check, Plus, Layers, Clock, MonitorPlay, Palette, Film, RefreshCw, Trash2, Bot, Square } from 'lucide-react';
-import { ChatMessage, ChatModel, GenerationParams, ImageStyle, ImageResolution, AppMode, ImageModel, VideoResolution, VideoDuration, VideoModel, VideoStyle } from '../types';
+import { Send, User, Sparkles, ChevronDown, ChevronRight, BrainCircuit, Zap, X, SlidersHorizontal, ChevronUp, Copy, Check, Plus, Layers, Clock, MonitorPlay, Palette, Film, RefreshCw, Trash2, Bot, Square, Crop } from 'lucide-react';
+import { ChatMessage, ChatModel, GenerationParams, ImageStyle, ImageResolution, AppMode, ImageModel, VideoResolution, VideoDuration, VideoModel, VideoStyle, AspectRatio } from '../types';
 import { streamChatResponse } from '../services/geminiService';
 import { useLanguage } from '../contexts/LanguageContext';
 import ReactMarkdown from 'react-markdown';
@@ -46,6 +47,12 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   const abortControllerRef = useRef<AbortController | null>(null);
 
   const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20MB
+
+  const getRatioLabel = (r: AspectRatio) => {
+    // Dynamically lookup translation for ratio enum key
+    const enumKey = Object.keys(AspectRatio).find(k => AspectRatio[k as keyof typeof AspectRatio] === r);
+    return t(`ratio.${enumKey}` as any) || r;
+  };
 
   // Update ref when prop changes and reset local state
   useEffect(() => {
@@ -248,12 +255,12 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 {mode === AppMode.VIDEO ? <Film size={32} /> : <Sparkles size={32} />}
              </div>
              <p className="text-lg font-medium text-gray-300">
-               {mode === AppMode.VIDEO ? 'Video Assistant' : 'Creative Assistant'}
+               {mode === AppMode.VIDEO ? t('chat.welcome_video') : t('chat.welcome_image')}
              </p>
              <p className="text-sm mt-2 max-w-xs">
                {mode === AppMode.VIDEO 
-                 ? "Brainstorm scenes, camera angles, and motion ideas for your video generation."
-                 : "Discuss composition, style, and details to craft the perfect image prompt."
+                 ? t('chat.desc_video')
+                 : t('chat.desc_image')
                }
              </p>
           </div>
@@ -294,7 +301,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={handleKeyDown}
                 onPaste={handlePaste}
-                placeholder="Ask assistant..."
+                placeholder={t('chat.placeholder')}
                 className="w-full bg-transparent border-0 focus:ring-0 text-sm text-gray-200 placeholder-gray-500 resize-none overflow-hidden px-1 py-1 leading-relaxed"
                 rows={1}
                 style={{ minHeight: '32px' }}
@@ -308,7 +315,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                      <button 
                        onClick={() => fileInputRef.current?.click()}
                        className="p-2 text-gray-400 hover:text-white hover:bg-white/10 rounded-full transition-colors"
-                       title="Upload Image"
+                       title={t('chat.upload')}
                      >
                        <Plus size={20} />
                      </button>
@@ -322,21 +329,21 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                             title="Generation Settings"
                           >
                             <SlidersHorizontal size={18} />
-                            <span className="text-xs font-medium">Tools</span>
+                            <span className="text-xs font-medium">{t('chat.tools')}</span>
                           </button>
                           
                           {/* Settings Popover */}
                           {showSettings && (
                             <div className="settings-popover absolute bottom-12 left-0 w-64 bg-dark-surface border border-dark-border rounded-xl shadow-xl p-4 z-50 animate-in slide-in-from-bottom-2 fade-in">
                                 <div className="flex items-center justify-between mb-3 pb-2 border-b border-dark-border">
-                                  <span className="text-xs font-bold text-gray-400 uppercase">Settings</span>
+                                  <span className="text-xs font-bold text-gray-400 uppercase">{t('nav.settings')}</span>
                                   <button onClick={() => setShowSettings(false)} className="text-gray-500 hover:text-white"><X size={14}/></button>
                                 </div>
                                 
                                 <div className="space-y-4 max-h-[300px] overflow-y-auto pr-1 custom-scrollbar">
                                   {/* Model Selection */}
                                   <div className="space-y-1.5">
-                                      <label className="text-[10px] text-gray-400 font-bold flex items-center gap-1"><Bot size={10} /> MODEL</label>
+                                      <label className="text-[10px] text-gray-400 font-bold flex items-center gap-1"><Bot size={10} /> {t('lbl.model').toUpperCase()}</label>
                                       <select 
                                         value={mode === AppMode.IMAGE ? params.imageModel : params.videoModel}
                                         onChange={(e) => setParams(prev => mode === AppMode.IMAGE ? ({...prev, imageModel: e.target.value as ImageModel}) : ({...prev, videoModel: e.target.value as VideoModel}))}
@@ -356,24 +363,38 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                       </select>
                                   </div>
 
+                                  {/* Aspect Ratio */}
+                                  <div className="space-y-1.5">
+                                      <label className="text-[10px] text-gray-400 font-bold flex items-center gap-1"><Crop size={10} /> {t('lbl.aspect_ratio').toUpperCase()}</label>
+                                      <select 
+                                        value={params.aspectRatio}
+                                        onChange={(e) => setParams(prev => ({...prev, aspectRatio: e.target.value as AspectRatio}))}
+                                        className="w-full bg-dark-bg border border-dark-border rounded-lg px-2 py-1.5 text-xs text-white"
+                                      >
+                                        {Object.values(AspectRatio).map(ratio => (
+                                          <option key={ratio} value={ratio}>{getRatioLabel(ratio)}</option>
+                                        ))}
+                                      </select>
+                                  </div>
+
                                   {/* Style */}
                                   <div className="space-y-1.5">
-                                      <label className="text-[10px] text-gray-400 font-bold flex items-center gap-1"><Palette size={10} /> STYLE</label>
+                                      <label className="text-[10px] text-gray-400 font-bold flex items-center gap-1"><Palette size={10} /> {t('lbl.style').toUpperCase()}</label>
                                       <select 
                                         value={mode === AppMode.IMAGE ? params.imageStyle : params.videoStyle}
                                         onChange={(e) => setParams(prev => mode === AppMode.IMAGE ? ({...prev, imageStyle: e.target.value as ImageStyle}) : ({...prev, videoStyle: e.target.value as VideoStyle}))}
                                         className="w-full bg-dark-bg border border-dark-border rounded-lg px-2 py-1.5 text-xs text-white"
                                       >
                                         {mode === AppMode.IMAGE 
-                                          ? Object.values(ImageStyle).map(s => <option key={s} value={s}>{s}</option>)
-                                          : Object.values(VideoStyle).map(s => <option key={s} value={s}>{s}</option>)
+                                          ? Object.entries(ImageStyle).map(([k, v]) => <option key={k} value={v}>{t(`style.${k}` as any) || v}</option>)
+                                          : Object.entries(VideoStyle).map(([k, v]) => <option key={k} value={v}>{t(`style.${k}` as any) || v}</option>)
                                         }
                                       </select>
                                   </div>
 
                                   {/* Resolution */}
                                   <div className="space-y-1.5">
-                                      <label className="text-[10px] text-gray-400 font-bold flex items-center gap-1"><MonitorPlay size={10} /> RESOLUTION</label>
+                                      <label className="text-[10px] text-gray-400 font-bold flex items-center gap-1"><MonitorPlay size={10} /> {t('lbl.resolution').toUpperCase()}</label>
                                       <select 
                                         value={mode === AppMode.IMAGE ? params.imageResolution : params.videoResolution}
                                         onChange={(e) => setParams(prev => mode === AppMode.IMAGE ? ({...prev, imageResolution: e.target.value as ImageResolution}) : ({...prev, videoResolution: e.target.value as VideoResolution}))}
@@ -398,7 +419,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                   <div className="space-y-1.5">
                                       <label className="text-[10px] text-gray-400 font-bold flex items-center gap-1">
                                         {mode === AppMode.IMAGE ? <Layers size={10} /> : <Clock size={10} />}
-                                        {mode === AppMode.IMAGE ? 'COUNT' : 'DURATION'}
+                                        {mode === AppMode.IMAGE ? t('lbl.count').toUpperCase() : t('lbl.duration').toUpperCase()}
                                       </label>
                                       {mode === AppMode.IMAGE ? (
                                         <div className="grid grid-cols-4 gap-1">
@@ -478,7 +499,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                        <button 
                          onClick={handleStop}
                          className="p-2.5 bg-red-500/20 hover:bg-red-500/30 border border-red-500 text-red-400 rounded-xl shadow-lg transition-all"
-                         title="Stop Generation"
+                         title={t('chat.stop')}
                        >
                          <Square size={18} fill="currentColor" />
                        </button>
@@ -502,6 +523,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
 };
 
 const ChatBubble: React.FC<{ message: ChatMessage }> = ({ message }) => {
+  const { t } = useLanguage();
   const isUser = message.role === 'user';
   const [isThoughtOpen, setIsThoughtOpen] = useState(true);
   const [isCopied, setIsCopied] = useState(false);
@@ -610,7 +632,7 @@ const ChatBubble: React.FC<{ message: ChatMessage }> = ({ message }) => {
                 className="w-full flex items-center gap-2 px-3 py-2 text-xs text-gray-400 hover:text-gray-200 bg-black/20"
               >
                  <BrainCircuit size={12} className={message.isThinking ? "animate-pulse text-brand-400" : ""} />
-                 <span>Thinking Process</span>
+                 <span>{t('chat.thinking')}</span>
                  {isThoughtOpen ? <ChevronUp size={12} className="ml-auto" /> : <ChevronDown size={12} className="ml-auto" />}
               </button>
               {isThoughtOpen && (
@@ -655,7 +677,7 @@ const ChatBubble: React.FC<{ message: ChatMessage }> = ({ message }) => {
                    className="flex items-center gap-1.5 px-2 py-1 bg-dark-surface border border-dark-border rounded-md text-[10px] text-gray-400 hover:text-white transition-colors shadow-lg"
                  >
                     {isCopied ? <Check size={10} className="text-green-500" /> : <Copy size={10} />}
-                    {isCopied ? 'Copied' : 'Copy'}
+                    {isCopied ? t('chat.copied') : 'Copy'}
                  </button>
               </div>
            )}

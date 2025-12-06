@@ -2,6 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { BackgroundTask } from '../types';
 import { Loader2, CheckCircle, AlertCircle, Maximize2, Minimize2, Image, Video, Clock, X, ChevronUp, ChevronDown, List } from 'lucide-react';
+import { useLanguage } from '../contexts/LanguageContext';
 
 interface TaskCenterProps {
   tasks: BackgroundTask[];
@@ -10,6 +11,7 @@ interface TaskCenterProps {
 }
 
 export const TaskCenter: React.FC<TaskCenterProps> = ({ tasks, onClearCompleted, onRemoveTask }) => {
+  const { t } = useLanguage();
   const [isExpanded, setIsExpanded] = useState(false);
   const [now, setNow] = useState(Date.now());
 
@@ -64,15 +66,15 @@ export const TaskCenter: React.FC<TaskCenterProps> = ({ tasks, onClearCompleted,
           <div className="flex flex-col items-start">
              <span className={`text-xs font-bold leading-none ${hasFailed && !hasActive ? 'text-red-400' : 'text-white'}`}>
                {hasActive 
-                  ? `${activeTasks.length} Active Tasks` 
+                  ? `${activeTasks.length} ${t('task.active')}` 
                   : hasFailed 
-                     ? 'Generation Failed' 
-                     : 'Tasks Complete'
+                     ? t('task.failed')
+                     : t('task.complete')
                }
              </span>
              {activeTasks.length > 0 && (
                <span className="text-[10px] text-gray-400 leading-none mt-1">
-                  {activeTasks.some(t => t.status === 'GENERATING') ? 'Processing...' : 'Queued'}
+                  {activeTasks.some(t => t.status === 'GENERATING') ? t('task.processing') : t('task.queued')}
                </span>
              )}
           </div>
@@ -87,7 +89,7 @@ export const TaskCenter: React.FC<TaskCenterProps> = ({ tasks, onClearCompleted,
           <div className="flex items-center justify-between p-3 bg-dark-surface/50 border-b border-dark-border">
             <div className="flex items-center gap-2">
                <List size={16} className="text-brand-500" />
-               <span className="text-xs font-bold text-white uppercase tracking-wider">Task Center</span>
+               <span className="text-xs font-bold text-white uppercase tracking-wider">{t('task.center')}</span>
             </div>
             <div className="flex gap-1">
                {completedTasks.length > 0 && (
@@ -96,7 +98,7 @@ export const TaskCenter: React.FC<TaskCenterProps> = ({ tasks, onClearCompleted,
                    className="p-1 hover:bg-white/10 rounded text-[10px] text-gray-400 hover:text-white transition-colors"
                    title="Clear Completed"
                  >
-                   Clear Done
+                   {t('task.clear')}
                  </button>
                )}
                <button onClick={() => setIsExpanded(false)} className="p-1 hover:bg-white/10 rounded text-gray-400 hover:text-white transition-colors">
@@ -130,10 +132,10 @@ export const TaskCenter: React.FC<TaskCenterProps> = ({ tasks, onClearCompleted,
                         
                         <div className="flex items-center justify-between">
                            <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${getStatusColor(task.status)}`}>
-                              {task.status === 'GENERATING' ? `Running ${formatDuration(task.executionStartTime || task.startTime)}` : task.status}
+                              {task.status === 'GENERATING' ? `${t('task.running')} ${formatDuration(task.executionStartTime || task.startTime)}` : task.status}
                            </span>
                            {task.status === 'QUEUED' && (
-                               <span className="text-[10px] text-gray-600">Waiting for slot...</span>
+                               <span className="text-[10px] text-gray-600">{t('task.waiting')}</span>
                            )}
                         </div>
                      </div>

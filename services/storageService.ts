@@ -1,5 +1,5 @@
 
-import { Project, AssetItem } from '../types';
+import { Project, AssetItem, AppMode } from '../types';
 
 const DB_NAME = 'LuminaDB';
 const DB_VERSION = 1;
@@ -103,6 +103,67 @@ export const initDB = async (): Promise<void> => {
   initStoragePersistence().catch(console.warn);
 };
 
+// --- Orphan Recovery ---
+
+export const recoverOrphanedProjects = async (): Promise<void> => {
+  try {
+    const transaction = await getTransaction([STORE_PROJECTS, STORE_ASSETS], 'readwrite');
+    return new Promise((resolve, reject) => {
+      const projectStore = transaction.objectStore(STORE_PROJECTS);
+      const assetStore = transaction.objectStore(STORE_ASSETS);
+      
+      // Get all valid project IDs
+      const projectsRequest = projectStore.getAllKeys();
+      
+      projectsRequest.onsuccess = () => {
+        const projectIds = new Set(projectsRequest.result as string[]);
+        
+        // Get all assets
+        const assetsRequest = assetStore.getAll();
+        
+        assetsRequest.onsuccess = () => {
+          const assets = assetsRequest.result as AssetItem[];
+          // Find assets that point to a non-existent project
+          const orphanedAssets = assets.filter(a => !projectIds.has(a.projectId));
+          
+          if (orphanedAssets.length > 0) {
+            console.warn(`[Storage] Found ${orphanedAssets.length} orphaned assets. Recovering...`);
+            
+            // Create a recovery project
+            const recoveryProjectId = 'recovered-' + Date.now();
+            const recoveryProject: Project = {
+              id: recoveryProjectId,
+              name: 'Recovered Assets',
+              createdAt: Date.now(),
+              updatedAt: Date.now(),
+              savedMode: AppMode.IMAGE,
+              chatHistory: [],
+              videoChatHistory: []
+            };
+            
+            projectStore.put(recoveryProject);
+            
+            // Link orphans to this new project
+            orphanedAssets.forEach(asset => {
+              asset.projectId = recoveryProjectId;
+              assetStore.put(asset);
+            });
+            
+            console.log(`[Storage] Recovered ${orphanedAssets.length} assets into '${recoveryProject.name}'`);
+          }
+          resolve();
+        };
+        assetsRequest.onerror = () => reject(assetsRequest.error);
+      };
+      projectsRequest.onerror = () => reject(projectsRequest.error);
+    });
+  } catch (e) {
+    console.error("Failed to run orphan recovery", e);
+    // Don't block app init
+    return Promise.resolve();
+  }
+};
+
 // --- Projects ---
 
 export const saveProject = async (project: Project): Promise<void> => {
@@ -160,19 +221,30 @@ export const saveAsset = async (asset: AssetItem): Promise<void> => {
   try {
     // 1. Optimize Image Storage: Convert Base64 Data URL to Blob
     if (asset.type === 'IMAGE' && asset.url.startsWith('data:')) {
-       const response = await fetch(asset.url);
-       const blob = await response.blob();
-       storageRecord.blob = blob;
-       storageRecord.url = 'blob'; // Placeholder, indicates data is in .blob field
+       try {
+           const response = await fetch(asset.url);
+           const blob = await response.blob();
+           storageRecord.blob = blob;
+           storageRecord.url = 'blob'; // Placeholder, indicates data is in .blob field
+       } catch (conversionError) {
+           console.warn("Blob conversion failed for image, falling back to string storage", conversionError);
+           // Fallback: Do not set .blob, keep .url as the base64 string
+       }
     }
     
     // 2. Handle Video Blobs (existing logic)
     // blob: URLs are temporary. We must fetch the blob data and store it.
     else if (asset.type === 'VIDEO' && asset.url.startsWith('blob:')) {
-      const response = await fetch(asset.url);
-      const blob = await response.blob();
-      storageRecord.blob = blob; // Store the binary data
-      storageRecord.url = 'blob'; // Placeholder
+      try {
+          const response = await fetch(asset.url);
+          const blob = await response.blob();
+          storageRecord.blob = blob; // Store the binary data
+          storageRecord.url = 'blob'; // Placeholder
+      } catch (conversionError) {
+          console.error("Blob fetch failed for video, cannot save persistence", conversionError);
+          // For video, if we can't get the blob from the blob:url, we likely can't save it at all 
+          // unless it was base64. But we proceed to try saving metadata at least.
+      }
     }
   } catch (e) {
     console.error("Failed to prepare asset blob for storage", e);

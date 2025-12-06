@@ -1,5 +1,7 @@
+
 import React, { useRef, useState, useEffect } from 'react';
 import { Save, Undo, Brush, RotateCcw, Square } from 'lucide-react';
+import { useLanguage } from '../contexts/LanguageContext';
 
 interface CanvasEditorProps {
   imageUrl: string;
@@ -18,6 +20,7 @@ interface HistoryItem {
 const BRUSH_CURSOR = `url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="%23ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9.06 11.9 8.07-8.06a2.85 2.85 0 1 1 4.03 4.03l-8.06 8.08" stroke="%23ef4444" fill="%23ef4444"/><path d="M7.07 14.94c-1.66 0-3 1.35-3 3.02 0 1.33-2.5 1.52-2.5 2.24 0 .46.62.8 1 .8 2.48 0 4.5-2.01 4.5-4.5 0-.77.5-1.56 1-1.56Z" fill="%23ef4444"/></svg>') 0 24, auto`;
 
 export const CanvasEditor: React.FC<CanvasEditorProps> = ({ imageUrl, onSave, onClose }) => {
+  const { t } = useLanguage();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   
@@ -236,21 +239,21 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ imageUrl, onSave, on
              {activeTool === 'brush' ? <Brush size={20} className="text-brand-500" /> : <Square size={20} className="text-brand-500" />}
            </div>
            <div>
-             <h2 className="text-lg font-bold text-white">Editor & Inpainting</h2>
-             <p className="text-xs text-gray-400">Draw masks or boxes to guide the AI</p>
+             <h2 className="text-lg font-bold text-white">{t('editor.title')}</h2>
+             <p className="text-xs text-gray-400">{t('editor.desc')}</p>
            </div>
         </div>
         
         <div className="flex items-center gap-3">
            <button onClick={onClose} className="p-2 hover:bg-white/10 rounded-lg text-gray-400 hover:text-white transition-colors">
-             Cancel
+             {t('editor.cancel')}
            </button>
            <button 
              onClick={handleSave}
              className="px-4 py-2 bg-brand-600 hover:bg-brand-500 text-white font-bold rounded-lg shadow-lg flex items-center gap-2 transition-all"
            >
              <Save size={16} />
-             Use Image
+             {t('editor.use')}
            </button>
         </div>
       </div>
@@ -264,14 +267,14 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ imageUrl, onSave, on
               onClick={handleUndo} 
               disabled={history.length <= 1}
               className="p-2 rounded-lg hover:bg-white/10 text-gray-400 hover:text-white disabled:opacity-30 transition-colors"
-              title="Undo"
+              title={t('editor.undo')}
             >
                <Undo size={18} />
             </button>
             <button 
               onClick={handleClear} 
               className="p-2 rounded-lg hover:bg-white/10 text-gray-400 hover:text-white transition-colors"
-              title="Reset All"
+              title={t('editor.reset')}
             >
                <RotateCcw size={18} />
             </button>
@@ -287,7 +290,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ imageUrl, onSave, on
                    : 'text-gray-400 hover:text-white hover:bg-white/5'
                }`}
              >
-               <Brush size={14} /> Brush
+               <Brush size={14} /> {t('editor.brush')}
              </button>
              <button
                onClick={() => setActiveTool('rect')}
@@ -297,14 +300,14 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ imageUrl, onSave, on
                    : 'text-gray-400 hover:text-white hover:bg-white/5'
                }`}
              >
-               <Square size={14} /> Box
+               <Square size={14} /> {t('editor.box')}
              </button>
          </div>
 
          {/* Settings Group */}
          {activeTool === 'brush' && (
             <div className="flex items-center gap-3 border-l border-dark-border pl-6 animate-in slide-in-from-left-2 fade-in">
-                <span className="text-xs font-bold text-gray-500 uppercase">Size</span>
+                <span className="text-xs font-bold text-gray-500 uppercase">{t('editor.size')}</span>
                 <input 
                   type="range" 
                   min="5" 

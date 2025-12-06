@@ -1,3 +1,4 @@
+
 import React, { useRef, useState, useEffect } from 'react';
 import { AppMode, AspectRatio, GenerationParams, ImageResolution, VideoResolution, ImageModel, VideoModel, ImageStyle, VideoStyle, VideoDuration, ChatMessage, AssetItem } from '../types';
 import { Settings2, Sparkles, Image as ImageIcon, Video as VideoIcon, Upload, X, Camera, Palette, Film, RefreshCw, MessageSquare, Layers, ChevronDown, ChevronUp, SlidersHorizontal, Monitor, Eye, Lock, Dice5, Type, User, ScanFace, Frame, ArrowRight, Loader2, Clock, BookTemplate, Clapperboard, XCircle } from 'lucide-react';
@@ -373,15 +374,18 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
     }
   };
 
-
   const renderRatioVisual = (ratio: AspectRatio) => {
-    let width = 16, height = 16, label = '';
+    let width = 16, height = 16;
+    // Get localized label from enum key
+    const enumKey = Object.keys(AspectRatio).find(k => AspectRatio[k as keyof typeof AspectRatio] === ratio) as string;
+    const label = t(`ratio.${enumKey}` as any) || ratio;
+
     switch(ratio) {
-      case AspectRatio.SQUARE: width = 16; height = 16; label = 'Square'; break;
-      case AspectRatio.LANDSCAPE: width = 24; height = 14; label = 'Landscape'; break;
-      case AspectRatio.PORTRAIT: width = 14; height = 24; label = 'Portrait'; break;
-      case AspectRatio.FOUR_THIRDS: width = 20; height = 15; label = '4:3'; break;
-      case AspectRatio.THREE_FOURTHS: width = 15; height = 20; label = '3:4'; break;
+      case AspectRatio.SQUARE: width = 16; height = 16; break;
+      case AspectRatio.LANDSCAPE: width = 24; height = 14; break;
+      case AspectRatio.PORTRAIT: width = 14; height = 24; break;
+      case AspectRatio.FOUR_THIRDS: width = 20; height = 15; break;
+      case AspectRatio.THREE_FOURTHS: width = 15; height = 20; break;
     }
     const isSelected = params.aspectRatio === ratio;
     return (
@@ -391,10 +395,10 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
         className={`relative flex flex-col items-center justify-center p-2 rounded-lg border transition-all gap-2 group h-20 ${
           isSelected ? 'border-brand-500 bg-brand-500/10' : 'border-dark-border bg-dark-surface hover:bg-white/5 hover:border-gray-500'
         }`}
-        title={`${label} (${ratio})`}
+        title={label}
       >
         <div className={`border-2 rounded-sm transition-colors ${isSelected ? 'border-brand-400 bg-brand-400/20' : 'border-gray-500 bg-gray-500/10 group-hover:border-gray-400'}`} style={{ width: `${width}px`, height: `${height}px` }} />
-        <span className={`text-[10px] font-medium ${isSelected ? 'text-brand-400' : 'text-gray-500 group-hover:text-gray-300'}`}>{ratio}</span>
+        <span className={`text-[10px] font-medium text-center ${isSelected ? 'text-brand-400' : 'text-gray-500 group-hover:text-gray-300'}`}>{label}</span>
       </button>
     );
   };
@@ -506,12 +510,12 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
                             className="flex items-center gap-1.5 px-2.5 py-1.5 bg-white/5 hover:bg-white/10 text-gray-300 rounded-lg text-[10px] font-medium transition-colors border border-white/10"
                         >
                             <BookTemplate size={12} />
-                            Template
+                            {t('tmpl.select')}
                         </button>
                         {showTemplates && (
                             <div className="absolute top-full right-0 mt-2 w-64 bg-dark-surface border border-dark-border rounded-xl shadow-xl z-50 overflow-hidden animate-in fade-in slide-in-from-top-2">
                                 <div className="p-2 text-[10px] font-bold text-gray-500 uppercase border-b border-dark-border">
-                                    Select Template
+                                    {t('tmpl.select')}
                                 </div>
                                 <div className="max-h-48 overflow-y-auto custom-scrollbar">
                                     {VIDEO_TEMPLATES.map((tmpl, idx) => (
@@ -546,7 +550,7 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
             <textarea 
                 value={params.prompt} 
                 onChange={(e) => setParams(prev => ({...prev, prompt: e.target.value}))} 
-                placeholder={mode === AppMode.IMAGE ? t('ph.prompt.image') : "Describe the video: Subject + Action + Camera Movement..."} 
+                placeholder={mode === AppMode.IMAGE ? t('ph.prompt.image') : t('ph.prompt.video')} 
                 className="w-full h-32 bg-dark-surface border border-dark-border rounded-xl p-4 text-sm text-white placeholder-gray-600 focus:border-brand-500 focus:outline-none resize-none transition-colors" 
             />
           </div>
@@ -597,7 +601,7 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
                                  )}
                               </div>
                               <button onClick={handleLockSeed} className={`p-2 rounded-lg border transition-colors ${params.seed !== undefined ? 'bg-brand-500/20 border-brand-500 text-brand-400' : 'bg-dark-surface border-dark-border text-gray-400 hover:text-white'}`} title="Randomize / Lock Seed">
-                                 <Dice5 size={18} />
+                                 {params.seed !== undefined ? <Lock size={18} /> : <Dice5 size={18} />}
                               </button>
                            </div>
                         </div>
@@ -946,12 +950,12 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
                     className="w-full bg-dark-surface border border-dark-border rounded-lg px-3 py-2 text-xs text-white appearance-none focus:border-brand-500 focus:outline-none transition-colors"
                   >
                      {mode === AppMode.IMAGE ? (
-                        Object.values(ImageStyle).map(style => (
-                           <option key={style} value={style}>{style}</option>
+                        Object.entries(ImageStyle).map(([key, value]) => (
+                           <option key={key} value={value}>{t(`style.${key}` as any) || value}</option>
                         ))
                      ) : (
-                        Object.values(VideoStyle).map(style => (
-                           <option key={style} value={style}>{style}</option>
+                        Object.entries(VideoStyle).map(([key, value]) => (
+                           <option key={key} value={value}>{t(`style.${key}` as any) || value}</option>
                         ))
                      )}
                   </select>

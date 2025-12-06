@@ -41,12 +41,51 @@ export const AssetCard: React.FC<AssetCardProps> = ({
     e.stopPropagation();
     e.preventDefault();
     if (isFailed) return;
-    const link = document.createElement('a');
-    link.href = asset.url;
-    link.download = `lumina-${asset.type.toLowerCase()}-${asset.id}.${asset.type === 'IMAGE' ? 'png' : 'mp4'}`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+
+    if (asset.type === 'IMAGE') {
+      // Force convert to PNG via Canvas
+      const img = new Image();
+      img.crossOrigin = "anonymous";
+      img.src = asset.url;
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        canvas.width = img.naturalWidth;
+        canvas.height = img.naturalHeight;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(img, 0, 0);
+          canvas.toBlob((blob) => {
+            if (blob) {
+              const url = URL.createObjectURL(blob);
+              const link = document.createElement('a');
+              link.href = url;
+              link.download = `lumina-image-${asset.id}.png`;
+              document.body.appendChild(link);
+              link.click();
+              document.body.removeChild(link);
+              URL.revokeObjectURL(url);
+            }
+          }, 'image/png');
+        }
+      };
+      img.onerror = () => {
+        // Fallback if canvas fails
+        const link = document.createElement('a');
+        link.href = asset.url;
+        link.download = `lumina-image-${asset.id}.png`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+      };
+    } else {
+      // Video
+      const link = document.createElement('a');
+      link.href = asset.url;
+      link.download = `lumina-video-${asset.id}.mp4`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    }
   };
 
   const handleUseRef = (e: React.MouseEvent) => {

@@ -109,6 +109,52 @@ export const LightboxViewer: React.FC<LightboxViewerProps> = ({ asset, onClose, 
       }
   };
 
+  const handleDownload = (e: React.MouseEvent) => {
+    e.preventDefault();
+    if (asset.type === 'IMAGE') {
+      const img = new Image();
+      img.crossOrigin = "anonymous";
+      img.src = asset.url;
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        canvas.width = img.naturalWidth;
+        canvas.height = img.naturalHeight;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(img, 0, 0);
+          canvas.toBlob((blob) => {
+            if (blob) {
+              const url = URL.createObjectURL(blob);
+              const link = document.createElement('a');
+              link.href = url;
+              link.download = `lumina-image-${asset.id}.png`;
+              document.body.appendChild(link);
+              link.click();
+              document.body.removeChild(link);
+              URL.revokeObjectURL(url);
+            }
+          }, 'image/png');
+        }
+      };
+      img.onerror = () => {
+        // Fallback
+        const link = document.createElement('a');
+        link.href = asset.url;
+        link.download = `lumina-image-${asset.id}.png`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+      }
+    } else {
+       const link = document.createElement('a');
+       link.href = asset.url;
+       link.download = `lumina-video-${asset.id}.mp4`;
+       document.body.appendChild(link);
+       link.click();
+       document.body.removeChild(link);
+    }
+  };
+
   return (
     <div className="fixed inset-0 z-[60] bg-black/95 backdrop-blur-sm flex items-center justify-center p-4 md:p-8 animate-in fade-in duration-200">
       <button 
@@ -254,14 +300,13 @@ export const LightboxViewer: React.FC<LightboxViewerProps> = ({ asset, onClose, 
                      <Trash2 size={16} />
                    </button>
                  )}
-                 <a 
-                   href={asset.url} 
-                   download 
+                 <button 
+                   onClick={handleDownload}
                    className="p-2 bg-white text-black hover:bg-gray-200 rounded-lg transition-colors flex items-center justify-center"
                    title="Download"
                  >
                    <Download size={16} />
-                 </a>
+                 </button>
               </div>
            </div>
         </div>

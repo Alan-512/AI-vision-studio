@@ -2,6 +2,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { X, MoveHorizontal, ZoomIn, ZoomOut, RotateCcw } from 'lucide-react';
 import { AssetItem } from '../types';
+import { useLanguage } from '../contexts/LanguageContext';
 
 interface ComparisonViewProps {
   assetA: AssetItem;
@@ -10,6 +11,7 @@ interface ComparisonViewProps {
 }
 
 export const ComparisonView: React.FC<ComparisonViewProps> = ({ assetA, assetB, onClose }) => {
+  const { t } = useLanguage();
   const [sliderPosition, setSliderPosition] = useState(50);
   const [isResizing, setIsResizing] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -84,14 +86,14 @@ export const ComparisonView: React.FC<ComparisonViewProps> = ({ assetA, assetB, 
         <div className="flex items-center gap-4">
            <h2 className="text-lg font-bold text-white flex items-center gap-2">
              <MoveHorizontal size={20} className="text-brand-500" />
-             Comparison View
+             {t('compare.title')}
            </h2>
            <div className="flex gap-4 text-sm text-gray-400">
              <div className="flex items-center gap-2">
                 <span className="w-3 h-3 rounded-full bg-brand-500"></span>
                 <span className="truncate max-w-[200px]">{assetA.prompt}</span>
              </div>
-             <span className="text-gray-600">vs</span>
+             <span className="text-gray-600">{t('compare.vs')}</span>
              <div className="flex items-center gap-2">
                 <span className="w-3 h-3 rounded-full bg-gray-500"></span>
                 <span className="truncate max-w-[200px]">{assetB.prompt}</span>

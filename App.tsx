@@ -13,7 +13,7 @@ import { CanvasEditor } from './components/CanvasEditor';
 import { ToastContainer, ToastMessage } from './components/Toast';
 import { ConfirmDialog } from './components/ConfirmDialog';
 import { generateImage, generateVideo, resumeVideoGeneration, promptForVeoKey, checkVeoAuth, generateProjectName, getUserApiKey } from './services/geminiService';
-import { initDB, loadProjects, loadAssets, saveProject, saveAsset, updateAsset, deleteProjectFromDB, permanentlyDeleteAssetFromDB, softDeleteAssetInDB, restoreAssetInDB } from './services/storageService';
+import { initDB, loadProjects, loadAssets, saveProject, saveAsset, updateAsset, deleteProjectFromDB, permanentlyDeleteAssetFromDB, softDeleteAssetInDB, restoreAssetInDB, recoverOrphanedProjects } from './services/storageService';
 import { useLanguage } from './contexts/LanguageContext';
 
 const DEFAULT_PARAMS: GenerationParams = {
@@ -144,6 +144,10 @@ export function App() {
     const initialize = async () => {
       try {
         await initDB();
+        
+        // Auto-recover any lost assets before loading UI
+        await recoverOrphanedProjects();
+        
         const [loadedProjects, loadedAssets] = await Promise.all([loadProjects(), loadAssets()]);
 
         if (loadedProjects.length > 0) {
