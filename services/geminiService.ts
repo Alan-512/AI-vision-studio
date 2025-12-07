@@ -277,7 +277,9 @@ export const extractPromptFromHistory = async (history: ChatMessage[], mode: App
     // Convert history to text format
     const conversationText = history.map(msg => {
       const imgCount = (msg.images?.length || (msg.image ? 1 : 0));
-      return `${msg.role}: ${msg.content} ${imgCount > 0 ? `[User uploaded ${imgCount} images]` : ''}`;
+      // CLEAN THOUGHTS from extraction context too, just in case
+      const cleanContent = msg.content.replace(/<thought>[\s\S]*?<\/thought>/g, '').trim();
+      return `${msg.role}: ${cleanContent} ${imgCount > 0 ? `[User uploaded ${imgCount} images]` : ''}`;
     }).join('\n');
     
     const contextInstruction = mode === AppMode.VIDEO 
@@ -358,10 +360,42 @@ export const streamChatResponse = async (
   const currentMessage = history[history.length - 1];
 
   // Convert past history to Content[]
-  const historyContent: Content[] = pastMessages.map(msg => ({
-    role: msg.role,
-    parts: messageToParts(msg)
-  }));
+  // CRITICAL FIX: Clean up thoughts from model history to avoid context pollution and model confusion
+  const historyContent: Content[] = [];
+  
+  for (const msg of pastMessages) {
+    let parts = messageToParts(msg);
+    
+    // If model message, strip thoughts from history
+    if (msg.role === 'model') {
+       parts = parts.map(p => {
+           if (p.text) {
+               // Remove <thought> tags and content
+               const cleanedText = p.text.replace(/<thought>[\s\S]*?<\/thought>/g, '').trim();
+               return { ...p, text: cleanedText };
+           }
+           return p;
+       }).filter(p => {
+           // Keep if it has inlineData (images) or non-empty text
+           return p.inlineData || (p.text && p.text.length > 0);
+       });
+
+       // FIX: If the model message became empty (e.g. it was ONLY thoughts), 
+       // we MUST provide a placeholder to ensure the API receives alternating User/Model turns.
+       // Sending User -> [Skipped Model] -> User causes a 400 error.
+       if (parts.length === 0) {
+           parts.push({ text: " " });
+       }
+    }
+    
+    // Only add to history if there is actual content left
+    if (parts.length > 0) {
+        historyContent.push({
+          role: msg.role,
+          parts: parts
+        });
+    }
+  }
 
   // Define logic for Models
   let apiModelName = 'gemini-2.5-flash'; 
@@ -596,7 +630,18 @@ export const generateImage = async (params: GenerationParams, projectId: string,
                       (!params.styleReferences || params.styleReferences.length === 0) &&
                       (!params.subjectReferences || params.subjectReferences.length === 0);
 
-    let systemInstruction = "You are a pure image generation engine. Your ONLY purpose is to generate an image based on the prompt. Do NOT generate conversational text, markdown, or explanations (e.g., 'Here is the image', 'Sure'). Output ONLY the image.";
+    // ENHANCED SYSTEM INSTRUCTION: Strict Priority Rules
+    let systemInstruction = `
+    You are a professional image generation engine.
+    
+    CRITICAL PRIORITY RULES (Order of Importance):
+    1. [STRUCTURAL COMPOSITION BASE]: If provided, this image defines the NON-NEGOTIABLE GEOMETRY/SKELETON of the scene. You must replicate its layout, perspective, and depth exactly.
+    2. [SUBJECT IDENTITY]: If provided, the character/object identity must be preserved strictly.
+    3. [STYLE REFERENCE]: These are for COLORS, TEXTURE, and LIGHTING ONLY. You are ABSOLUTELY FORBIDDEN from copying the scene content, objects, or background from style reference images. They are NOT the subject.
+    4. [USER PROMPT]: Describes the specific content details to render within the established structure.
+    
+    Output ONLY the image. Do NOT generate text.
+    `;
 
     if (params.negativePrompt) {
        systemInstruction += `\n\nNEGATIVE PROMPT / EXCLUSIONS: The user explicitly wants to avoid the following elements: "${params.negativePrompt}". Ensure the generated image does NOT contain these elements.`;
@@ -623,15 +668,30 @@ export const generateImage = async (params: GenerationParams, projectId: string,
 
     const parts: any[] = [];
     let finalPrompt = params.prompt;
-    let promptPrefix = "";
     
-    // --- SANDWICH LOGIC: Subject + Composition + Style ---
+    // --- INTERLEAVED PROMPTING: Instruction -> Image -> Instruction -> Image ---
     
-    // 1. SUBJECT REFERENCES (Identity)
+    // 1. STYLE REFERENCES (Colors/Vibe) - Explicit separation
+    if (params.styleReferences && params.styleReferences.length > 0) {
+       // Strong Negative Instruction bound to these specific images
+       const styleInstruction = `[STYLE REFERENCE IMAGES]: The following ${params.styleReferences.length} image(s) are for STYLE ONLY (Color Palette, Texture, Lighting, Brushwork).\n` +
+       `CRITICAL NEGATIVE CONSTRAINT: You are ABSOLUTELY FORBIDDEN from copying the content, scene, landscape, objects, or composition from these style images. They are NOT the subject. Extract ONLY the artistic style.`;
+       
+       parts.push({ text: styleInstruction });
+
+       params.styleReferences.forEach(ref => {
+         parts.push({
+           inlineData: { mimeType: ref.mimeType, data: ref.data }
+         });
+       });
+    }
+
+    // 2. SUBJECT REFERENCES (Identity)
     if (params.subjectReferences && params.subjectReferences.length > 0) {
-        promptPrefix += `\n[SUBJECT IDENTITY]: The user has provided ${params.subjectReferences.length} reference image(s) for the MAIN SUBJECT. `;
-        promptPrefix += `You MUST maintain the exact identity, facial features, and appearance of the ${params.subjectType || 'Subject'} in these images. `;
-        promptPrefix += `Do NOT change the physical characteristics of the subject.\n`;
+        const subjectInstruction = `[SUBJECT IDENTITY IMAGES]: The following ${params.subjectReferences.length} image(s) define the MAIN SUBJECT.\n` +
+        `INSTRUCTION: Maintain the exact identity, facial features, and appearance of the ${params.subjectType || 'Subject'}. Do not change physical characteristics.`;
+        
+        parts.push({ text: subjectInstruction });
         
         params.subjectReferences.forEach(ref => {
            parts.push({
@@ -640,33 +700,19 @@ export const generateImage = async (params: GenerationParams, projectId: string,
         });
     }
 
-    // 2. STYLE REFERENCES (Vibe) - REFINED
-    if (params.styleReferences && params.styleReferences.length > 0) {
-       promptPrefix += `\n[ARTISTIC STYLE]: The user has provided ${params.styleReferences.length} reference image(s) for STYLE. `;
-       // CRITICAL: Force ignore content
-       promptPrefix += `Use these images ONLY for COLOR PALETTE, TEXTURE, ARTISTIC STYLE, and LIGHTING. `;
-       promptPrefix += `CRITICAL: IGNORE the subject matter (objects, people, animals) inside these style images. Do NOT copy the content. Apply only the style.\n`;
-       
-       params.styleReferences.forEach(ref => {
-         parts.push({
-           inlineData: { mimeType: ref.mimeType, data: ref.data }
-         });
-       });
-    }
-
-    // 3. COMPOSITION / BASE IMAGE (Structure) - REFINED
+    // 3. COMPOSITION / BASE IMAGE (Structure) - Push LAST to be closer to prompt
     if (params.referenceImage && params.referenceImageMimeType) {
+       let compInstruction = "";
        // Check for annotations first
        if (params.isAnnotatedReference) {
-          promptPrefix += `\n[EDITING INSTRUCTION]: The input image contains artificial RED BOUNDING BOXES. `;
-          promptPrefix += `Edit ONLY the content INSIDE the red boxes based on the prompt. `;
-          promptPrefix += `COMPLETELY REMOVE all red boxes and numbers. Seamlessly inpaint the area.\n`;
+          compInstruction = `[EDITING BASE IMAGE]: The following image contains artificial RED BOUNDING BOXES.\n` +
+          `INSTRUCTION: Edit ONLY the content INSIDE the red boxes based on the prompt. COMPLETELY REMOVE all red boxes and numbers. Seamlessly inpaint the area.`;
        } else {
-          promptPrefix += `\n[COMPOSITION / STRUCTURE]: The user has provided a BASE IMAGE. `;
-          // CRITICAL: Force structural adherence
-          promptPrefix += `This image is the STRUCTURAL GROUND TRUTH. The output MUST match this image's perspective, pose, layout, and geometry exactly. `;
-          promptPrefix += `Do not change the composition. Render this exact structure using the Style defined above.\n`;
+          compInstruction = `[STRUCTURAL COMPOSITION BASE]: The following image is the STRUCTURAL GROUND TRUTH.\n` +
+          `CRITICAL CONSTRAINT: The output geometry, depth map, pose, and layout MUST match this image exactly. Do NOT change the perspective or composition. Apply the style defined previously to this structure.`;
        }
+
+       parts.push({ text: compInstruction });
 
        parts.push({
          inlineData: {
@@ -676,22 +722,23 @@ export const generateImage = async (params: GenerationParams, projectId: string,
        });
     }
 
-    // --- TEXT RENDERING INSTRUCTION ---
+    // --- FINAL USER PROMPT CONSTRUCTION ---
+    
+    // Add text rendering requirement if exists
+    let textRenderInstr = "";
     if (params.textToRender) {
-       promptPrefix += `\n[TEXT RENDER REQUIREMENT]: You MUST render the following text clearly and legibly in the image: "${params.textToRender}". Ensure spelling is exact.\n`;
+       textRenderInstr = `\n\n[TEXT RENDER REQUIREMENT]: You MUST render the following text clearly and legibly in the image: "${params.textToRender}". Ensure spelling is exact.`;
     }
 
-    // Combine Prefix + User Prompt
-    if (promptPrefix) {
-        finalPrompt = `${promptPrefix}\n\n[USER PROMPT]: ${finalPrompt}`;
-    }
-
+    // Append Style Suffix
     const styleSuffix = getStyleSuffix(params.imageStyle);
     if (styleSuffix) {
       finalPrompt = `${finalPrompt} . Style description: ${styleSuffix}`;
     }
 
-    parts.push({ text: finalPrompt });
+    // Final Prompt Part
+    const fullPromptText = `[USER PROMPT]: ${finalPrompt}${textRenderInstr}`;
+    parts.push({ text: fullPromptText });
 
     try {
       const apiCall = ai.models.generateContent({
