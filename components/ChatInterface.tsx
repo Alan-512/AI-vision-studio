@@ -1,10 +1,12 @@
 
+
 import React, { useState, useRef, useEffect } from 'react';
 import { Send, User, Sparkles, ChevronDown, ChevronRight, BrainCircuit, Zap, X, SlidersHorizontal, ChevronUp, Copy, Check, Plus, Layers, Clock, MonitorPlay, Palette, Film, RefreshCw, Trash2, Bot, Square, Crop } from 'lucide-react';
-import { ChatMessage, ChatModel, GenerationParams, ImageStyle, ImageResolution, AppMode, ImageModel, VideoResolution, VideoDuration, VideoModel, VideoStyle, AspectRatio } from '../types';
+import { ChatMessage, ChatModel, GenerationParams, ImageStyle, ImageResolution, AppMode, ImageModel, VideoResolution, VideoDuration, VideoModel, VideoStyle, AspectRatio, Project } from '../types';
 import { streamChatResponse } from '../services/geminiService';
 import { useLanguage } from '../contexts/LanguageContext';
 import ReactMarkdown from 'react-markdown';
+import { saveProject } from '../services/storageService'; // Needed for direct updates
 
 interface ChatInterfaceProps {
   history: ChatMessage[];
@@ -16,6 +18,10 @@ interface ChatInterfaceProps {
   params: GenerationParams;
   setParams: React.Dispatch<React.SetStateAction<GenerationParams>>;
   mode: AppMode;
+  // New Props for Recursive Summary (Optional but recommended)
+  projectContextSummary?: string;
+  projectSummaryCursor?: number;
+  onUpdateProjectContext?: (summary: string, cursor: number) => void;
 }
 
 export const ChatInterface: React.FC<ChatInterfaceProps> = ({ 
@@ -26,7 +32,10 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   projectId,
   params,
   setParams,
-  mode
+  mode,
+  projectContextSummary,
+  projectSummaryCursor,
+  onUpdateProjectContext
 }) => {
   const { t } = useLanguage();
   const [input, setInput] = useState('');
@@ -201,25 +210,55 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
       const tempAiMsg: ChatMessage = { role: 'model', content: '', timestamp: Date.now(), isThinking: true };
       setHistory(prev => [...prev, tempAiMsg]);
 
-      await streamChatResponse(newHistory, userMsg.content, (chunkText) => {
-         if (projectIdRef.current !== sendingProjectId) return;
+      await streamChatResponse(
+        newHistory, 
+        userMsg.content, 
+        (chunkText) => {
+             if (projectIdRef.current !== sendingProjectId) return;
 
-         setHistory(prev => {
-           const updated = [...prev];
-           // Keep isThinking TRUE during streaming to ensure UI knows we are active
-           updated[updated.length - 1] = { 
-             ...updated[updated.length - 1], 
-             content: chunkText
-             // do NOT set isThinking: false here
-           };
-           return updated;
-         });
-      }, selectedModel, mode, abortController.signal);
+             setHistory(prev => {
+               const updated = [...prev];
+               updated[updated.length - 1] = { 
+                 ...updated[updated.length - 1], 
+                 content: chunkText
+               };
+               return updated;
+             });
+        }, 
+        selectedModel, 
+        mode, 
+        abortController.signal,
+        // PASS RECURSIVE STATE
+        projectContextSummary,
+        projectSummaryCursor,
+        onUpdateProjectContext
+      );
     } catch (error: any) {
        if (error.message === 'Cancelled' || error.name === 'AbortError') {
          console.log('Chat generation stopped by user');
        } else {
          console.error("Chat Error:", error);
+         
+         // SHOW ERROR IN UI
+         if (projectIdRef.current === sendingProjectId) {
+             setHistory(prev => {
+                 const updated = [...prev];
+                 const lastIdx = updated.length - 1;
+                 
+                 // Check if the last message is the model placeholder we added
+                 if (lastIdx >= 0 && updated[lastIdx].role === 'model') {
+                     const currentContent = updated[lastIdx].content;
+                     const errorMsg = `\n\n*[System Error: ${error.message || "Connection timed out"}]*`;
+                     
+                     updated[lastIdx] = { 
+                         ...updated[lastIdx], 
+                         content: currentContent ? currentContent + errorMsg : errorMsg,
+                         isThinking: false 
+                     };
+                 }
+                 return updated;
+             });
+         }
        }
     } finally {
       if (projectIdRef.current === sendingProjectId) {
@@ -572,7 +611,7 @@ const ChatBubble: React.FC<{ message: ChatMessage }> = ({ message }) => {
   
   // Custom Markdown Components
   const MarkdownComponents = {
-    p: ({children}: any) => <p className="mb-2 last:mb-0">{children}</p>,
+    p: ({children}: any) => <p className="mb-2 last:mb-0 break-words whitespace-pre-wrap">{children}</p>,
     ul: ({children}: any) => <ul className="list-disc ml-4 mb-2 space-y-1">{children}</ul>,
     ol: ({children}: any) => <ol className="list-decimal ml-4 mb-2 space-y-1">{children}</ol>,
     li: ({children}: any) => <li>{children}</li>,
@@ -581,9 +620,18 @@ const ChatBubble: React.FC<{ message: ChatMessage }> = ({ message }) => {
     h3: ({children}: any) => <h3 className="text-sm font-bold mb-1 mt-2">{children}</h3>,
     blockquote: ({children}: any) => <blockquote className="border-l-2 border-gray-500 pl-3 italic my-2 text-gray-400">{children}</blockquote>,
     strong: ({children}: any) => <strong className="font-bold text-white">{children}</strong>,
+    
+    // Improved Table Support
+    table: ({children}: any) => <div className="overflow-x-auto my-2 border border-dark-border rounded-lg bg-black/20"><table className="min-w-full divide-y divide-dark-border text-left text-xs">{children}</table></div>,
+    thead: ({children}: any) => <thead className="bg-white/5">{children}</thead>,
+    tbody: ({children}: any) => <tbody className="divide-y divide-dark-border/30">{children}</tbody>,
+    tr: ({children}: any) => <tr>{children}</tr>,
+    th: ({children}: any) => <th className="px-3 py-2 font-semibold text-gray-200">{children}</th>,
+    td: ({children}: any) => <td className="px-3 py-2 text-gray-400 whitespace-pre-wrap break-words">{children}</td>,
+
     code: ({node, inline, className, children, ...props}: any) => {
       return inline ? (
-        <code className="bg-white/10 px-1.5 py-0.5 rounded font-mono text-xs text-brand-200" {...props}>{children}</code>
+        <code className="bg-white/10 px-1.5 py-0.5 rounded font-mono text-xs text-brand-200 break-words whitespace-pre-wrap" {...props}>{children}</code>
       ) : (
         <div className="bg-black/40 rounded-lg my-2 overflow-hidden border border-white/5">
            <div className="bg-white/5 px-3 py-1.5 border-b border-white/5 text-[10px] text-gray-500 font-mono flex items-center gap-2">
@@ -658,9 +706,9 @@ const ChatBubble: React.FC<{ message: ChatMessage }> = ({ message }) => {
                  <div className="w-1.5 h-1.5 bg-gray-500 rounded-full animate-bounce" />
               </div>
            ) : (
-              <div className="markdown-content">
+              <div className="markdown-content w-full min-w-0 break-words">
                 {isUser ? (
-                  <div className="whitespace-pre-wrap">{finalContent}</div>
+                  <div className="whitespace-pre-wrap break-words">{finalContent}</div>
                 ) : (
                   <ReactMarkdown components={MarkdownComponents}>
                     {finalContent}

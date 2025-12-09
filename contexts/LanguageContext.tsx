@@ -40,22 +40,42 @@ const translations = {
     'lbl.style': 'Style',
     'lbl.advanced': 'Advanced Settings',
     'lbl.video_controls': 'Video Controls',
+    'lbl.use_search': 'Use Google Search',
     
-    // Visual Control Center Labels
-    'lbl.subject_ref': 'Subject / Identity',
-    'lbl.comp_ref': 'Base Image / Composition',
-    'lbl.style_ref': 'Style / Vibe',
+    // Smart Assets (New)
+    'lbl.smart_assets': 'Smart Reference Assets',
+    'lbl.asset_type': 'Type',
+    'lbl.asset_label': 'Label (Optional)',
+    'help.smart_assets': 'Upload multiple images and assign them roles (Identity, Structure, Style) for complex composition.',
+    'type.identity': 'Identity (Subject)',
+    'type.structure': 'Structure (Layout)',
+    'type.style': 'Style (Vibe)',
+    'ph.label': 'e.g. Jacket, Background',
+    'desc.identity': 'Decides "Who/What". Maintains facial features, product details, or character identity.',
+    'desc.structure': 'Decides "Where/How". Maintains composition, pose, depth, and structure.',
+    'desc.style': 'Decides "Art Style/Vibe". Extracts colors, lighting, texture, and brushstrokes.',
+    
+    'tag.person': 'Person',
+    'tag.face': 'Face',
+    'tag.product': 'Product',
+    'tag.clothing': 'Clothing',
+    'tag.background': 'Background',
+    'tag.layout': 'Layout',
+    'tag.pose': 'Pose',
+    'tag.depth': 'Depth',
+    'tag.sketch': 'Sketch',
+    'tag.color': 'Color',
+    'tag.lighting': 'Lighting',
+    'tag.texture': 'Texture',
+    'tag.artstyle': 'Art Style',
+    
+    // Legacy Visual Control (For Video)
     'lbl.video_keyframes': 'Keyframes',
     'lbl.video_subject_ref': 'Subject / Character Ref',
     'lbl.video_extend': 'Extend Video',
     'lbl.continuous_mode': 'Continuous Mode',
     'lbl.text_render': 'Text to Render',
     'lbl.locked_subject': 'Locked (Subject Ref)',
-    
-    // Subject Types
-    'subj.person': 'Person',
-    'subj.animal': 'Animal',
-    'subj.object': 'Object',
     
     // Form - Placeholders & Help
     'ph.prompt.image': 'Describe the image you want to generate...',
@@ -64,17 +84,15 @@ const translations = {
     'ph.seed_random': 'Random (-1)',
     'ph.text_render': 'e.g. Hello World',
     'help.continuous': 'Auto-use result as next Composition Reference',
-    'help.upload': 'Click to upload',
+    'help.upload': 'Click or Drag to upload images',
     'help.extend_desc': 'Upload a video to extend it by 5-7 seconds. Resolution will be set to 720p.',
     'help.seed_desc': 'Locking the seed ensures consistent generation results, useful for refining prompts.',
+    'help.search_desc': 'Uses Google Search to find real-time information for more accurate details.',
+    'warn.cost_title': 'Extra Cost Info',
+    'warn.search_cost': 'Enabling search incurs additional search query fees. Please refer to Google API pricing.',
     
-    // Detailed Explanations
-    'help.subject_desc': 'Defines "WHO/WHAT". Keeps facial features, product details, or character identity consistent.',
-    'help.comp_desc': 'Defines "WHERE/HOW". Keeps the pose, layout, depth, and structure of the scene.',
-    'help.style_desc': 'Defines "ART STYLE". Extracts colors, lighting, texture, and brush strokes.',
     'help.video_subject_desc': 'Upload images (max 3) to preserve the identity of a person, character, or object in the video.',
     'note.video_ref_limit': 'Note: Subject references lock resolution to 720p.',
-    
     'help.video_frames': 'Define the start or end of your video (optional).',
     
     // Actions
@@ -120,8 +138,6 @@ const translations = {
     'msg.connection_success': 'Connection Successful!',
     'msg.connection_failed': 'Connection Failed',
 
-    // --- NEW SECTIONS ---
-
     // Settings
     'settings.title': 'Settings',
     'settings.key_label': 'Google AI Studio API Key',
@@ -152,6 +168,7 @@ const translations = {
     'editor.brush': 'Brush',
     'editor.box': 'Box',
     'editor.size': 'Size',
+    'editor.color': 'Color',
     'editor.use': 'Use Image',
     'editor.reset': 'Reset All',
     'editor.undo': 'Undo',
@@ -168,11 +185,11 @@ const translations = {
     'task.failed': 'Generation Failed',
     'task.processing': 'Processing...',
     'task.queued': 'Queued',
-    'task.clear': 'Clear Done',
+    'task.clear': 'Clear List',
     'task.waiting': 'Waiting for slot...',
     'task.running': 'Running',
     
-    // Styles (Enum Keys)
+    // Styles
     'style.NONE': 'None',
     'style.MODERN_VECTOR': 'Modern Flat Vector',
     'style.PHOTOREALISTIC': 'Photorealistic',
@@ -191,7 +208,7 @@ const translations = {
     'style.GLITCH': 'Glitch Art',
     'style.THREE_D': '3D Animation',
     
-    // Ratios (Enum Keys)
+    // Ratios
     'ratio.SQUARE': 'Square (1:1)',
     'ratio.LANDSCAPE': 'Landscape (16:9)',
     'ratio.PORTRAIT': 'Portrait (9:16)',
@@ -248,22 +265,42 @@ const translations = {
     'lbl.style': '艺术风格',
     'lbl.advanced': '高级设置',
     'lbl.video_controls': '视频控制',
+    'lbl.use_search': '使用 Google 搜索增强',
     
-    // Visual Control Center Labels
-    'lbl.subject_ref': '主体 / 角色参考',
-    'lbl.comp_ref': '垫图 / 构图参考',
-    'lbl.style_ref': '风格参考 / 滤镜',
+    // Smart Assets (New)
+    'lbl.smart_assets': '智能参考素材',
+    'lbl.asset_type': '类型',
+    'lbl.asset_label': '标签 (可选)',
+    'help.smart_assets': '上传多张图片并指定角色 (主体、构图、风格)，实现复杂的组合生成。',
+    'type.identity': '主体 (Subject)',
+    'type.structure': '构图 (Structure)',
+    'type.style': '风格 (Style)',
+    'ph.label': '例如：外套、背景',
+    'desc.identity': '决定“是谁/画什么”。保持面部特征、产品细节或角色身份的一致性。',
+    'desc.structure': '决定“在哪/怎么摆”。保持画面的构图、姿势、深度和结构。',
+    'desc.style': '决定“画风/色调”。提取图片的色彩、光影、纹理和笔触。',
+
+    'tag.person': '人物',
+    'tag.face': '脸部',
+    'tag.product': '产品',
+    'tag.clothing': '服装',
+    'tag.background': '背景',
+    'tag.layout': '布局',
+    'tag.pose': '姿势',
+    'tag.depth': '深度',
+    'tag.sketch': '草图',
+    'tag.color': '色彩',
+    'tag.lighting': '光影',
+    'tag.texture': '纹理',
+    'tag.artstyle': '画风',
+    
+    // Legacy Visual Control
     'lbl.video_keyframes': '关键帧控制',
     'lbl.video_subject_ref': '主体 / 角色参考',
     'lbl.video_extend': '视频续写 (Extension)',
     'lbl.continuous_mode': '连续模式',
     'lbl.text_render': '画面文字 (Text)',
     'lbl.locked_subject': '已锁定 (角色参考)',
-    
-    // Subject Types
-    'subj.person': '人物',
-    'subj.animal': '动物',
-    'subj.object': '物体',
     
     // Form - Placeholders & Help
     'ph.prompt.image': '描述你想生成的画面...',
@@ -275,14 +312,12 @@ const translations = {
     'help.upload': '点击上传',
     'help.extend_desc': '上传视频进行内容续写 (扩充 5-7秒)。注意：分辨率将锁定为 720p。',
     'help.seed_desc': '锁定种子可固定生成结果，便于在保持画面结构的同时微调细节。',
+    'help.search_desc': '使用 Google 搜索获取实时信息，以生成更准确的细节。',
+    'warn.cost_title': '额外费用提示',
+    'warn.search_cost': '开启搜索会产生额外的搜索请求费用，具体请参考 Google API 收费说明。',
     
-    // Detailed Explanations
-    'help.subject_desc': '决定“是谁/画什么”。保持面部特征、产品细节或角色身份的一致性。',
-    'help.comp_desc': '决定“在哪/怎么摆”。保持画面的构图、姿势、深度和结构。',
-    'help.style_desc': '决定“画风/色调”。提取图片的色彩、光影、纹理和笔触。',
     'help.video_subject_desc': '上传图片 (最多3张) 以在视频中保持人物、角色或物体的一致性。',
     'note.video_ref_limit': '注意：使用角色参考会将分辨率锁定为 720p。',
-    
     'help.video_frames': '定义视频的起始或结束画面（可选）。',
     
     // Actions
@@ -328,8 +363,6 @@ const translations = {
     'msg.connection_success': '连接成功！网络畅通。',
     'msg.connection_failed': '连接失败',
 
-    // --- NEW SECTIONS ZH ---
-
     // Settings
     'settings.title': '设置',
     'settings.key_label': 'Google AI Studio API Key',
@@ -360,6 +393,7 @@ const translations = {
     'editor.brush': '画笔',
     'editor.box': '矩形框',
     'editor.size': '大小',
+    'editor.color': '颜色',
     'editor.use': '使用图片',
     'editor.reset': '重置',
     'editor.undo': '撤销',
@@ -376,7 +410,7 @@ const translations = {
     'task.failed': '生成失败',
     'task.processing': '处理中...',
     'task.queued': '排队中',
-    'task.clear': '清除已完成',
+    'task.clear': '清空记录',
     'task.waiting': '等待队列...',
     'task.running': '运行中',
     

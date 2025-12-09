@@ -1,7 +1,7 @@
 
 import React from 'react';
-import { AssetItem } from '../types';
-import { Download, ZoomIn, RefreshCcw, Trash2, MessageSquarePlus, Star, Check, RotateCcw, X, Loader2, AlertCircle } from 'lucide-react';
+import { AssetItem, ImageModel, VideoModel } from '../types';
+import { Download, ZoomIn, RefreshCcw, Trash2, MessageSquarePlus, Star, Check, RotateCcw, X, Loader2, AlertCircle, Sparkles } from 'lucide-react';
 
 interface AssetCardProps {
   asset: AssetItem;
@@ -34,9 +34,10 @@ export const AssetCard: React.FC<AssetCardProps> = ({
   isTrashMode,
   onRestore
 }) => {
-  const isGenerating = asset.status === 'GENERATING' || asset.status === 'PENDING';
+  const isGenerating = asset.status === 'GENERATING';
+  const isPending = asset.status === 'PENDING';
   const isFailed = asset.status === 'FAILED';
-
+  
   const handleDownload = (e: React.MouseEvent) => {
     e.stopPropagation();
     e.preventDefault();
@@ -129,7 +130,7 @@ export const AssetCard: React.FC<AssetCardProps> = ({
   };
 
   const handleClick = () => {
-     if (isGenerating || isFailed) return; 
+     if (isGenerating || isPending || isFailed) return; 
      if (isSelectionMode && onToggleSelection && !isTrashMode) {
         onToggleSelection(asset);
      } else {
@@ -139,7 +140,7 @@ export const AssetCard: React.FC<AssetCardProps> = ({
 
   // Drag Handlers
   const handleDragStart = (e: React.DragEvent) => {
-    if (asset.type !== 'IMAGE' || isGenerating || isFailed) return;
+    if (asset.type !== 'IMAGE' || isGenerating || isPending || isFailed) return;
     
     // Set data for internal app drag
     e.dataTransfer.setData('application/lumina-asset', JSON.stringify(asset));
@@ -158,25 +159,58 @@ export const AssetCard: React.FC<AssetCardProps> = ({
         }
         ${asset.isFavorite && !isSelected && !isTrashMode ? 'border-yellow-500/50' : ''}
         ${isTrashMode ? 'opacity-80 hover:opacity-100 grayscale-[0.3] hover:grayscale-0' : ''}
-        ${isGenerating ? 'cursor-wait border-brand-500/50' : 'cursor-pointer'}
+        ${isGenerating || isPending ? 'cursor-wait border-brand-500/30' : 'cursor-pointer'}
         ${isFailed ? 'border-red-500/30 cursor-not-allowed' : ''}
       `}
       onClick={handleClick}
-      draggable={!isTrashMode && asset.type === 'IMAGE' && !isGenerating && !isFailed}
+      draggable={!isTrashMode && asset.type === 'IMAGE' && !isGenerating && !isPending && !isFailed}
       onDragStart={handleDragStart}
     >
-      {isGenerating ? (
-         <div className="w-full h-full flex flex-col items-center justify-center bg-black/40 p-4 text-center space-y-3">
-             <div className="relative">
-                <div className="w-10 h-10 rounded-full border-2 border-brand-500/30 border-t-brand-500 animate-spin" />
-                <div className="absolute inset-0 flex items-center justify-center">
-                   <div className="w-2 h-2 bg-brand-400 rounded-full animate-pulse" />
-                </div>
+      {/* Styles for Shimmer Animation */}
+      <style>{`
+        @keyframes shimmer {
+          0% { transform: translateX(-100%); }
+          100% { transform: translateX(100%); }
+        }
+        .animate-shimmer {
+          animation: shimmer 2s infinite linear;
+        }
+      `}</style>
+
+      {/* New Badge - Hidden during selection or special states */}
+      {asset.isNew && !isGenerating && !isPending && !isFailed && !isSelectionMode && !isSelected && !isTrashMode && (
+        <div className="absolute top-2 right-2 w-3 h-3 bg-green-500 rounded-full shadow-lg shadow-black/50 z-20 ring-2 ring-dark-surface pointer-events-none">
+           <div className="absolute inset-0 bg-green-400 rounded-full animate-ping opacity-75" />
+        </div>
+      )}
+
+      {(isGenerating || isPending) ? (
+         <div className="w-full h-full flex flex-col items-center justify-center bg-dark-panel p-4 text-center space-y-3 relative overflow-hidden">
+             
+             {/* Wave/Shimmer Effect Background */}
+             <div className="absolute inset-0 bg-dark-surface/50 z-0">
+                <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/10 to-transparent -translate-x-full animate-shimmer" />
              </div>
-             <div>
-                <p className="text-xs font-bold text-white">Generating...</p>
-                <p className="text-[10px] text-gray-400 mt-1 line-clamp-2">{asset.prompt}</p>
-             </div>
+             
+             {isGenerating ? (
+                 <div className="relative z-10 flex flex-col items-center">
+                    <div className="mb-3 p-3 rounded-full bg-brand-500/10 border border-brand-500/20 shadow-[0_0_15px_rgba(14,165,233,0.3)] animate-pulse">
+                        <Sparkles size={24} className="text-brand-400" />
+                    </div>
+                    <div className="text-xs font-bold text-brand-400 tracking-wide animate-pulse">Creating...</div>
+                 </div>
+             ) : (
+                 <div className="relative z-10 flex flex-col items-center">
+                    <div className="mb-3 p-3 rounded-full bg-yellow-500/10 border border-yellow-500/20">
+                       <Loader2 size={24} className="text-yellow-500 animate-spin" />
+                    </div>
+                    <div className="text-xs font-bold text-yellow-500 tracking-wide">Queued</div>
+                 </div>
+             )}
+             
+             <p className="text-[10px] text-gray-500 mt-2 line-clamp-2 px-2 relative z-10 font-medium opacity-70">
+               {asset.prompt}
+             </p>
          </div>
       ) : isFailed ? (
          <div className="w-full h-full flex flex-col items-center justify-center bg-red-900/10 p-4 text-center space-y-2">
@@ -215,7 +249,7 @@ export const AssetCard: React.FC<AssetCardProps> = ({
       )}
       
       {/* Selection Overlay (Always visible when selected) */}
-      {(isSelectionMode || isSelected) && !isTrashMode && !isGenerating && !isFailed && (
+      {(isSelectionMode || isSelected) && !isTrashMode && !isGenerating && !isPending && !isFailed && (
          <div className={`absolute inset-0 bg-black/20 transition-opacity ${isSelected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
             <div className={`absolute top-2 right-2 w-6 h-6 rounded-full border-2 flex items-center justify-center transition-all ${isSelected ? 'bg-brand-500 border-brand-500' : 'bg-black/40 border-white/50'}`}>
                {isSelected && <Check size={14} className="text-white" />}
@@ -224,7 +258,7 @@ export const AssetCard: React.FC<AssetCardProps> = ({
       )}
 
       {/* Action Overlay (Hidden in Selection Mode) */}
-      {!isSelectionMode && !isGenerating && !isFailed && (
+      {!isSelectionMode && !isGenerating && !isPending && !isFailed && (
         <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col justify-end p-3 z-10">
           <p className="text-xs text-white line-clamp-2 mb-2 font-medium pointer-events-none">{asset.prompt}</p>
           <div className="flex gap-2 justify-end z-20 flex-wrap">
@@ -310,7 +344,7 @@ export const AssetCard: React.FC<AssetCardProps> = ({
         <div className={`px-2 py-0.5 backdrop-blur-sm rounded text-[10px] font-bold text-white uppercase tracking-wider ${isFailed ? 'bg-red-500/80' : 'bg-black/50'}`}>
           {isFailed ? 'FAILED' : asset.type}
         </div>
-        {asset.isFavorite && !isTrashMode && !isGenerating && !isFailed && (
+        {asset.isFavorite && !isTrashMode && !isGenerating && !isPending && !isFailed && (
           <div className="p-0.5 bg-yellow-500 text-white rounded-full shadow-lg">
              <Star size={10} fill="currentColor" />
           </div>

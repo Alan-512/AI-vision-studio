@@ -1,7 +1,8 @@
 
+
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Image as ImageIcon, Video, LayoutGrid, Folder, Sparkles, Settings, Star, CheckSquare, MoveHorizontal, Brush, X, Languages, Trash2, Recycle } from 'lucide-react';
-import { AppMode, AspectRatio, GenerationParams, AssetItem, ImageResolution, VideoResolution, ImageModel, VideoModel, ImageStyle, Project, ChatMessage, BackgroundTask } from './types';
+import { AppMode, AspectRatio, GenerationParams, AssetItem, ImageResolution, VideoResolution, ImageModel, VideoModel, ImageStyle, Project, ChatMessage, BackgroundTask, SmartAsset } from './types';
 import { GenerationForm } from './components/GenerationForm';
 import { AssetCard } from './components/AssetCard';
 import { ProjectSidebar } from './components/ProjectSidebar';
@@ -138,8 +139,13 @@ export function App() {
   const activeProjectIdRef = useRef(activeProjectId);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
 
+  // RECURSIVE SUMMARY STATE (Local Lifted)
+  const [contextSummary, setContextSummary] = useState<string>('');
+  const [summaryCursor, setSummaryCursor] = useState<number>(0);
+
   useEffect(() => { activeProjectIdRef.current = activeProjectId; }, [activeProjectId]);
 
+  // Initial Setup
   useEffect(() => {
     const initialize = async () => {
       try {
@@ -148,7 +154,7 @@ export function App() {
         // Auto-recover any lost assets before loading UI
         await recoverOrphanedProjects();
         
-        const [loadedProjects, loadedAssets] = await Promise.all([loadProjects(), loadAssets()]);
+        const loadedProjects = await loadProjects();
 
         if (loadedProjects.length > 0) {
           loadedProjects.sort((a, b) => b.updatedAt - a.updatedAt);
@@ -161,51 +167,15 @@ export function App() {
              if (lastActive.savedMode === AppMode.VIDEO) setChatHistory(lastActive.videoChatHistory || []);
              else setChatHistory(lastActive.chatHistory || []);
           }
+          // Load Summary Data
+          setContextSummary(lastActive.contextSummary || '');
+          setSummaryCursor(lastActive.summaryCursor || 0);
+
           promptCache.current = { [lastActive.savedMode || AppMode.IMAGE]: lastActive.savedParams?.prompt || '' };
         } else {
           createNewProject(true); 
         }
-        setAssets(loadedAssets);
-
-        const pendingVideos = loadedAssets.filter(a => a.status === 'GENERATING' && a.operationName);
-        if (pendingVideos.length > 0) {
-            console.log(`[Lumina] Found ${pendingVideos.length} pending video tasks. Recovering...`);
-            pendingVideos.forEach(asset => {
-                const taskId = asset.id;
-                setTasks(prev => [...prev, {
-                    id: taskId,
-                    projectId: asset.projectId,
-                    projectName: loadedProjects.find(p => p.id === asset.projectId)?.name || 'Project',
-                    type: 'VIDEO',
-                    status: 'GENERATING',
-                    startTime: asset.createdAt,
-                    executionStartTime: asset.createdAt,
-                    prompt: asset.prompt
-                }]);
-
-                resumeVideoGeneration(asset.operationName!)
-                    .then(async (url) => {
-                        const updates = { status: 'COMPLETED' as const, url };
-                        await updateAsset(asset.id, updates);
-                        setAssets(prev => prev.map(a => a.id === asset.id ? { ...a, ...updates } : a));
-                        setTasks(prev => prev.map(t => t.id === taskId ? { ...t, status: 'COMPLETED' } : t));
-                        addToast('success', 'Video Recovered', 'A background video generation has finished.');
-                        playSuccessSound();
-                    })
-                    .catch(async (err) => {
-                        const updates = { status: 'FAILED' as const };
-                        await updateAsset(asset.id, updates);
-                        setAssets(prev => prev.map(a => a.id === asset.id ? { ...a, ...updates } : a));
-                        setTasks(prev => prev.map(t => t.id === taskId ? { ...t, status: 'FAILED', error: err.message } : t));
-                        playErrorSound();
-                        
-                        // If recovery failed with quota, trigger cooldown
-                        if (err.message.includes('429') || err.message.includes('Quota')) {
-                           setVideoCooldownEndTime(Date.now() + 60000);
-                        }
-                    });
-            });
-        }
+        
       } catch (e) {
         console.error("Storage Init Failed:", e);
         createNewProject(true);
@@ -216,28 +186,102 @@ export function App() {
     initialize();
   }, []);
 
+  // MEMORY FIX: Load assets ONLY when project changes
+  useEffect(() => {
+      if (!activeProjectId) return;
+      
+      const fetchAssets = async () => {
+          try {
+             setAssets([]); 
+             const rawProjectAssets = await loadAssets(activeProjectId);
+             const projectAssets = await Promise.all(rawProjectAssets.map(async (asset) => {
+                const isStaleImage = asset.type === 'IMAGE' && (asset.status === 'GENERATING' || asset.status === 'PENDING');
+                const isStaleVideo = asset.type === 'VIDEO' && (asset.status === 'GENERATING' || asset.status === 'PENDING') && !asset.operationName;
+                if (isStaleImage || isStaleVideo) {
+                    await updateAsset(asset.id, { status: 'FAILED' });
+                    return { ...asset, status: 'FAILED' as const };
+                }
+                return asset;
+             }));
+             setAssets(projectAssets);
+
+             const pendingVideos = projectAssets.filter(a => a.status === 'GENERATING' && a.operationName);
+             if (pendingVideos.length > 0) {
+                 pendingVideos.forEach(asset => {
+                    const taskId = asset.id;
+                    setTasks(prev => {
+                        if (prev.some(t => t.id === taskId)) return prev;
+                        return [...prev, {
+                            id: taskId,
+                            projectId: asset.projectId,
+                            projectName: projects.find(p => p.id === asset.projectId)?.name || 'Project',
+                            type: 'VIDEO',
+                            status: 'GENERATING',
+                            startTime: asset.createdAt,
+                            executionStartTime: asset.createdAt,
+                            prompt: asset.prompt
+                        }];
+                    });
+
+                    resumeVideoGeneration(asset.operationName!)
+                        .then(async (url) => {
+                            const updates = { status: 'COMPLETED' as const, url, isNew: true };
+                            await updateAsset(asset.id, updates);
+                            if (activeProjectIdRef.current === asset.projectId) {
+                                setAssets(prev => prev.map(a => a.id === asset.id ? { ...a, ...updates } : a));
+                            }
+                            setTasks(prev => prev.map(t => t.id === taskId ? { ...t, status: 'COMPLETED' } : t));
+                            addToast('success', 'Video Recovered', 'A background video generation has finished.');
+                            playSuccessSound();
+                        })
+                        .catch(async (err) => {
+                            const updates = { status: 'FAILED' as const };
+                            await updateAsset(asset.id, updates);
+                            if (activeProjectIdRef.current === asset.projectId) {
+                                setAssets(prev => prev.map(a => a.id === asset.id ? { ...a, ...updates } : a));
+                            }
+                            setTasks(prev => prev.map(t => t.id === taskId ? { ...t, status: 'FAILED', error: err.message } : t));
+                        });
+                 });
+             }
+          } catch (e) {
+             console.error("Failed to load assets for project", e);
+          }
+      };
+      
+      fetchAssets();
+  }, [activeProjectId]);
+
   useEffect(() => {
     if (!isLoaded || !activeProjectId) return;
     const currentId = activeProjectId;
+    
+    // Update local projects state
     setProjects(prev => prev.map(p => 
       p.id === currentId ? { 
         ...p, savedParams: params, savedMode: mode, 
         chatHistory: mode === AppMode.IMAGE ? chatHistory : p.chatHistory,
-        videoChatHistory: mode === AppMode.VIDEO ? chatHistory : p.videoChatHistory
+        videoChatHistory: mode === AppMode.VIDEO ? chatHistory : p.videoChatHistory,
+        contextSummary: contextSummary,
+        summaryCursor: summaryCursor
       } : p
     ));
+    
+    // Persist to DB with debounce
     const handler = setTimeout(() => {
       const currentProject = projects.find(p => p.id === currentId);
       if (currentProject) {
          saveProject({ 
            ...currentProject, savedParams: params, savedMode: mode, 
            chatHistory: mode === AppMode.IMAGE ? chatHistory : currentProject.chatHistory,
-           videoChatHistory: mode === AppMode.VIDEO ? chatHistory : currentProject.videoChatHistory
+           videoChatHistory: mode === AppMode.VIDEO ? chatHistory : currentProject.videoChatHistory,
+           contextSummary: contextSummary,
+           summaryCursor: summaryCursor
          }).catch(console.error);
       }
     }, 1000);
     return () => clearTimeout(handler);
-  }, [params, mode, activeProjectId, isLoaded, chatHistory]); 
+  }, [params, mode, activeProjectId, isLoaded, chatHistory, contextSummary, summaryCursor]); 
 
   const addToast = (type: 'success' | 'error' | 'info', title: string, message: string) => {
     setToasts(prev => [...prev, { id: crypto.randomUUID(), type, title, message }]);
@@ -262,7 +306,8 @@ export function App() {
   const createNewProject = (isInit = false) => {
     const newProject: Project = {
       id: crypto.randomUUID(), name: t('nav.new_project'), createdAt: Date.now(), updatedAt: Date.now(),
-      savedParams: DEFAULT_PARAMS, savedMode: AppMode.IMAGE, chatHistory: [], videoChatHistory: []
+      savedParams: DEFAULT_PARAMS, savedMode: AppMode.IMAGE, chatHistory: [], videoChatHistory: [],
+      contextSummary: '', summaryCursor: 0
     };
     if (isInit) {
       setProjects([newProject]); setActiveProjectId(newProject.id); saveProject(newProject);
@@ -270,6 +315,8 @@ export function App() {
     } else {
       setProjects(prev => [newProject, ...prev]); saveProject(newProject); switchProject(newProject.id, newProject); setShowProjects(true);
     }
+    setContextSummary('');
+    setSummaryCursor(0);
     setViewMode('GALLERY');
   };
 
@@ -280,6 +327,11 @@ export function App() {
     setParams(targetProject.savedParams || DEFAULT_PARAMS);
     setMode(targetProject.savedMode || AppMode.IMAGE);
     setChatHistory((targetProject.savedMode === AppMode.VIDEO ? targetProject.videoChatHistory : targetProject.chatHistory) || []);
+    
+    // Reset Summary State
+    setContextSummary(targetProject.contextSummary || '');
+    setSummaryCursor(targetProject.summaryCursor || 0);
+
     setChatSelectedImages([]);
     promptCache.current = { [targetProject.savedMode || AppMode.IMAGE]: targetProject.savedParams?.prompt || '' };
     setSelectedAssetIds(new Set());
@@ -308,9 +360,48 @@ export function App() {
      setComparisonAssets([selected[0], selected[1]]);
   };
 
-  const handleCanvasSave = (dataUrl: string) => {
+  const handleCanvasSave = async (dataUrl: string) => {
+     let originalImage = '';
+     let originalMime = '';
+
+     if (canvasAsset) {
+        if (canvasAsset.url.startsWith('data:')) {
+            const matches = canvasAsset.url.match(/^data:(.+);base64,(.+)$/);
+            if (matches) {
+               originalMime = matches[1];
+               originalImage = matches[2];
+            }
+        } else {
+            try {
+               const resp = await fetch(canvasAsset.url);
+               const blob = await resp.blob();
+               const reader = new FileReader();
+               await new Promise<void>((resolve) => {
+                  reader.onload = () => {
+                     const res = reader.result as string;
+                     const matches = res.match(/^data:(.+);base64,(.+)$/);
+                     if (matches) {
+                        originalMime = matches[1];
+                        originalImage = matches[2];
+                     }
+                     resolve();
+                  };
+                  reader.readAsDataURL(blob);
+               });
+            } catch (e) {
+               console.warn("Failed to fetch original image for dual-reference", e);
+            }
+        }
+     }
+
      handleUseAsReference({ ...canvasAsset!, url: dataUrl }, true); 
-     setParams(prev => ({ ...prev, prompt: `Edit the area marked in red: [Describe change here]`, isAnnotatedReference: true }));
+     setParams(prev => ({ 
+        ...prev, 
+        prompt: `Edit the area marked in red: [Describe change here]`, 
+        isAnnotatedReference: true,
+        originalReferenceImage: originalImage || undefined,
+        originalReferenceImageMimeType: originalMime || undefined
+     }));
      setCanvasAsset(null);
   };
 
@@ -330,40 +421,30 @@ export function App() {
 
   const handleRemix = async (asset: AssetItem) => {
     if (asset.type !== 'IMAGE') return;
-    
     try {
       const response = await fetch(asset.url);
       const blob = await response.blob();
-      
       const reader = new FileReader();
       reader.onloadend = () => {
         const base64data = reader.result as string;
         const matches = base64data.match(/^data:(.+);base64,(.+)$/);
-        
         if (matches) {
            const mimeType = matches[1];
            const data = matches[2];
-           
            if (mode !== AppMode.IMAGE) handleModeSwitch(AppMode.IMAGE);
            setActiveTab('studio');
-           
+           const remixAsset: SmartAsset = {
+               id: crypto.randomUUID(), data: data, mimeType: mimeType, type: 'STRUCTURE', label: 'Remix Source'
+           };
            setParams(prev => ({
-             ...prev,
-             prompt: asset.prompt,
-             seed: asset.metadata?.seed,
+             ...prev, prompt: asset.prompt, seed: asset.metadata?.seed,
              aspectRatio: (asset.metadata?.aspectRatio as AspectRatio) || prev.aspectRatio,
              imageModel: (asset.metadata?.model as ImageModel) || prev.imageModel,
              imageStyle: (asset.metadata?.style as ImageStyle) || ImageStyle.NONE,
              imageResolution: (asset.metadata?.resolution as ImageResolution) || prev.imageResolution,
-             
-             referenceImage: data,
-             referenceImageMimeType: mimeType,
-             isAnnotatedReference: false,
-             
-             subjectReferences: [],
-             styleReferences: []
+             smartAssets: [remixAsset],
+             referenceImage: undefined, referenceImageMimeType: undefined, isAnnotatedReference: false, originalReferenceImage: undefined, subjectReferences: [], styleReferences: []
            }));
-           
            addToast('success', 'Remix Ready', 'Parameters and seed loaded for fine-tuning.');
         }
       };
@@ -374,25 +455,18 @@ export function App() {
     }
   };
 
-  // UPDATED: Now accepts full video data blob
   const handleVideoContinue = async (videoData: string, mimeType: string) => {
       if (mode !== AppMode.VIDEO) handleModeSwitch(AppMode.VIDEO);
       setActiveTab('studio');
       setParams(prev => ({ 
-          ...prev, 
-          // Set extension data
-          inputVideoData: videoData, 
-          inputVideoMimeType: mimeType,
-          // Reset conflict params
+          ...prev, inputVideoData: videoData, inputVideoMimeType: mimeType,
           videoStartImage: undefined, videoEndImage: undefined, videoStyleReferences: [],
-          // Enhance Prompt
           prompt: `${prev.prompt || 'Continue the video'}. Next scene: ` 
       }));
       addToast('info', 'Video Extension Mode', 'Video loaded. Describe what happens next.');
   };
 
   const handleGenerate = async (overrideParams?: Partial<GenerationParams>) => {
-    // 1. Check Global Cooldown
     if (Date.now() < videoCooldownEndTime) {
        addToast('error', 'System Cooled Down', 'Please wait for the timer to finish before generating again.');
        return;
@@ -424,37 +498,49 @@ export function App() {
        }]);
 
        try {
-         const onStart = () => { setTasks(prev => prev.map(t => t.id === taskId ? { ...t, status: 'GENERATING', executionStartTime: Date.now() } : t)); };
+         const onStart = () => { 
+             setTasks(prev => prev.map(t => t.id === taskId ? { ...t, status: 'GENERATING', executionStartTime: Date.now() } : t));
+             if (activeProjectIdRef.current === currentProjectId) {
+                setAssets(prev => prev.map(a => a.id === taskId ? { ...a, status: 'GENERATING' } : a));
+             }
+         };
+         
+         const tempAsset: AssetItem = {
+             id: taskId, projectId: currentProjectId, type: currentMode === AppMode.IMAGE ? 'IMAGE' : 'VIDEO',
+             url: '', prompt: activeParams.prompt, createdAt: Date.now(), status: 'PENDING', isNew: true,
+             metadata: {
+                 aspectRatio: activeParams.aspectRatio,
+                 model: currentMode === AppMode.IMAGE ? activeParams.imageModel : activeParams.videoModel,
+                 style: currentMode === AppMode.IMAGE ? activeParams.imageStyle : activeParams.videoStyle,
+                 resolution: currentMode === AppMode.IMAGE ? activeParams.imageResolution : activeParams.videoResolution,
+                 duration: currentMode === AppMode.VIDEO ? activeParams.videoDuration : undefined,
+                 seed: taskSeed
+             }
+         };
+         
+         if (activeProjectIdRef.current === currentProjectId) {
+             setAssets(prev => [tempAsset, ...prev]);
+         }
+         await saveAsset(tempAsset);
 
          let asset: AssetItem;
          const genParams = { ...activeParams, seed: taskSeed };
 
          if (currentMode === AppMode.IMAGE) {
-            asset = await generateImage(genParams, currentProjectId, onStart, controller.signal);
+            asset = await generateImage(genParams, currentProjectId, onStart, controller.signal, taskId);
+            asset.isNew = true;
             await saveAsset(asset);
+            if (activeProjectIdRef.current === currentProjectId) {
+                setAssets(prev => prev.map(a => a.id === taskId ? asset : a));
+            }
             setTasks(prev => prev.map(t => t.id === taskId ? { ...t, status: 'COMPLETED' } : t));
-            setAssets(prev => [asset, ...prev]);
          } else {
-            // Video Persistence
-            const tempAssetId = taskId;
-            const tempAsset: AssetItem = {
-                id: tempAssetId, projectId: currentProjectId, type: 'VIDEO', url: '', prompt: activeParams.prompt, createdAt: Date.now(), status: 'GENERATING', 
-                metadata: { aspectRatio: activeParams.aspectRatio, model: activeParams.videoModel, style: activeParams.videoStyle, duration: activeParams.videoDuration, resolution: activeParams.videoResolution }
-            };
-            
-            await saveAsset(tempAsset);
-            setAssets(prev => [tempAsset, ...prev]);
-            
-            const videoUrl = await generateVideo(
-                genParams, 
-                async (operationName) => { await updateAsset(tempAssetId, { operationName }); },
-                onStart, 
-                controller.signal
-            );
-
-            const updates = { status: 'COMPLETED' as const, url: videoUrl };
-            await updateAsset(tempAssetId, updates);
-            setAssets(prev => prev.map(a => a.id === tempAssetId ? { ...a, ...updates } : a));
+            const videoUrl = await generateVideo(genParams, async (operationName) => { await updateAsset(taskId, { operationName }); }, onStart, controller.signal);
+            const updates = { status: 'COMPLETED' as const, url: videoUrl, isNew: true };
+            await updateAsset(taskId, updates);
+            if (activeProjectIdRef.current === currentProjectId) {
+                setAssets(prev => prev.map(a => a.id === taskId ? { ...a, ...updates } : a));
+            }
             setTasks(prev => prev.map(t => t.id === taskId ? { ...t, status: 'COMPLETED' } : t));
             asset = { ...tempAsset, ...updates }; 
          }
@@ -468,19 +554,22 @@ export function App() {
        } catch (error: any) {
          if (error.message === 'Cancelled' || error.name === 'AbortError') {
              setTasks(prev => prev.filter(t => t.id !== taskId));
-             if (currentMode === AppMode.VIDEO) {
-                 try { await updateAsset(taskId, { status: 'FAILED' }); setAssets(prev => prev.map(a => a.id === taskId ? { ...a, status: 'FAILED' } : a)); } catch {}
-             }
+             try { 
+                 await updateAsset(taskId, { status: 'FAILED' }); 
+                 if (activeProjectIdRef.current === currentProjectId) {
+                    setAssets(prev => prev.map(a => a.id === taskId ? { ...a, status: 'FAILED' } : a)); 
+                 }
+             } catch {}
          } else {
              setTasks(prev => prev.map(t => t.id === taskId ? { ...t, status: 'FAILED', error: error.message } : t));
-             
-             if (currentMode === AppMode.VIDEO) {
-                 try { await updateAsset(taskId, { status: 'FAILED' }); setAssets(prev => prev.map(a => a.id === taskId ? { ...a, status: 'FAILED' } : a)); } catch {}
-             }
-             
+             try { 
+                 await updateAsset(taskId, { status: 'FAILED' }); 
+                 if (activeProjectIdRef.current === currentProjectId) {
+                    setAssets(prev => prev.map(a => a.id === taskId ? { ...a, status: 'FAILED' } : a)); 
+                 }
+             } catch {}
              playErrorSound();
 
-             // GLOBAL COOLDOWN TRIGGER
              if (error.message.includes('429') || error.message.includes('Quota') || error.message.includes('RESOURCE_EXHAUSTED')) {
                 const cooldownDuration = 60000; // 60s
                 setVideoCooldownEndTime(Date.now() + cooldownDuration);
@@ -513,7 +602,6 @@ export function App() {
   const handleDeleteProject = async (projectId: string) => {
     await deleteProjectFromDB(projectId);
     setProjects(prev => prev.filter(p => p.id !== projectId));
-    setAssets(prev => prev.filter(a => a.projectId !== projectId));
     if (activeProjectId === projectId) {
       const remaining = projects.filter(p => p.id !== projectId);
       if (remaining.length > 0) switchProject(remaining[0].id, remaining[0]);
@@ -687,7 +775,17 @@ export function App() {
                         <AssetCard 
                            key={asset.id} 
                            asset={asset} 
-                           onClick={(a) => setSelectedAsset(a)}
+                           onClick={(a) => {
+                               // Clear isNew flag on click
+                               if (a.isNew) {
+                                   const updated = { ...a, isNew: false };
+                                   updateAsset(a.id, { isNew: false });
+                                   setAssets(prev => prev.map(item => item.id === a.id ? updated : item));
+                                   setSelectedAsset(updated);
+                               } else {
+                                   setSelectedAsset(a);
+                               }
+                           }}
                            onUseAsReference={handleUseAsReference}
                            onDelete={() => viewMode === 'TRASH' ? openConfirmDeleteForever(asset.id) : openConfirmDelete(asset.id)}
                            onAddToChat={(a) => { setActiveTab('chat'); setChatSelectedImages(prev => [...prev, a.url]); }}

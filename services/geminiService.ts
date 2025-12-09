@@ -1,7 +1,26 @@
+
+
 import { GoogleGenAI, GenerateContentResponse, Content, Part } from "@google/genai";
-import { GenerationParams, AspectRatio, ImageResolution, VideoResolution, AssetItem, ImageModel, ImageStyle, VideoStyle, VideoDuration, VideoModel, ChatMessage, ChatModel, AppMode } from "../types";
+import { GenerationParams, AspectRatio, ImageResolution, VideoResolution, AssetItem, ImageModel, ImageStyle, VideoStyle, VideoDuration, VideoModel, ChatMessage, ChatModel, AppMode, SmartAsset } from "../types";
 
 const USER_API_KEY_STORAGE_KEY = 'user_gemini_api_key';
+
+// Mapping of translation keys to English descriptors for AI prompting consistency
+const TAG_TO_ENGLISH: Record<string, string> = {
+    'tag.person': 'Person',
+    'tag.face': 'Face',
+    'tag.product': 'Product',
+    'tag.clothing': 'Clothing',
+    'tag.background': 'Background',
+    'tag.layout': 'Layout',
+    'tag.pose': 'Pose',
+    'tag.depth': 'Depth',
+    'tag.sketch': 'Sketch',
+    'tag.color': 'Color',
+    'tag.lighting': 'Lighting',
+    'tag.texture': 'Texture',
+    'tag.artstyle': 'Art Style'
+};
 
 export const saveUserApiKey = (key: string) => {
   localStorage.setItem(USER_API_KEY_STORAGE_KEY, key);
@@ -274,8 +293,12 @@ export const generateProjectName = async (prompt: string): Promise<string> => {
 export const extractPromptFromHistory = async (history: ChatMessage[], mode: AppMode = AppMode.IMAGE): Promise<string> => {
   try {
     const ai = getClient();
+    
+    // SAFETY FIX: Limit context to last 20 messages to prevent "413 Payload Too Large" or Token limits on extraction
+    const recentHistory = history.slice(-20);
+
     // Convert history to text format
-    const conversationText = history.map(msg => {
+    const conversationText = recentHistory.map(msg => {
       const imgCount = (msg.images?.length || (msg.image ? 1 : 0));
       // CLEAN THOUGHTS from extraction context too, just in case
       const cleanContent = msg.content.replace(/<thought>[\s\S]*?<\/thought>/g, '').trim();
@@ -304,6 +327,64 @@ export const extractPromptFromHistory = async (history: ChatMessage[], mode: App
   } catch (e) {
     console.error("Failed to extract prompt", e);
     throw new Error("Failed to summarize conversation.");
+  }
+};
+
+// --- RECURSIVE ROLLING SUMMARY ---
+// Updates the "contextSummary" by adding the new "delta" lines.
+// This ensures that the context size remains constant (Summary + Active Window) regardless of history length.
+const updateRecursiveSummary = async (
+    currentSummary: string, 
+    newMessages: ChatMessage[]
+): Promise<string> => {
+  if (newMessages.length === 0) return currentSummary;
+  
+  const ai = getClient();
+  
+  // Extract text only, representing images as tokens to save space
+  const deltaText = newMessages.map(m => {
+     // Remove thought tags
+     const cleanContent = m.content.replace(/<thought>[\s\S]*?<\/thought>/g, '').trim();
+     
+     // Handle image markers
+     let imgMarker = "";
+     if (m.images && m.images.length > 0) {
+         imgMarker = `[User uploaded ${m.images.length} images]`;
+     } else if (m.image) {
+         imgMarker = `[User uploaded 1 image]`;
+     }
+     
+     return `${m.role.toUpperCase()}: ${cleanContent} ${imgMarker}`;
+  }).join('\n');
+  
+  const prompt = `
+  You are the memory manager for a creative AI assistant.
+  
+  CURRENT MEMORY STATE:
+  "${currentSummary || "No previous context."}"
+  
+  NEW INTERACTIONS (Delta):
+  ${deltaText}
+  
+  TASK:
+  Update the "Current Memory State" to include key information from the "New Interactions".
+  - Keep it concise.
+  - Retain important user preferences, art styles, and project goals.
+  - Discard conversational filler (hello, thanks).
+  - If the user uploaded images, note their context (e.g., "User uploaded a reference for a cyberpunk city").
+  - Do NOT output JSON. Output the raw summary text.
+  `;
+
+  try {
+     const resp = await ai.models.generateContent({
+        model: 'gemini-2.5-flash',
+        contents: prompt
+     });
+     
+     return resp.text?.trim() || currentSummary;
+  } catch (e) {
+     console.warn("Recursive summary update failed", e);
+     return currentSummary;
   }
 };
 
@@ -338,11 +419,124 @@ const messageToParts = (msg: ChatMessage): Part[] => {
     }
   }
 
-  if (msg.content) {
+  // CRITICAL FIX: Robust handling for text content.
+  if (msg.content && msg.content.trim() !== "") {
     parts.push({ text: msg.content });
+  } else {
+    // Empty or undefined content.
+    // Always push a space if we haven't pushed text yet, to satisfy API requirements.
+    parts.push({ text: " " });
   }
 
   return parts;
+};
+
+// Helper function to build history with strict alternation
+// UPDATED: Now supports Smart Image Retention (keeping only last N images)
+const buildHistoryContent = (pastMessages: ChatMessage[], maxImagesToKeep: number = 3): Content[] => {
+  const historyContent: Content[] = [];
+  let lastRole: string | null = null;
+  
+  // Logic to identify which messages should keep their images.
+  // We iterate backwards to find the indices of the last N user messages that have images.
+  const allowedImageIndices = new Set<number>();
+  let imagesFound = 0;
+  
+  for (let i = pastMessages.length - 1; i >= 0; i--) {
+     const msg = pastMessages[i];
+     const hasImage = (msg.images && msg.images.length > 0) || !!msg.image;
+     if (hasImage && msg.role === 'user') {
+        if (imagesFound < maxImagesToKeep) {
+            allowedImageIndices.add(i);
+            imagesFound++;
+        }
+     }
+  }
+
+  // Build content
+  for (let i = 0; i < pastMessages.length; i++) {
+    const msg = pastMessages[i];
+    let parts: Part[] = [];
+
+    // If this message has images but is NOT in the allowed list, we strip the images
+    // and replace them with a text placeholder to save bandwidth/tokens.
+    const hasImage = (msg.images && msg.images.length > 0) || !!msg.image;
+    
+    if (hasImage && !allowedImageIndices.has(i)) {
+       // Strip logic
+       if (msg.content && msg.content.trim() !== "") {
+           parts.push({ text: msg.content + "\n\n[System: Older image attachments removed to conserve context window. Focus on recent images.]" });
+       } else {
+           parts.push({ text: "[System: Older image attachments removed to conserve context window.]" });
+       }
+    } else {
+       // Keep original logic
+       parts = messageToParts(msg);
+    }
+    
+    // If model message, strip thoughts from history
+    if (msg.role === 'model') {
+       parts = parts.map(p => {
+           if (p.text) {
+               // Remove <thought> tags and content
+               const cleanedText = p.text.replace(/<thought>[\s\S]*?<\/thought>/g, '').trim();
+               return cleanedText.length > 0 ? { ...p, text: cleanedText } : { ...p, text: " " };
+           }
+           return p;
+       });
+    }
+    
+    // Filter out parts that might be effectively empty but keep the structure valid
+    const validParts = parts.filter(p => p.inlineData || (p.text && p.text.trim().length >= 0));
+
+    if (validParts.length > 0) {
+        // STATE MACHINE CHECK:
+        // If current message role matches last role, we have a violation.
+        // Insert a dummy turn to bridge the gap.
+        if (lastRole === msg.role) {
+            if (msg.role === 'user') {
+                // User -> User detected. Insert Model.
+                historyContent.push({ role: 'model', parts: [{ text: " " }] });
+            } else {
+                // Model -> Model detected. Insert User.
+                historyContent.push({ role: 'user', parts: [{ text: " " }] });
+            }
+        }
+
+        historyContent.push({
+          role: msg.role,
+          parts: validParts
+        });
+        
+        lastRole = msg.role;
+    }
+  }
+
+  // REPAIR TAIL:
+  // History passed to API must end with 'model' if the next message we send is 'user'.
+  if (historyContent.length > 0 && historyContent[historyContent.length - 1].role === 'user') {
+      historyContent.push({ role: 'model', parts: [{ text: " " }] });
+  }
+
+  return historyContent;
+};
+
+// Helper: Sanitize history by removing ALL image data (text only)
+// Used for Last-Resort Recovery to fix "Poisoned Image" errors
+const sanitizeHistoryForTextOnly = (originalHistory: Content[]): Content[] => {
+    return originalHistory.map(item => {
+        // Filter parts to keep ONLY text
+        const textParts = item.parts.filter(p => p.text);
+        
+        // If message becomes empty (it was image-only), insert explicit placeholder
+        if (textParts.length === 0) {
+            return { 
+                role: item.role, 
+                parts: [{ text: "[Image content removed for compatibility]" }] 
+            };
+        }
+        return { role: item.role, parts: textParts };
+    });
 };
 
 export const streamChatResponse = async (
@@ -351,63 +545,78 @@ export const streamChatResponse = async (
   onChunk: (text: string) => void,
   model: ChatModel = ChatModel.GEMINI_3_PRO_FAST,
   mode: AppMode = AppMode.IMAGE,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  // --- NEW RECURSIVE SUMMARY PROPS ---
+  projectContextSummary?: string,
+  projectSummaryCursor?: number,
+  onUpdateContext?: (newSummary: string, newCursor: number) => void
 ): Promise<string> => {
   const ai = getClient();
   
-  // Separate history into "past turns" and "current turn"
-  const pastMessages = history.slice(0, history.length - 1);
+  // Defines the "Active Window" size (most recent messages sent fully to LLM)
+  const MAX_ACTIVE_WINDOW = 12;
+
+  // 1. RECURSIVE SUMMARY UPDATE
+  // Before chatting, check if we need to archive some messages into the summary
+  // Logic: If there are messages between [cursor] and [end - MAX_ACTIVE], they need summarizing
+  let currentContextSummary = projectContextSummary || "";
+  let currentCursor = projectSummaryCursor || 0;
+  
+  // history already includes the new user message at the end
+  // We want to verify if 'history' has grown enough to trigger a summary
+  // We exclude the very last user message from the "archive candidate" calculation
+  const historyLen = history.length;
+  // Calculate the index where the "Active Window" begins
+  // Everything before this index is eligible for archiving
+  const archiveBoundary = Math.max(0, historyLen - 1 - MAX_ACTIVE_WINDOW);
+
+  if (archiveBoundary > currentCursor) {
+      // We have a "Delta" of unsummarized messages
+      const deltaMessages = history.slice(currentCursor, archiveBoundary);
+      
+      try {
+          // Perform Incremental Summary (Fire & Forget or Await? Await ensures context is fresh)
+          console.log(`[Summary] Rolling up ${deltaMessages.length} messages into context...`);
+          currentContextSummary = await updateRecursiveSummary(currentContextSummary, deltaMessages);
+          
+          // Update the cursor
+          currentCursor = archiveBoundary;
+
+          // Notify App to save the new summary state to DB
+          if (onUpdateContext) {
+              onUpdateContext(currentContextSummary, currentCursor);
+          }
+      } catch (e) {
+          console.warn("Failed to update recursive summary, continuing with old context", e);
+      }
+  }
+
+  // 2. BUILD ACTIVE HISTORY
+  // We only send the "Active Window" + New Message to the LLM
+  // We slice from the cursor (which is usually archiveBoundary, but might be 0 if short history)
+  // Actually, for safety, let's just take the last MAX_ACTIVE_WINDOW messages
+  // Because even if we summarized them, sending a bit of overlap is safer than a gap
+  const activeMessages = history.slice(-MAX_ACTIVE_WINDOW - 1, -1); // Exclude current new message
   const currentMessage = history[history.length - 1];
 
-  // Convert past history to Content[]
-  // CRITICAL FIX: Clean up thoughts from model history to avoid context pollution and model confusion
-  const historyContent: Content[] = [];
-  
-  for (const msg of pastMessages) {
-    let parts = messageToParts(msg);
-    
-    // If model message, strip thoughts from history
-    if (msg.role === 'model') {
-       parts = parts.map(p => {
-           if (p.text) {
-               // Remove <thought> tags and content
-               const cleanedText = p.text.replace(/<thought>[\s\S]*?<\/thought>/g, '').trim();
-               return { ...p, text: cleanedText };
-           }
-           return p;
-       }).filter(p => {
-           // Keep if it has inlineData (images) or non-empty text
-           return p.inlineData || (p.text && p.text.length > 0);
-       });
-
-       // FIX: If the model message became empty (e.g. it was ONLY thoughts), 
-       // we MUST provide a placeholder to ensure the API receives alternating User/Model turns.
-       // Sending User -> [Skipped Model] -> User causes a 400 error.
-       if (parts.length === 0) {
-           parts.push({ text: " " });
-       }
-    }
-    
-    // Only add to history if there is actual content left
-    if (parts.length > 0) {
-        historyContent.push({
-          role: msg.role,
-          parts: parts
-        });
-    }
+  // Ensure Active History starts with 'user' (API Constraint)
+  let validActiveMessages = [...activeMessages];
+  if (validActiveMessages.length > 0 && validActiveMessages[0].role === 'model') {
+       validActiveMessages.shift(); // Drop orphaned model message
   }
+
+  // Pass maxImagesToKeep = 3 (Safe retention strategy)
+  const historyContent = buildHistoryContent(validActiveMessages, 3);
 
   // Define logic for Models
   let apiModelName = 'gemini-2.5-flash'; 
-  // Native Thinking Config
   let modelConfig: any = {};
   
   if (model === ChatModel.GEMINI_3_PRO_REASONING) {
     apiModelName = 'gemini-3-pro-preview';
-    // Use native thinking configuration with explicit includeThoughts
     modelConfig = {
       thinkingConfig: {
-        thinkingBudget: 16384, // Set a reasonable budget
+        thinkingBudget: 16384, 
         includeThoughts: true
       }
     };
@@ -445,7 +654,31 @@ export const streamChatResponse = async (
     `;
   }
 
+  // --- INJECT RECURSIVE CONTEXT INTO SYSTEM INSTRUCTION ---
   let systemInstruction = "";
+  let flashSystemInstruction = ""; 
+
+  // Format the persistent summary clearly
+  const contextInjection = currentContextSummary ? `
+  
+  [LONG-TERM MEMORY & CONTEXT]
+  The following is a summary of the previous conversation. Use this to maintain context about user preferences and project goals.
+  -----------------------
+  ${currentContextSummary}
+  -----------------------
+  ` : "";
+
+  flashSystemInstruction = `
+    ${roleInstruction}
+    If the user uploads images, analyze them to help them. You can refer to multiple images.
+    
+    ${commonInstruction}
+    ${contextInjection}
+
+    INSTRUCTION:
+    Provide direct, concise, and creative answers. 
+    Focus on speed and immediate utility.
+    `;
 
   if (model === ChatModel.GEMINI_3_PRO_REASONING) {
     // REASONING MODEL (Native Thinking)
@@ -455,92 +688,117 @@ export const streamChatResponse = async (
     You are in "Reasoning Mode". Use your thinking capabilities to analyze the user's request in depth before providing the final answer.
     
     ${commonInstruction}
+    ${contextInjection}
     `;
   } else {
     // FAST MODEL (Flash)
-    systemInstruction = `
-    ${roleInstruction}
-    If the user uploads images, analyze them to help them. You can refer to multiple images.
-    
-    ${commonInstruction}
-
-    INSTRUCTION:
-    Provide direct, concise, and creative answers. 
-    Focus on speed and immediate utility.
-    `;
+    systemInstruction = flashSystemInstruction;
   }
 
-  const chat = ai.chats.create({
-    model: apiModelName,
-    history: historyContent,
-    config: {
-      systemInstruction: systemInstruction,
-      ...modelConfig // Inject thinkingConfig if enabled
-    }
-  });
-
-  // Construct current message parts
   const messageParts = messageToParts(currentMessage);
-  
-  const result = await chat.sendMessageStream({ 
-    message: messageParts.length === 1 && messageParts[0].text ? messageParts[0].text : messageParts
-  });
-  
-  let fullText = '';
-  let hasOpenedThought = false;
+  // Ensure we pass the correct structure (String or Part[])
+  const msgPayload = messageParts.length === 1 && messageParts[0].text ? messageParts[0].text : messageParts;
 
-  for await (const chunk of result) {
-    if (signal?.aborted) {
-      break;
-    }
+  // -- INTERNAL STREAM FUNCTION --
+  const executeStream = async (targetModel: string, config: any, customHistory?: Content[]) => {
+      const chat = ai.chats.create({
+        model: targetModel,
+        history: customHistory || historyContent,
+        config: config
+      });
 
-    // NATIVE THINKING HANDLING
-    const candidate = chunk.candidates?.[0];
-    if (candidate?.content?.parts) {
-      for (const part of candidate.content.parts) {
-        let thoughtPartText: string | undefined = undefined;
-        
-        const rawThought = (part as any).thought;
-        if (typeof rawThought === 'string') {
-          thoughtPartText = rawThought;
-        } else if (rawThought === true && part.text) {
-          thoughtPartText = part.text;
+      const result = await chat.sendMessageStream({ 
+        message: msgPayload
+      });
+      
+      let fullText = '';
+      let hasOpenedThought = false;
+      let chunkCount = 0;
+
+      for await (const chunk of result) {
+        if (signal?.aborted) break;
+        chunkCount++;
+
+        // NATIVE THINKING HANDLING
+        const candidate = chunk.candidates?.[0];
+        if (candidate?.content?.parts) {
+          for (const part of candidate.content.parts) {
+            let thoughtPartText: string | undefined = undefined;
+            
+            const rawThought = (part as any).thought;
+            if (typeof rawThought === 'string') {
+              thoughtPartText = rawThought;
+            } else if (rawThought === true && part.text) {
+              thoughtPartText = part.text;
+            }
+
+            const textContent = part.text;
+
+            if (thoughtPartText !== undefined) {
+               if (!hasOpenedThought) {
+                  fullText += '<thought>';
+                  hasOpenedThought = true;
+               }
+               fullText += thoughtPartText;
+            } else if (textContent) {
+               if (hasOpenedThought) {
+                  fullText += '</thought>';
+                  hasOpenedThought = false;
+               }
+               fullText += textContent;
+            }
+          }
+        } else {
+            const text = chunk.text;
+            if (text) fullText += text;
         }
 
-        const textContent = part.text;
-
-        if (thoughtPartText !== undefined) {
-           if (!hasOpenedThought) {
-              fullText += '<thought>';
-              hasOpenedThought = true;
-           }
-           fullText += thoughtPartText;
-        } else if (textContent) {
-           // If we switch back to normal text and thought was open, close it
-           if (hasOpenedThought) {
-              fullText += '</thought>';
-              hasOpenedThought = false;
-           }
-           fullText += textContent;
-        }
+        onChunk(fullText);
       }
-    } else {
-        const text = chunk.text;
-        if (text) {
-          fullText += text;
-        }
-    }
+      
+      if (hasOpenedThought) {
+          fullText += '</thought>';
+          onChunk(fullText);
+      }
+      
+      // CRITICAL CHECK: Enforce response validity.
+      if (!fullText.trim()) {
+          throw new Error("Model returned empty response (Possible Safety Filter or Silent Failure).");
+      }
 
-    onChunk(fullText);
+      return fullText;
+  };
+
+  try {
+      // 1. Attempt Primary Request (User Choice + Full History)
+      return await executeStream(apiModelName, {
+        systemInstruction: systemInstruction,
+        ...modelConfig 
+      });
+
+  } catch (err: any) {
+      // 2. First Fallback: Switch to Flash + Full History
+      console.warn("Primary model failed, attempting fallback to Flash...", err);
+      
+      try {
+         return await executeStream('gemini-2.5-flash', {
+            systemInstruction: flashSystemInstruction
+         });
+      } catch (fallbackErr) {
+         // 3. Second Fallback: Switch to Flash + Text-Only History
+         console.warn("Flash fallback with images failed. Attempting Text-Only Recovery...", fallbackErr);
+         
+         try {
+             const cleanHistory = sanitizeHistoryForTextOnly(historyContent);
+             return await executeStream('gemini-2.5-flash', {
+                systemInstruction: flashSystemInstruction
+             }, cleanHistory); 
+         } catch (finalErr) {
+             console.error("All recovery attempts failed:", finalErr);
+             throw err; // Throw ORIGINAL error to show the root cause
+         }
+      }
   }
-  
-  // Ensure thought tag is closed if stream ends while thinking
-  if (hasOpenedThought) {
-      fullText += '</thought>';
-      onChunk(fullText);
-  }
-  
-  return fullText;
 };
 
 export const testConnection = async (apiKey: string): Promise<void> => {
@@ -615,7 +873,22 @@ const getVideoStyleSuffix = (style: VideoStyle | undefined): string => {
   }
 };
 
-export const generateImage = async (params: GenerationParams, projectId: string, onStart?: () => void, signal?: AbortSignal): Promise<AssetItem> => {
+// Helper: Construct full description for a Smart Asset
+const getSmartAssetDescription = (asset: SmartAsset): string => {
+    // Resolve tags to English
+    const tags = asset.selectedTags?.map(t => TAG_TO_ENGLISH[t] || t) || [];
+    
+    // Combine tags with custom label
+    const parts = [...tags];
+    if (asset.label) {
+        parts.push(asset.label);
+    }
+    
+    const desc = parts.join(', ');
+    return desc ? `[${desc}] ` : '';
+};
+
+export const generateImage = async (params: GenerationParams, projectId: string, onStart?: () => void, signal?: AbortSignal, customId?: string): Promise<AssetItem> => {
   // Wrap in Queue
   return imageQueue.add(async () => {
     // Check abort before start
@@ -625,10 +898,12 @@ export const generateImage = async (params: GenerationParams, projectId: string,
     const modelName = params.imageModel;
     const isPro = modelName === ImageModel.PRO;
     
-    // Check if simple editing mode
+    // Check if simple editing mode (only relevant for legacy or single annotated reference usage)
+    // Note: The new Smart Assets logic is preferred, but this check remains for robustness.
     const isEditing = !!(params.referenceImage && params.referenceImageMimeType) && 
                       (!params.styleReferences || params.styleReferences.length === 0) &&
-                      (!params.subjectReferences || params.subjectReferences.length === 0);
+                      (!params.subjectReferences || params.subjectReferences.length === 0) &&
+                      (!params.smartAssets || params.smartAssets.length === 0);
 
     // ENHANCED SYSTEM INSTRUCTION: Strict Priority Rules
     let systemInstruction = `
@@ -657,6 +932,11 @@ export const generateImage = async (params: GenerationParams, projectId: string,
     if (params.seed !== undefined) {
       config.seed = params.seed;
     }
+    
+    // Use Grounding (Google Search) - Only for Pro model
+    if (isPro && params.useGrounding) {
+        config.tools = [{ googleSearch: {} }];
+    }
 
     if (!isEditing) {
       config.imageConfig.aspectRatio = params.aspectRatio;
@@ -669,57 +949,84 @@ export const generateImage = async (params: GenerationParams, projectId: string,
     const parts: any[] = [];
     let finalPrompt = params.prompt;
     
-    // --- INTERLEAVED PROMPTING: Instruction -> Image -> Instruction -> Image ---
+    // --- SMART ASSETS LOGIC (Unified References) ---
+    // If smartAssets exist, use them. Otherwise fall back to legacy fields.
     
-    // 1. STYLE REFERENCES (Colors/Vibe) - Explicit separation
-    if (params.styleReferences && params.styleReferences.length > 0) {
-       // Strong Negative Instruction bound to these specific images
-       const styleInstruction = `[STYLE REFERENCE IMAGES]: The following ${params.styleReferences.length} image(s) are for STYLE ONLY (Color Palette, Texture, Lighting, Brushwork).\n` +
-       `CRITICAL NEGATIVE CONSTRAINT: You are ABSOLUTELY FORBIDDEN from copying the content, scene, landscape, objects, or composition from these style images. They are NOT the subject. Extract ONLY the artistic style.`;
-       
-       parts.push({ text: styleInstruction });
-
-       params.styleReferences.forEach(ref => {
-         parts.push({
-           inlineData: { mimeType: ref.mimeType, data: ref.data }
-         });
-       });
-    }
-
-    // 2. SUBJECT REFERENCES (Identity)
-    if (params.subjectReferences && params.subjectReferences.length > 0) {
-        const subjectInstruction = `[SUBJECT IDENTITY IMAGES]: The following ${params.subjectReferences.length} image(s) define the MAIN SUBJECT.\n` +
-        `INSTRUCTION: Maintain the exact identity, facial features, and appearance of the ${params.subjectType || 'Subject'}. Do not change physical characteristics.`;
+    if (params.smartAssets && params.smartAssets.length > 0) {
         
-        parts.push({ text: subjectInstruction });
-        
-        params.subjectReferences.forEach(ref => {
-           parts.push({
-             inlineData: { mimeType: ref.mimeType, data: ref.data }
-           });
+        // 1. Structure (Layout)
+        const structures = params.smartAssets.filter(a => a.type === 'STRUCTURE');
+        structures.forEach(asset => {
+            const labelStr = getSmartAssetDescription(asset);
+            if (asset.isAnnotated) {
+                // Inpainting / Annotated logic
+                parts.push({ 
+                    text: `[TASK: PRECISION EDITING] The following image ${labelStr}contains RED MARKERS or BRUSH STROKES. Locate these markers and regenerate ONLY the marked areas based on the user prompt. BLEND seamlessy. Negative constraint: No red markers in output.` 
+                });
+            } else {
+                parts.push({ 
+                    text: `[STRUCTURAL COMPOSITION BASE] ${labelStr}: The following image is the STRUCTURAL GROUND TRUTH. Replicate its geometry, layout, and perspective exactly.` 
+                });
+            }
+            parts.push({ inlineData: { mimeType: asset.mimeType, data: asset.data } });
         });
-    }
 
-    // 3. COMPOSITION / BASE IMAGE (Structure) - Push LAST to be closer to prompt
-    if (params.referenceImage && params.referenceImageMimeType) {
-       let compInstruction = "";
-       // Check for annotations first
-       if (params.isAnnotatedReference) {
-          compInstruction = `[EDITING BASE IMAGE]: The following image contains artificial RED BOUNDING BOXES.\n` +
-          `INSTRUCTION: Edit ONLY the content INSIDE the red boxes based on the prompt. COMPLETELY REMOVE all red boxes and numbers. Seamlessly inpaint the area.`;
-       } else {
-          compInstruction = `[STRUCTURAL COMPOSITION BASE]: The following image is the STRUCTURAL GROUND TRUTH.\n` +
-          `CRITICAL CONSTRAINT: The output geometry, depth map, pose, and layout MUST match this image exactly. Do NOT change the perspective or composition. Apply the style defined previously to this structure.`;
-       }
+        // 2. Identity (Subject)
+        const identities = params.smartAssets.filter(a => a.type === 'IDENTITY');
+        identities.forEach(asset => {
+            const labelStr = getSmartAssetDescription(asset);
+            parts.push({ 
+                text: `[SUBJECT IDENTITY REFERENCE] ${labelStr}: This image defines a specific subject/object. Maintain its physical features, face, and appearance strictly.` 
+            });
+            parts.push({ inlineData: { mimeType: asset.mimeType, data: asset.data } });
+        });
 
-       parts.push({ text: compInstruction });
+        // 3. Style
+        const styles = params.smartAssets.filter(a => a.type === 'STYLE');
+        styles.forEach(asset => {
+            const labelStr = getSmartAssetDescription(asset);
+            parts.push({ 
+                text: `[STYLE REFERENCE ONLY] ${labelStr}: Use this image for COLORS, LIGHTING, and TEXTURE only. Do NOT copy the content.` 
+            });
+            parts.push({ inlineData: { mimeType: asset.mimeType, data: asset.data } });
+        });
 
-       parts.push({
-         inlineData: {
-           mimeType: params.referenceImageMimeType,
-           data: params.referenceImage
-         }
-       });
+    } else {
+        // --- LEGACY LOGIC FALLBACK ---
+        
+        // 1. STYLE REFERENCES
+        if (params.styleReferences && params.styleReferences.length > 0) {
+           parts.push({ text: `[STYLE REFERENCE IMAGES]: The following images are for STYLE ONLY.` });
+           params.styleReferences.forEach(ref => {
+             parts.push({ inlineData: { mimeType: ref.mimeType, data: ref.data } });
+           });
+        }
+
+        // 2. SUBJECT REFERENCES
+        if (params.subjectReferences && params.subjectReferences.length > 0) {
+            parts.push({ text: `[SUBJECT IDENTITY IMAGES]: The following images define the MAIN SUBJECT (${params.subjectType || 'Subject'}). Maintain identity.` });
+            params.subjectReferences.forEach(ref => {
+               parts.push({ inlineData: { mimeType: ref.mimeType, data: ref.data } });
+            });
+        }
+
+        // 3. COMPOSITION / BASE IMAGE
+        if (params.referenceImage && params.referenceImageMimeType) {
+           if (params.isAnnotatedReference) {
+              parts.push({ text: `[TASK: INPAINTING] The following image has RED MARKERS. Regenerate marked areas based on prompt.` });
+           } else {
+              parts.push({ text: `[STRUCTURAL BASE] Use this image for layout and geometry.` });
+           }
+           
+           // Handle Dual Reference Legacy
+           if (params.originalReferenceImage) {
+               parts.push({ text: `[ORIGINAL CLEAN IMAGE]`});
+               parts.push({ inlineData: { mimeType: params.originalReferenceImageMimeType!, data: params.originalReferenceImage }});
+               parts.push({ text: `[MASKED IMAGE]`});
+           }
+           
+           parts.push({ inlineData: { mimeType: params.referenceImageMimeType, data: params.referenceImage } });
+        }
     }
 
     // --- FINAL USER PROMPT CONSTRUCTION ---
@@ -819,7 +1126,7 @@ export const generateImage = async (params: GenerationParams, projectId: string,
       }
 
       return {
-        id: crypto.randomUUID(),
+        id: customId || crypto.randomUUID(), // Use customId if provided to prevent pop-in
         projectId: projectId,
         type: 'IMAGE',
         url: imageUrl,
@@ -831,7 +1138,8 @@ export const generateImage = async (params: GenerationParams, projectId: string,
           model: modelName,
           style: params.imageStyle !== ImageStyle.NONE ? params.imageStyle : undefined,
           resolution: params.imageResolution,
-          seed: params.seed
+          seed: params.seed,
+          usedGrounding: params.useGrounding // Store metadata
         }
       };
 
@@ -885,34 +1193,15 @@ const pollAndDownloadVideo = async (
 
     if (!activeKey) throw new Error("API Key missing during download.");
 
-    // Strategy 1: URL Parameter (Standard)
     try {
         const url = new URL(videoUri);
-        url.searchParams.set('key', activeKey);
-        // Explicitly set alt=media just in case
+        // SECURITY FIX: Remove 'key' from URL params to prevent leakage in history/logs
+        url.searchParams.delete('key'); 
         if (!url.searchParams.has('alt')) {
             url.searchParams.set('alt', 'media');
         }
         
-        const res = await fetch(url.toString(), { referrerPolicy: 'no-referrer' });
-        if (res.ok) {
-             const blob = await res.blob();
-             return URL.createObjectURL(blob);
-        }
-        // If 403, throw to catch block to try next strategy
-        if (res.status === 403) throw new Error("403 Forbidden via URL");
-    } catch (e) {
-        console.warn("Download Strategy 1 failed, trying Strategy 2...", e);
-    }
-
-    // Strategy 2: Header Authentication (Fallback)
-    try {
-        const url = new URL(videoUri);
-        url.searchParams.delete('key'); // Clean URL
-        if (!url.searchParams.has('alt')) {
-            url.searchParams.set('alt', 'media');
-        }
-        
+        // Use Header-based authentication (Safer)
         const res = await fetch(url.toString(), { 
             headers: { 
                 'x-goog-api-key': activeKey 
@@ -924,9 +1213,25 @@ const pollAndDownloadVideo = async (
              const blob = await res.blob();
              return URL.createObjectURL(blob);
         }
+        
+        // Fallback for some proxies that strip headers (Last Resort)
+        // Only if 403 Forbidden with headers
+        if (res.status === 403) {
+            console.warn("Header auth failed (403), trying URL param fallback...");
+            const fallbackUrl = new URL(videoUri);
+            fallbackUrl.searchParams.set('key', activeKey);
+            if (!fallbackUrl.searchParams.has('alt')) fallbackUrl.searchParams.set('alt', 'media');
+            
+            const fallbackRes = await fetch(fallbackUrl.toString(), { referrerPolicy: 'no-referrer' });
+            if (fallbackRes.ok) {
+                 const blob = await fallbackRes.blob();
+                 return URL.createObjectURL(blob);
+            }
+        }
+        
         throw new Error(`Download failed with status: ${res.status}`);
     } catch (e: any) {
-        console.error("All download strategies failed", e);
+        console.error("Video download failed", e);
         throw new Error(`Failed to download video: ${e.message || "Unknown Error"}`);
     }
 };

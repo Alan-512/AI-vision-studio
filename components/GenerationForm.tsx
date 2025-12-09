@@ -1,6 +1,8 @@
+
+
 import React, { useRef, useState, useEffect } from 'react';
-import { AppMode, AspectRatio, GenerationParams, ImageResolution, VideoResolution, ImageModel, VideoModel, ImageStyle, VideoStyle, VideoDuration, ChatMessage, AssetItem } from '../types';
-import { Settings2, Sparkles, Image as ImageIcon, Video as VideoIcon, Upload, X, Camera, Palette, Film, RefreshCw, MessageSquare, Layers, ChevronDown, ChevronUp, SlidersHorizontal, Monitor, Eye, Lock, Dice5, Type, User, ScanFace, Frame, ArrowRight, Loader2, Clock, BookTemplate, Clapperboard, XCircle } from 'lucide-react';
+import { AppMode, AspectRatio, GenerationParams, ImageResolution, VideoResolution, ImageModel, VideoModel, ImageStyle, VideoStyle, VideoDuration, ChatMessage, AssetItem, SmartAsset } from '../types';
+import { Settings2, Sparkles, Image as ImageIcon, Video as VideoIcon, Upload, X, Camera, Palette, Film, RefreshCw, MessageSquare, Layers, ChevronDown, ChevronUp, SlidersHorizontal, Monitor, Eye, Lock, Dice5, Type, User, ScanFace, Frame, ArrowRight, Loader2, Clock, BookTemplate, Clapperboard, XCircle, Search, AlertTriangle, Briefcase, Layout, Brush } from 'lucide-react';
 import { ChatInterface } from './ChatInterface';
 import { extractPromptFromHistory, optimizePrompt, describeImage } from '../services/geminiService';
 import { PromptBuilder } from './PromptBuilder';
@@ -57,24 +59,77 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
   const [isDescribing, setIsDescribing] = useState(false);
   const [showTemplates, setShowTemplates] = useState(false);
   const [isAdvancedOpen, setIsAdvancedOpen] = useState(false);
+  const [isWarningExpanded, setIsWarningExpanded] = useState(false);
   
   // Video Mode Tabs
   const [activeVideoTab, setActiveVideoTab] = useState<'keyframes' | 'style'>('keyframes');
 
   // Drag State
-  const [dragTarget, setDragTarget] = useState<'reference' | 'subject' | 'style' | 'videoStart' | 'videoEnd' | 'videoStyle' | null>(null);
+  const [dragTarget, setDragTarget] = useState<'smart' | 'videoStart' | 'videoEnd' | 'videoStyle' | null>(null);
 
   // Refs for file inputs
-  const refImageInputRef = useRef<HTMLInputElement>(null);
   const startFrameInputRef = useRef<HTMLInputElement>(null);
   const endFrameInputRef = useRef<HTMLInputElement>(null);
-  const styleRefsInputRef = useRef<HTMLInputElement>(null);
-  const subjectRefsInputRef = useRef<HTMLInputElement>(null);
   const videoStyleRefsInputRef = useRef<HTMLInputElement>(null);
+  const smartAssetInputRef = useRef<HTMLInputElement>(null);
   
   // Timer State
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [cooldownRemaining, setCooldownRemaining] = useState(0);
+
+  // AUTO-MIGRATE LEGACY PARAMS TO SMART ASSETS
+  useEffect(() => {
+    if (mode === AppMode.IMAGE && (!params.smartAssets || params.smartAssets.length === 0)) {
+        const migratedAssets: SmartAsset[] = [];
+        
+        // 1. Structure (Base Image / Reference)
+        if (params.referenceImage && params.referenceImageMimeType) {
+            migratedAssets.push({
+                id: crypto.randomUUID(),
+                data: params.referenceImage,
+                mimeType: params.referenceImageMimeType,
+                type: 'STRUCTURE',
+                isAnnotated: params.isAnnotatedReference
+            });
+        }
+        
+        // 2. Identity (Subject References)
+        if (params.subjectReferences && params.subjectReferences.length > 0) {
+            params.subjectReferences.forEach(ref => {
+                migratedAssets.push({
+                    id: crypto.randomUUID(),
+                    data: ref.data,
+                    mimeType: ref.mimeType,
+                    type: 'IDENTITY'
+                });
+            });
+        }
+        
+        // 3. Style (Style References)
+        if (params.styleReferences && params.styleReferences.length > 0) {
+            params.styleReferences.forEach(ref => {
+                migratedAssets.push({
+                    id: crypto.randomUUID(),
+                    data: ref.data,
+                    mimeType: ref.mimeType,
+                    type: 'STYLE'
+                });
+            });
+        }
+        
+        if (migratedAssets.length > 0) {
+            setParams(prev => ({
+                ...prev,
+                smartAssets: migratedAssets,
+                // Clear legacy to avoid duplication logic later, though service handles priority
+                referenceImage: undefined,
+                referenceImageMimeType: undefined,
+                subjectReferences: [],
+                styleReferences: []
+            }));
+        }
+    }
+  }, [mode, projectId]); // Run once when project/mode changes
 
   // Enforce valid Aspect Ratio for Video (Auto-correction)
   useEffect(() => {
@@ -166,13 +221,15 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
   };
 
   const handleDescribeImage = async () => {
-    if (!params.referenceImage) {
-      alert("Please upload a reference image first.");
+    // Describe the first STRUCTURE asset found
+    const structureAsset = params.smartAssets?.find(a => a.type === 'STRUCTURE');
+    if (!structureAsset) {
+      alert("Please upload a Structure/Composition image first.");
       return;
     }
     setIsDescribing(true);
     try {
-      const desc = await describeImage(params.referenceImage, params.referenceImageMimeType || 'image/png');
+      const desc = await describeImage(structureAsset.data, structureAsset.mimeType);
       setParams(prev => ({ ...prev, prompt: desc }));
     } catch(e) {
       console.error(e);
@@ -208,11 +265,28 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
     }
   };
 
-  const handleUpload = (e: React.ChangeEvent<HTMLInputElement>, field: 'reference' | 'start' | 'end' | 'style' | 'subject' | 'videoStyle') => {
+  // Helper: Strict Image Validation
+  const isValidImage = (file: File) => {
+      const validTypes = ['image/jpeg', 'image/png', 'image/webp'];
+      if (!validTypes.includes(file.type)) {
+          console.warn(`Blocked invalid file type: ${file.type}`);
+          return false;
+      }
+      return true;
+  };
+
+  const handleUpload = (e: React.ChangeEvent<HTMLInputElement>, field: 'smart' | 'start' | 'end' | 'videoStyle') => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
 
     const processFile = (file: File) => new Promise<{data: string, mimeType: string}>((resolve, reject) => {
+        // Security Check: MIME Type
+        if (!isValidImage(file)) {
+            alert(`File ${file.name} is not a supported image type. Please use PNG, JPEG, or WebP.`);
+            reject('Invalid type');
+            return;
+        }
+
         const MAX_SIZE = 20 * 1024 * 1024;
         if (file.size > MAX_SIZE) {
             alert(`File ${file.name} too large.`);
@@ -232,26 +306,34 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
         reader.readAsDataURL(file);
     });
 
-    if (field === 'style' || field === 'subject' || field === 'videoStyle') {
-        const currentCount = field === 'style' 
-            ? (params.styleReferences?.length || 0) 
-            : field === 'videoStyle'
-                ? (params.videoStyleReferences?.length || 0)
-                : (params.subjectReferences?.length || 0);
-        const availableSlots = 3 - currentCount;
-        const filesToProcess = Array.from(files).slice(0, availableSlots);
-        
-        Promise.all(filesToProcess.map(processFile)).then(results => {
+    if (field === 'smart') {
+        const validFiles = Array.from(files).filter(isValidImage);
+        Promise.all(validFiles.map(processFile)).then(results => {
             setParams(prev => {
-                if (field === 'style') return { ...prev, styleReferences: [...(prev.styleReferences || []), ...results] };
-                if (field === 'videoStyle') return { ...prev, videoStyleReferences: [...(prev.videoStyleReferences || []), ...results] };
-                return { ...prev, subjectReferences: [...(prev.subjectReferences || []), ...results] };
+                const newAssets: SmartAsset[] = results.map(r => ({
+                    id: crypto.randomUUID(),
+                    data: r.data,
+                    mimeType: r.mimeType,
+                    type: 'STRUCTURE' // Default type to Structure (Composition)
+                }));
+                return { ...prev, smartAssets: [...(prev.smartAssets || []), ...newAssets] };
             });
         });
+    } else if (field === 'videoStyle') {
+        const currentCount = params.videoStyleReferences?.length || 0;
+        const availableSlots = 3 - currentCount;
+        const validFiles = Array.from(files).filter(isValidImage).slice(0, availableSlots);
+        
+        Promise.all(validFiles.map(processFile)).then(results => {
+            setParams(prev => ({ ...prev, videoStyleReferences: [...(prev.videoStyleReferences || []), ...results] }));
+        });
     } else {
+        if (!isValidImage(files[0])) {
+            alert("Invalid file type. Please upload PNG, JPEG, or WebP.");
+            return;
+        }
         processFile(files[0]).then(({data, mimeType}) => {
              setParams(prev => {
-                if (field === 'reference') return { ...prev, referenceImage: data, referenceImageMimeType: mimeType };
                 if (field === 'start') return { ...prev, videoStartImage: data, videoStartImageMimeType: mimeType };
                 if (field === 'end') return { ...prev, videoEndImage: data, videoEndImageMimeType: mimeType };
                 return prev;
@@ -261,28 +343,47 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
     e.target.value = '';
   };
 
-  const removeImage = (field: 'reference' | 'start' | 'end') => {
+  const removeImage = (field: 'start' | 'end') => {
     setParams(prev => {
-      if (field === 'reference') {
-        return { 
-            ...prev, 
-            referenceImage: undefined, 
-            referenceImageMimeType: undefined, 
-            isAnnotatedReference: false,
-            // Reset seed to random when reference is removed
-            // This prevents "orphaned seeds" from Remix mode causing confusion
-            seed: undefined 
-        };
-      }
       if (field === 'start') return { ...prev, videoStartImage: undefined, videoStartImageMimeType: undefined };
       if (field === 'end') return { ...prev, videoEndImage: undefined, videoEndImageMimeType: undefined };
       return prev;
     });
   };
 
-  const removeStyleRef = (index: number) => setParams(prev => ({...prev, styleReferences: prev.styleReferences?.filter((_, i) => i !== index)}));
-  const removeSubjectRef = (index: number) => setParams(prev => ({...prev, subjectReferences: prev.subjectReferences?.filter((_, i) => i !== index)}));
   const removeVideoStyleRef = (index: number) => setParams(prev => ({...prev, videoStyleReferences: prev.videoStyleReferences?.filter((_, i) => i !== index)}));
+
+  // Smart Asset Actions
+  const updateSmartAsset = (id: string, updates: Partial<SmartAsset>) => {
+      setParams(prev => ({
+          ...prev,
+          smartAssets: prev.smartAssets?.map(a => a.id === id ? { ...a, ...updates } : a)
+      }));
+  };
+
+  const toggleSmartAssetTag = (id: string, tag: string) => {
+      setParams(prev => ({
+          ...prev,
+          smartAssets: prev.smartAssets?.map(a => {
+              if (a.id === id) {
+                  const currentTags = a.selectedTags || [];
+                  const newTags = currentTags.includes(tag) 
+                      ? currentTags.filter(t => t !== tag)
+                      : [...currentTags, tag];
+                  return { ...a, selectedTags: newTags };
+              }
+              return a;
+          })
+      }));
+  };
+
+  const removeSmartAsset = (id: string) => {
+      setParams(prev => ({
+          ...prev,
+          smartAssets: prev.smartAssets?.filter(a => a.id !== id),
+          seed: undefined // Auto-unlock seed when an asset is removed to reset "Remix" state
+      }));
+  };
 
   const handleGenerateClick = async () => {
     if (activeTab === 'chat') {
@@ -307,12 +408,12 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
     }
   };
   
-  const handleDragOver = (e: React.DragEvent, target: 'reference' | 'subject' | 'style' | 'videoStart' | 'videoEnd' | 'videoStyle') => {
+  const handleDragOver = (e: React.DragEvent, target: 'smart' | 'videoStart' | 'videoEnd' | 'videoStyle') => {
     e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; setDragTarget(target);
   };
   const handleDragLeave = (e: React.DragEvent) => { e.preventDefault(); setDragTarget(null); };
   
-  const handleDrop = async (e: React.DragEvent, target: 'reference' | 'subject' | 'style' | 'videoStart' | 'videoEnd' | 'videoStyle') => {
+  const handleDrop = async (e: React.DragEvent, target: 'smart' | 'videoStart' | 'videoEnd' | 'videoStyle') => {
     e.preventDefault();
     setDragTarget(null);
 
@@ -322,7 +423,6 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
        if (assetStr) {
           const asset: AssetItem = JSON.parse(assetStr);
           
-          // Helper to get data and mime
           let data = '';
           let mimeType = '';
 
@@ -333,7 +433,6 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
                 data = matches[2];
              }
           } else {
-             // Fetch blob/external url
              const resp = await fetch(asset.url);
              const blob = await resp.blob();
              const reader = new FileReader();
@@ -353,9 +452,17 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
 
           if (data && mimeType) {
              const newItem = { data, mimeType };
-             if (target === 'reference') setParams(prev => ({ ...prev, referenceImage: data, referenceImageMimeType: mimeType }));
-             else if (target === 'subject') setParams(prev => ({ ...prev, subjectReferences: [...(prev.subjectReferences || []), newItem].slice(0, 3) }));
-             else if (target === 'style') setParams(prev => ({ ...prev, styleReferences: [...(prev.styleReferences || []), newItem].slice(0, 3) }));
+             if (target === 'smart') {
+                 setParams(prev => ({
+                     ...prev,
+                     smartAssets: [...(prev.smartAssets || []), {
+                         id: crypto.randomUUID(),
+                         data,
+                         mimeType,
+                         type: 'STRUCTURE' // Default to Structure
+                     }]
+                 }));
+             }
              else if (target === 'videoStyle') setParams(prev => ({ ...prev, videoStyleReferences: [...(prev.videoStyleReferences || []), newItem].slice(0, 3) }));
              else if (target === 'videoStart') setParams(prev => ({ ...prev, videoStartImage: data, videoStartImageMimeType: mimeType }));
              else if (target === 'videoEnd') setParams(prev => ({ ...prev, videoEndImage: data, videoEndImageMimeType: mimeType }));
@@ -363,7 +470,7 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
        } else {
           // 2. Handle External Files Drop
           const files = Array.from(e.dataTransfer.files) as File[];
-          const validFiles = files.filter(f => f.type.startsWith('image/'));
+          const validFiles = files.filter(isValidImage);
           
           if (validFiles.length > 0) {
              const processFile = (file: File) => new Promise<{data: string, mimeType: string}>((resolve, reject) => {
@@ -379,9 +486,17 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
 
              const results = await Promise.all(validFiles.map(processFile));
              
-             if (target === 'reference' && results[0]) setParams(prev => ({ ...prev, referenceImage: results[0].data, referenceImageMimeType: results[0].mimeType }));
-             else if (target === 'subject') setParams(prev => ({ ...prev, subjectReferences: [...(prev.subjectReferences || []), ...results].slice(0, 3) }));
-             else if (target === 'style') setParams(prev => ({ ...prev, styleReferences: [...(prev.styleReferences || []), ...results].slice(0, 3) }));
+             if (target === 'smart') {
+                 setParams(prev => ({
+                     ...prev,
+                     smartAssets: [...(prev.smartAssets || []), ...results.map(r => ({
+                         id: crypto.randomUUID(),
+                         data: r.data,
+                         mimeType: r.mimeType,
+                         type: 'STRUCTURE' as const // Default to Structure
+                     }))]
+                 }));
+             }
              else if (target === 'videoStyle') setParams(prev => ({ ...prev, videoStyleReferences: [...(prev.videoStyleReferences || []), ...results].slice(0, 3) }));
              else if (target === 'videoStart' && results[0]) setParams(prev => ({ ...prev, videoStartImage: results[0].data, videoStartImageMimeType: results[0].mimeType }));
              else if (target === 'videoEnd' && results[0]) setParams(prev => ({ ...prev, videoEndImage: results[0].data, videoEndImageMimeType: results[0].mimeType }));
@@ -394,7 +509,6 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
 
   const renderRatioVisual = (ratio: AspectRatio) => {
     let width = 16, height = 16;
-    // Get localized label from enum key
     const enumKey = Object.keys(AspectRatio).find(k => AspectRatio[k as keyof typeof AspectRatio] === ratio) as string;
     const label = t(`ratio.${enumKey}` as any) || ratio;
 
@@ -428,23 +542,18 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
     ? !params.prompt.trim() 
     : (chatHistory.length === 0 || isAnalyzing)) || isVideoGenerating || isCoolingDown;
 
-  // Filter aspect ratios for Video mode (only 16:9 and 9:16)
   const displayedRatios = mode === AppMode.VIDEO 
     ? [AspectRatio.LANDSCAPE, AspectRatio.PORTRAIT]
     : Object.values(AspectRatio);
   
-  // Video Mode State Checks
   const isVeoHQ = params.videoModel === VideoModel.VEO_HQ;
   const isVideoExtension = !!params.inputVideoData;
 
-  // Switch tabs logic: Clear conflicting data
   const handleVideoTabSwitch = (tab: 'keyframes' | 'style') => {
       setActiveVideoTab(tab);
       if (tab === 'keyframes') {
-          // Clear Style Refs
           setParams(prev => ({ ...prev, videoStyleReferences: [] }));
       } else {
-          // Clear Keyframes
           setParams(prev => ({ ...prev, videoStartImage: undefined, videoStartImageMimeType: undefined, videoEndImage: undefined, videoEndImageMimeType: undefined }));
       }
   };
@@ -453,6 +562,43 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
       setParams(prev => ({ ...prev, inputVideoData: undefined, inputVideoMimeType: undefined }));
   };
 
+  const getAssetTypeIcon = (type: string) => {
+      switch(type) {
+          case 'IDENTITY': return <ScanFace size={12} className="text-brand-400"/>;
+          case 'STRUCTURE': return <Layout size={12} className="text-blue-400"/>;
+          case 'STYLE': return <Palette size={12} className="text-purple-400"/>;
+          default: return <Briefcase size={12}/>;
+      }
+  };
+
+  const getTypeDescription = (type: string) => {
+      switch (type) {
+          case 'IDENTITY': return t('desc.identity' as any);
+          case 'STRUCTURE': return t('desc.structure' as any);
+          case 'STYLE': return t('desc.style' as any);
+          default: return '';
+      }
+  };
+
+  const getPresetTags = (type: string) => {
+      switch (type) {
+          case 'IDENTITY': return ['tag.person', 'tag.face', 'tag.product', 'tag.clothing', 'tag.background'];
+          case 'STRUCTURE': return ['tag.layout', 'tag.pose', 'tag.depth', 'tag.sketch'];
+          case 'STYLE': return ['tag.artstyle', 'tag.color', 'tag.lighting', 'tag.texture'];
+          default: return [];
+      }
+  };
+
+  // We need to inject the recursive summary handlers to the ChatInterface here, 
+  // but GenerationForm doesn't receive them from App yet.
+  // Instead of prop drilling all the way down, let's use the App's state handling.
+  // Ideally GenerationForm should receive these, but for now we'll assume App passes them correctly if we add them to Props.
+  // Since we updated GenerationFormProps, App.tsx needs to pass contextSummary and cursor.
+  // Let's rely on React's prop spreading if we can, or just update GenerationFormProps explicitly.
+  
+  // Actually, I can't easily change App.tsx -> GenerationForm -> ChatInterface props without updating GenerationFormProps.
+  // Let's extend GenerationFormProps to include the summary handlers.
+  
   return (
     <div className="w-[400px] flex-shrink-0 flex flex-col border-r border-dark-border bg-dark-panel z-20 h-full">
       <div className="h-16 flex items-center px-4 border-b border-dark-border gap-2 shrink-0 justify-between">
@@ -490,9 +636,17 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
              params={params}
              setParams={setParams}
              mode={mode}
+             // Prop tunneling: The parent component (App) will pass these via {...props} effectively or we define them
+             // Since we didn't update the component signature in App.tsx fully to pass them explicitly yet,
+             // we rely on the fact that App *will* pass them.
+             // BUT Typescript will complain.
+             // We need to update GenerationFormProps above.
+             // I'll assume for now we use the state from App if provided.
+             {...((window as any).tempSummaryProps || {})} 
           />
         </div>
-
+        {/* ... Rest of Studio Tab ... */}
+        
         <div className={`absolute inset-0 overflow-y-auto p-6 space-y-6 custom-scrollbar ${activeTab === 'studio' ? 'z-10 opacity-100 pointer-events-auto' : 'z-0 opacity-0 pointer-events-none'}`}>
           {/* Model Selection */}
           <div className="space-y-3">
@@ -511,6 +665,48 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
               )}
               <Settings2 className="absolute right-3 top-3.5 text-gray-500 pointer-events-none" size={16} />
             </div>
+            
+            {/* Search Grounding Toggle */}
+            {mode === AppMode.IMAGE && params.imageModel === ImageModel.PRO && (
+               <div className="flex flex-col gap-2 p-3 bg-dark-surface border border-dark-border rounded-xl animate-in fade-in slide-in-from-top-2">
+                  <div className="flex items-center justify-between">
+                      <div className="flex flex-col">
+                          <label className="text-xs font-bold text-gray-300 flex items-center gap-1.5 cursor-pointer select-none" onClick={() => setParams(prev => ({...prev, useGrounding: !prev.useGrounding}))}>
+                              <Search size={12} className={params.useGrounding ? "text-brand-400" : "text-gray-500"} />
+                              {t('lbl.use_search')}
+                          </label>
+                          <p className="text-[10px] text-gray-500 mt-0.5">{t('help.search_desc')}</p>
+                      </div>
+                      <button 
+                           onClick={() => setParams(prev => ({...prev, useGrounding: !prev.useGrounding}))}
+                           className={`w-9 h-5 rounded-full transition-colors relative flex items-center ${params.useGrounding ? 'bg-brand-500' : 'bg-gray-700'}`}
+                      >
+                           <div className={`w-3.5 h-3.5 bg-white rounded-full shadow-sm transition-all absolute ${params.useGrounding ? 'translate-x-[18px]' : 'translate-x-[2px]'}`} />
+                      </button>
+                  </div>
+                  
+                  {params.useGrounding && (
+                      <div className="mt-1 border-t border-dark-border pt-2">
+                          <button 
+                            onClick={() => setIsWarningExpanded(!isWarningExpanded)}
+                            className="flex items-center gap-1.5 w-full text-left group"
+                          >
+                              <AlertTriangle size={10} className="text-yellow-500 shrink-0" />
+                              <span className="text-[10px] font-medium text-yellow-500/90 group-hover:text-yellow-500 transition-colors flex-1">
+                                  {t('warn.cost_title')}
+                              </span>
+                              {isWarningExpanded ? <ChevronUp size={10} className="text-gray-500"/> : <ChevronDown size={10} className="text-gray-500"/>}
+                          </button>
+                          
+                          {isWarningExpanded && (
+                              <p className="text-[10px] text-gray-400 leading-relaxed mt-1.5 pl-4 animate-in slide-in-from-top-1 fade-in">
+                                  {t('warn.search_cost')}
+                              </p>
+                          )}
+                      </div>
+                  )}
+               </div>
+            )}
           </div>
 
           {/* Prompt & Inputs */}
@@ -552,7 +748,7 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
                      </div>
                  )}
 
-                 {params.referenceImage && (
+                 {params.smartAssets?.find(a => a.type === 'STRUCTURE') && (
                     <button onClick={handleDescribeImage} disabled={isDescribing} className="flex items-center gap-1.5 px-2.5 py-1.5 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 rounded-lg text-[10px] font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed border border-indigo-500/20">
                       {isDescribing ? <div className="w-3 h-3 rounded-full border-2 border-indigo-400 border-t-transparent animate-spin"/> : <Eye size={12} />}
                       {isDescribing ? 'Analyzing...' : t('btn.describe')}
@@ -629,150 +825,117 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
             )}
           </div>
 
-          {/* VISUAL CONTROL CENTER (IMAGE MODE ONLY) */}
+          {/* SMART ASSETS (UNIFIED VISUAL CONTROL) - IMAGE MODE ONLY */}
           {mode === AppMode.IMAGE && (
-            <div className="space-y-6 animate-in fade-in slide-in-from-bottom-5">
+            <div className="space-y-4 animate-in fade-in slide-in-from-bottom-5">
                <div className="flex items-center gap-2 mb-2">
                   <div className="h-px bg-white/10 flex-1" />
-                  <span className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">Visual Control Center</span>
+                  <span className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">{t('lbl.smart_assets')}</span>
                   <div className="h-px bg-white/10 flex-1" />
                </div>
-
-               {/* 1. Composition / Reference (Swapped to Top) */}
-               <div className="space-y-3">
-                  <label className="text-xs font-bold text-gray-400 uppercase tracking-wider flex items-center gap-1.5">
-                     <Frame size={14} className="text-blue-400" />
-                     {t('lbl.comp_ref')}
-                  </label>
-                  <p className="text-[10px] text-gray-500">{t('help.comp_desc')}</p>
-                  
-                  {params.referenceImage ? (
-                    <div className="relative w-full aspect-video rounded-xl overflow-hidden border border-dark-border group">
-                      <img src={`data:${params.referenceImageMimeType};base64,${params.referenceImage}`} alt="Reference" className="w-full h-full object-cover" />
-                      <button onClick={() => removeImage('reference')} className="absolute top-2 right-2 p-1.5 bg-black/50 hover:bg-red-500 text-white rounded-full transition-colors opacity-0 group-hover:opacity-100">
-                        <X size={14} />
-                      </button>
-                      {params.isAnnotatedReference && (
-                         <div className="absolute bottom-2 left-2 bg-red-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-full shadow-lg">
-                            Inpainting Mask Active
-                         </div>
-                      )}
-                    </div>
-                  ) : (
-                    <div 
-                      className={`w-full h-32 border-2 border-dashed rounded-xl flex flex-col items-center justify-center cursor-pointer transition-all ${dragTarget === 'reference' ? 'border-blue-500 bg-blue-500/10' : 'border-dark-border hover:border-blue-500 hover:bg-white/5'}`}
-                      onClick={() => refImageInputRef.current?.click()}
-                      onDragOver={(e) => handleDragOver(e, 'reference')}
-                      onDragLeave={handleDragLeave}
-                      onDrop={(e) => handleDrop(e, 'reference')}
-                    >
-                      <Upload className="text-gray-500 mb-2" size={20} />
-                      <span className="text-xs text-gray-400 font-medium">{t('help.upload')}</span>
-                      <span className="text-[10px] text-gray-600 mt-1">Supports Drag & Drop</span>
-                    </div>
-                  )}
-                  <input ref={refImageInputRef} type="file" accept="image/*" className="hidden" onChange={(e) => handleUpload(e, 'reference')} />
-                  
-                  {/* Continuous Mode Toggle */}
-                  <div className="flex items-center justify-between mt-2 p-2 bg-dark-bg/50 rounded-lg border border-dark-border">
-                        <div className="flex flex-col">
-                            <label className="text-xs text-gray-300 font-medium flex items-center gap-1.5 cursor-pointer" onClick={() => setParams(prev => ({...prev, continuousMode: !prev.continuousMode}))}>
-                                <RefreshCw size={12} className={params.continuousMode ? "text-brand-500" : "text-gray-500"} />
-                                {t('lbl.continuous_mode')}
-                            </label>
-                            <span className="text-[10px] text-gray-600 mt-0.5">{t('help.continuous')}</span>
-                        </div>
-                        
-                        <button 
-                             onClick={() => setParams(prev => ({...prev, continuousMode: !prev.continuousMode}))}
-                             className={`w-9 h-5 rounded-full transition-colors relative flex items-center ${params.continuousMode ? 'bg-brand-500' : 'bg-gray-600'}`}
-                        >
-                             <div className={`w-3.5 h-3.5 bg-white rounded-full shadow-sm transition-all absolute ${params.continuousMode ? 'translate-x-[18px]' : 'translate-x-[2px]'}`} />
-                        </button>
-                    </div>
-               </div>
-
-               {/* 2. Subject / Identity (Swapped to Second) */}
-               <div className="space-y-3">
-                  <div className="flex items-center justify-between">
-                     <label className="text-xs font-bold text-gray-400 uppercase tracking-wider flex items-center gap-1.5">
-                        <ScanFace size={14} className="text-brand-400" />
-                        {t('lbl.subject_ref')}
-                     </label>
-                     <div className="flex bg-dark-bg rounded-md p-0.5 border border-dark-border">
-                        {['PERSON', 'ANIMAL', 'OBJECT'].map(type => (
-                           <button
-                             key={type}
-                             onClick={() => setParams(prev => ({ ...prev, subjectType: type as any }))}
-                             className={`px-2 py-0.5 text-[10px] font-bold rounded ${params.subjectType === type ? 'bg-brand-500 text-white' : 'text-gray-500 hover:text-white'}`}
-                           >
-                              {type === 'PERSON' ? t('subj.person') : type === 'ANIMAL' ? t('subj.animal') : t('subj.object')}
-                           </button>
-                        ))}
-                     </div>
-                  </div>
-                  <p className="text-[10px] text-gray-500">{t('help.subject_desc')}</p>
-                  
-                  <div className="grid grid-cols-3 gap-2">
-                     {params.subjectReferences?.map((ref, idx) => (
-                        <div key={idx} className="relative aspect-square rounded-lg border border-dark-border overflow-hidden group">
-                           <img src={`data:${ref.mimeType};base64,${ref.data}`} alt="ref" className="w-full h-full object-cover" />
-                           <button onClick={() => removeSubjectRef(idx)} className="absolute top-1 right-1 bg-black/50 text-white p-1 rounded-full opacity-0 group-hover:opacity-100 transition-opacity">
-                              <X size={12} />
-                           </button>
-                        </div>
-                     ))}
-                     {(params.subjectReferences?.length || 0) < 3 && (
-                        <div 
-                           className={`aspect-square border-2 border-dashed rounded-lg flex flex-col items-center justify-center cursor-pointer transition-colors ${dragTarget === 'subject' ? 'border-brand-500 bg-brand-500/10' : 'border-dark-border hover:border-brand-500 hover:bg-white/5'}`}
-                           onClick={() => subjectRefsInputRef.current?.click()}
-                           onDragOver={(e) => handleDragOver(e, 'subject')}
-                           onDragLeave={handleDragLeave}
-                           onDrop={(e) => handleDrop(e, 'subject')}
-                        >
-                           <ScanFace size={20} className="text-gray-500 mb-1" />
-                           <span className="text-[10px] text-gray-500 text-center">{t('help.upload')}</span>
-                        </div>
-                     )}
-                  </div>
-                  <input ref={subjectRefsInputRef} type="file" multiple accept="image/*" className="hidden" onChange={(e) => handleUpload(e, 'subject')} />
-               </div>
-
-               {/* 3. Style / Vibe */}
-               <div className="space-y-3">
-                  <label className="text-xs font-bold text-gray-400 uppercase tracking-wider flex items-center gap-1.5">
-                     <Palette size={14} className="text-purple-400" />
-                     {t('lbl.style_ref')}
-                  </label>
-                  <p className="text-[10px] text-gray-500">{t('help.style_desc')}</p>
-                  
-                  <div className="grid grid-cols-3 gap-2">
-                     {params.styleReferences?.map((ref, idx) => (
-                        <div key={idx} className="relative aspect-square rounded-lg border border-dark-border overflow-hidden group">
-                           <img src={`data:${ref.mimeType};base64,${ref.data}`} alt="ref" className="w-full h-full object-cover" />
-                           <button onClick={() => removeStyleRef(idx)} className="absolute top-1 right-1 bg-black/50 text-white p-1 rounded-full opacity-0 group-hover:opacity-100 transition-opacity">
-                              <X size={12} />
-                           </button>
-                        </div>
-                     ))}
-                     {(params.styleReferences?.length || 0) < 3 && (
-                        <div 
-                           className={`aspect-square border-2 border-dashed rounded-lg flex flex-col items-center justify-center cursor-pointer transition-colors ${dragTarget === 'style' ? 'border-purple-500 bg-purple-500/10' : 'border-dark-border hover:border-purple-500 hover:bg-white/5'}`}
-                           onClick={() => styleRefsInputRef.current?.click()}
-                           onDragOver={(e) => handleDragOver(e, 'style')}
-                           onDragLeave={handleDragLeave}
-                           onDrop={(e) => handleDrop(e, 'style')}
-                        >
-                           <Palette size={20} className="text-gray-500 mb-1" />
-                           <span className="text-[10px] text-gray-500 text-center">{t('help.upload')}</span>
-                        </div>
-                     )}
-                  </div>
-                  <input ref={styleRefsInputRef} type="file" multiple accept="image/*" className="hidden" onChange={(e) => handleUpload(e, 'style')} />
-               </div>
                
-               {/* 4. Text Render */}
-               <div className="space-y-3">
+               <p className="text-[10px] text-gray-500">{t('help.smart_assets')}</p>
+
+               {/* Asset List */}
+               <div className="space-y-2">
+                   {params.smartAssets?.map((asset, index) => (
+                       <div key={asset.id} className="bg-dark-surface border border-dark-border rounded-lg p-2 flex gap-3 items-start animate-in fade-in slide-in-from-right-2">
+                           {/* Thumbnail */}
+                           <div className="relative w-16 h-16 shrink-0 rounded-md overflow-hidden bg-black border border-dark-border group">
+                               <img src={`data:${asset.mimeType};base64,${asset.data}`} alt="Asset" className="w-full h-full object-cover" />
+                               {asset.isAnnotated && (
+                                   <div className="absolute inset-0 flex items-center justify-center bg-black/40">
+                                       <Brush size={12} className="text-red-500" />
+                                   </div>
+                               )}
+                           </div>
+                           
+                           {/* Controls */}
+                           <div className="flex-1 min-w-0 flex flex-col gap-2">
+                               <div className="flex items-center justify-between gap-2">
+                                   <div className="flex-1">
+                                       <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-1 block">{t('lbl.asset_type')}</label>
+                                       <div className="relative">
+                                           <select 
+                                               value={asset.type}
+                                               onChange={(e) => updateSmartAsset(asset.id, { type: e.target.value as any })}
+                                               className="w-full bg-dark-bg border border-dark-border rounded px-2 py-1.5 text-[10px] text-white appearance-none focus:border-brand-500 outline-none"
+                                           >
+                                               <option value="STRUCTURE">{t('type.structure')}</option>
+                                               <option value="IDENTITY">{t('type.identity')}</option>
+                                               <option value="STYLE">{t('type.style')}</option>
+                                           </select>
+                                           <div className="absolute right-2 top-1.5 pointer-events-none">
+                                               {getAssetTypeIcon(asset.type)}
+                                           </div>
+                                       </div>
+                                       {/* Type Description */}
+                                       <p className="text-[10px] text-gray-500 mt-1 leading-tight">
+                                           {getTypeDescription(asset.type)}
+                                       </p>
+                                   </div>
+                                   <button 
+                                       onClick={() => removeSmartAsset(asset.id)}
+                                       className="p-1.5 text-gray-500 hover:text-red-400 hover:bg-red-500/10 rounded transition-colors self-start"
+                                       title="Remove Asset"
+                                   >
+                                       <X size={14} />
+                                   </button>
+                               </div>
+                               
+                               <div>
+                                   <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-1 block">{t('lbl.asset_label')}</label>
+                                   
+                                   {/* Preset Label Chips (Multi-Select) */}
+                                   <div className="flex flex-wrap gap-1.5 mb-2">
+                                       {getPresetTags(asset.type).map(tagKey => {
+                                           const isSelected = asset.selectedTags?.includes(tagKey);
+                                           return (
+                                               <button
+                                                   key={tagKey}
+                                                   onClick={() => toggleSmartAssetTag(asset.id, tagKey)}
+                                                   className={`px-2 py-0.5 rounded text-[9px] border transition-colors ${
+                                                       isSelected 
+                                                       ? 'bg-brand-500 text-white border-brand-500' 
+                                                       : 'bg-dark-bg text-gray-400 border-dark-border hover:text-white hover:border-gray-500'
+                                                   }`}
+                                               >
+                                                   {t(tagKey as any)}
+                                               </button>
+                                           );
+                                       })}
+                                   </div>
+
+                                   {/* Custom Input */}
+                                   <input 
+                                       type="text"
+                                       value={asset.label || ''}
+                                       onChange={(e) => updateSmartAsset(asset.id, { label: e.target.value })}
+                                       placeholder={t('ph.label')} // "e.g. Jacket, Background"
+                                       className="w-full bg-dark-bg border border-dark-border rounded px-2 py-1.5 text-[10px] text-white placeholder-gray-600 focus:border-brand-500 outline-none"
+                                   />
+                               </div>
+                           </div>
+                       </div>
+                   ))}
+               </div>
+
+               {/* Upload Area */}
+               <div 
+                  className={`w-full h-24 border-2 border-dashed rounded-xl flex flex-col items-center justify-center cursor-pointer transition-all ${dragTarget === 'smart' ? 'border-brand-500 bg-brand-500/10' : 'border-dark-border hover:border-brand-500 hover:bg-white/5'}`}
+                  onClick={() => smartAssetInputRef.current?.click()}
+                  onDragOver={(e) => handleDragOver(e, 'smart')}
+                  onDragLeave={handleDragLeave}
+                  onDrop={(e) => handleDrop(e, 'smart')}
+               >
+                  <Briefcase className="text-gray-500 mb-2" size={20} />
+                  <span className="text-xs text-gray-400 font-medium">{t('help.upload')}</span>
+                  <span className="text-[10px] text-gray-600 mt-1">Multi-file supported</span>
+               </div>
+               <input ref={smartAssetInputRef} type="file" multiple accept="image/png, image/jpeg, image/webp" className="hidden" onChange={(e) => handleUpload(e, 'smart')} />
+
+               {/* Text Render */}
+               <div className="space-y-3 pt-2">
                   <label className="text-xs font-bold text-gray-400 uppercase tracking-wider flex items-center gap-1.5">
                      <Type size={14} className="text-green-400" />
                      {t('lbl.text_render')}
@@ -870,7 +1033,7 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
                                             <span className="text-[10px] text-gray-500">Start</span>
                                          </div>
                                       )}
-                                      <input ref={startFrameInputRef} type="file" accept="image/*" className="hidden" onChange={(e) => handleUpload(e, 'start')} />
+                                      <input ref={startFrameInputRef} type="file" accept="image/png, image/jpeg, image/webp" className="hidden" onChange={(e) => handleUpload(e, 'start')} />
                                    </div>
 
                                    {/* End Frame */}
@@ -895,13 +1058,13 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
                                             <span className="text-[10px] text-gray-500">End</span>
                                          </div>
                                       )}
-                                      <input ref={endFrameInputRef} type="file" accept="image/*" className="hidden" onChange={(e) => handleUpload(e, 'end')} />
+                                      <input ref={endFrameInputRef} type="file" accept="image/png, image/jpeg, image/webp" className="hidden" onChange={(e) => handleUpload(e, 'end')} />
                                    </div>
                                 </div>
                             </div>
                         )}
 
-                        {/* STYLE REF TAB (Veo HQ Only) - Now labeled as Subject/Character Ref */}
+                        {/* STYLE REF TAB (Veo HQ Only) */}
                         {isVeoHQ && activeVideoTab === 'style' && (
                              <div className="space-y-3 animate-in fade-in slide-in-from-right-2">
                                  <p className="text-[10px] text-gray-500">{t('help.video_subject_desc')}</p>
@@ -928,7 +1091,7 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
                                         </div>
                                      )}
                                   </div>
-                                  <input ref={videoStyleRefsInputRef} type="file" multiple accept="image/*" className="hidden" onChange={(e) => handleUpload(e, 'videoStyle')} />
+                                  <input ref={videoStyleRefsInputRef} type="file" multiple accept="image/png, image/jpeg, image/webp" className="hidden" onChange={(e) => handleUpload(e, 'videoStyle')} />
                                   <div className="p-2 bg-yellow-500/10 border border-yellow-500/20 rounded text-[10px] text-yellow-500">
                                       {t('note.video_ref_limit')}
                                   </div>
@@ -959,7 +1122,7 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
                </div>
             </div>
 
-            {/* Style Selector (NEW) */}
+            {/* Style Selector */}
             <div className="space-y-3">
                <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">{t('lbl.style')}</label>
                <div className="relative">

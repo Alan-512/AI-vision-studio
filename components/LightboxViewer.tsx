@@ -174,27 +174,28 @@ export const LightboxViewer: React.FC<LightboxViewerProps> = ({ asset, onClose, 
         {/* Viewport */}
         <div 
            ref={containerRef}
-           className="flex-1 flex items-center justify-center min-h-0 bg-dark-bg/50 rounded-2xl border border-dark-border overflow-hidden relative select-none"
+           className="flex-1 flex items-center justify-center min-h-0 bg-dark-bg/50 rounded-2xl border border-dark-border overflow-hidden relative select-none w-full"
         >
            {asset.type === 'IMAGE' ? (
              <div 
-               className="relative flex items-center justify-center overflow-hidden"
+               className="relative flex items-center justify-center overflow-hidden w-full h-full"
                onMouseDown={handleMouseDown}
                onMouseMove={handleMouseMove}
                onMouseUp={handleMouseUp}
                onMouseLeave={handleMouseUp}
                style={{ 
                  cursor: scale > 1 ? (isDragging ? 'grabbing' : 'grab') : 'default',
-                 width: '100%',
-                 height: '100%'
                }}
              >
                <div
                  style={{
                    transform: `translate(${position.x}px, ${position.y}px) scale(${scale})`,
                    transition: isDragging ? 'none' : 'transform 0.2s ease-out',
-                   position: 'relative',
-                   display: 'inline-block'
+                   display: 'flex',
+                   alignItems: 'center',
+                   justifyContent: 'center',
+                   width: '100%',
+                   height: '100%'
                  }}
                >
                  <img 
@@ -202,7 +203,7 @@ export const LightboxViewer: React.FC<LightboxViewerProps> = ({ asset, onClose, 
                     src={asset.url} 
                     alt={asset.prompt} 
                     draggable={false}
-                    className="max-w-full max-h-[80vh] object-contain"
+                    className="max-w-full max-h-full object-contain"
                  />
                </div>
                

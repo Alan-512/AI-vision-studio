@@ -1,4 +1,3 @@
-
 import { Project, AssetItem, AppMode } from '../types';
 
 const DB_NAME = 'LuminaDB';
@@ -312,11 +311,39 @@ export const updateAsset = async (id: string, updates: Partial<AssetItem>): Prom
   });
 };
 
-export const loadAssets = async (): Promise<AssetItem[]> => {
+// --- Memory Leak Prevention: URL Registry ---
+// Track all active Blob URLs created by this service
+const activeBlobUrls: string[] = [];
+
+/**
+ * Helper to cleanup previously allocated Blob URLs from memory.
+ * This prevents memory leaks where the browser holds onto Blob references indefinitely.
+ */
+const cleanupBlobUrls = () => {
+  if (activeBlobUrls.length > 0) {
+    // console.debug(`[Storage] Cleaning up ${activeBlobUrls.length} blob URLs to free memory.`);
+    activeBlobUrls.forEach(url => URL.revokeObjectURL(url));
+    activeBlobUrls.length = 0; // Clear the registry
+  }
+};
+
+export const loadAssets = async (projectId?: string): Promise<AssetItem[]> => {
+  // STEP 1: Perform cleanup before loading new assets
+  // This ensures we release memory from the previous view before allocating new memory
+  cleanupBlobUrls();
+
   const transaction = await getTransaction(STORE_ASSETS, 'readonly');
   return new Promise((resolve, reject) => {
     const store = transaction.objectStore(STORE_ASSETS);
-    const request = store.getAll();
+    let request;
+
+    // Filter by Project ID if provided (Performance & Memory Optimization)
+    if (projectId) {
+        const index = store.index('projectId');
+        request = index.getAll(projectId);
+    } else {
+        request = store.getAll();
+    }
 
     request.onsuccess = () => {
       const rawAssets = request.result || [];
@@ -325,6 +352,10 @@ export const loadAssets = async (): Promise<AssetItem[]> => {
         // Generic Blob Rehydration (Works for both IMAGE and VIDEO now)
         if (record.blob instanceof Blob) {
            const newUrl = URL.createObjectURL(record.blob);
+           
+           // STEP 2: Register the new URL so we can clean it up later
+           activeBlobUrls.push(newUrl);
+
            // We do not modify the record in DB, just the returned object for the app
            return { ...record, url: newUrl, blob: undefined }; 
         }

@@ -96,7 +96,7 @@ export const TaskCenter: React.FC<TaskCenterProps> = ({ tasks, onClearCompleted,
                  <button 
                    onClick={(e) => { e.stopPropagation(); onClearCompleted(); }}
                    className="p-1 hover:bg-white/10 rounded text-[10px] text-gray-400 hover:text-white transition-colors"
-                   title="Clear Completed"
+                   title={t('task.clear')}
                  >
                    {t('task.clear')}
                  </button>

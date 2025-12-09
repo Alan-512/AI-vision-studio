@@ -70,6 +70,17 @@ export enum VideoDuration {
   LONG = '10 Seconds' // Note: Actual duration depends on model capabilities
 }
 
+// NEW: Smart Asset Interface
+export interface SmartAsset {
+  id: string;
+  data: string; // Base64
+  mimeType: string;
+  type: 'IDENTITY' | 'STRUCTURE' | 'STYLE';
+  label?: string; // Custom user label text
+  selectedTags?: string[]; // Array of selected preset tag keys (e.g. 'tag.person')
+  isAnnotated?: boolean; // For Inpainting masks
+}
+
 export interface GenerationParams {
   prompt: string;
   negativePrompt?: string; // Not directly supported by all Gemini models but good for UI
@@ -81,18 +92,19 @@ export interface GenerationParams {
   imageResolution?: ImageResolution;
   imageStyle?: ImageStyle;
   numberOfImages?: number; // New: Number of images to generate (1-4)
+  useGrounding?: boolean; // New: Use Google Search Grounding (Pro model only)
   
-  // --- Visual Control Center ---
-  // 1. Subject / Identity
+  // --- NEW: UNIFIED VISUAL CONTROL ---
+  smartAssets?: SmartAsset[];
+
+  // --- LEGACY FIELDS (Kept for compatibility with existing saved projects/Inpainting flow) ---
   subjectReferences?: { data: string; mimeType: string }[];
   subjectType?: 'PERSON' | 'ANIMAL' | 'OBJECT';
-
-  // 2. Composition / Structure
-  referenceImage?: string; // Base64 string without data prefix
+  referenceImage?: string; // Base64 string of the ANNOTATED/MASKED image
   referenceImageMimeType?: string;
+  originalReferenceImage?: string; // Base64 string of the CLEAN ORIGINAL image
+  originalReferenceImageMimeType?: string;
   isAnnotatedReference?: boolean; // New: Flag to indicate if reference has user annotations (red boxes)
-  
-  // 3. Style / Vibe
   styleReferences?: { data: string; mimeType: string }[]; // Array of style reference images
 
   // New: Advanced Creativity
@@ -138,6 +150,12 @@ export interface Project {
   savedMode?: AppMode; 
   chatHistory?: ChatMessage[]; // Used for Image Mode
   videoChatHistory?: ChatMessage[]; // Used for Video Mode
+  
+  // RECURSIVE ROLLING SUMMARY STATE
+  contextSummary?: string; // The text summary of "Archived" history
+  summaryCursor?: number; // The index in chatHistory where the summary ends. 
+                          // Messages[0] to Messages[summaryCursor-1] are summarized.
+                          // Messages[summaryCursor] to End are "Active".
 }
 
 export interface AssetItem {
@@ -150,6 +168,7 @@ export interface AssetItem {
   createdAt: number;
   status: 'PENDING' | 'GENERATING' | 'COMPLETED' | 'FAILED'; // Added GENERATING
   isFavorite?: boolean; // New: Favorite status
+  isNew?: boolean; // New: Indicator for newly generated assets
   deletedAt?: number; // New: Timestamp when moved to trash
   operationName?: string; // New: Store the Google API Operation ID for long-running tasks
   metadata?: {
@@ -159,6 +178,7 @@ export interface AssetItem {
     duration?: string;
     resolution?: string;
     seed?: number; // Added seed
+    usedGrounding?: boolean; // New: Metadata to track if grounding was used
   };
 }
 
