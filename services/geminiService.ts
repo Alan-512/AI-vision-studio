@@ -1,5 +1,3 @@
-
-
 import { GoogleGenAI, GenerateContentResponse, Content, Part } from "@google/genai";
 import { GenerationParams, AspectRatio, ImageResolution, VideoResolution, AssetItem, ImageModel, ImageStyle, VideoStyle, VideoDuration, VideoModel, ChatMessage, ChatModel, AppMode, SmartAsset } from "../types";
 
@@ -209,11 +207,28 @@ const videoQueue = new RequestQueue(1);
 
 // --- End Concurrency Logic ---
 
-export const optimizePrompt = async (originalPrompt: string, mode: AppMode): Promise<string> => {
+export const optimizePrompt = async (originalPrompt: string, mode: AppMode, smartAssets?: SmartAsset[]): Promise<string> => {
   if (!originalPrompt.trim()) return "";
   
   const ai = getClient();
   
+  // Construct context string about assets
+  let assetContext = "";
+  if (smartAssets && smartAssets.length > 0) {
+      const types = smartAssets.map(a => a.type);
+      assetContext = `\nCONTEXT: The user has attached ${smartAssets.length} reference images with the following roles: ${types.join(', ')}.`;
+      
+      if (types.includes('STRUCTURE')) {
+          assetContext += `\n- STRUCTURE/LAYOUT image provided: The prompt must explicitly state to "follow the composition and layout of the reference image".`;
+      }
+      if (types.includes('STYLE')) {
+          assetContext += `\n- STYLE image provided: The prompt should mention "in the artistic style of the reference image" but NOT describe the reference's content (unless relevant).`;
+      }
+      if (types.includes('IDENTITY')) {
+          assetContext += `\n- IDENTITY image provided: The prompt must emphasize "maintaining the character/object identity".`;
+      }
+  }
+
   let task = "";
   if (mode === AppMode.VIDEO) {
     task = `You are an expert Film Director and Prompt Engineer for AI Video generation (Google Veo). 
@@ -226,15 +241,26 @@ export const optimizePrompt = async (originalPrompt: string, mode: AppMode): Pro
     4. **Motion**: Use strong verbs to describe movement (e.g., "sprinting", "morphing", "gliding").
     5. **Camera**: Explicitly state camera movement (e.g., "Drone tracking shot", "Slow pan right", "Static camera").
     6. **Conciseness**: Keep it under 70 words.
-    
+    ${assetContext}
+
     Original Input: "${originalPrompt}"
     
     Output ONLY the refined prompt text. Do not add quotes.`;
   } else {
-    task = `You are a professional Creative Director. 
-    Enhance this image prompt with artistic details, lighting, composition, and texture. 
-    Original Prompt: "${originalPrompt}"
-    Output ONLY the refined prompt text. Keep it concise (under 60 words).`;
+    // REVISED FOR GEMINI 3 PRO / FLASH IMAGE GENERATION
+    task = `You are an expert Prompt Engineer for Google's Gemini Image Generation models.
+    Rewrite the user's prompt to be descriptive, visually rich, and structured.
+    
+    OFFICIAL BEST PRACTICES:
+    1. **Be Descriptive**: Gemini models thrive on detail. Don't say "a car"; say "a vintage 1960s red convertible sports car with chrome details".
+    2. **Natural Language**: Use fluid sentences, not a list of tags. If the input is a list of tags (e.g. from a Prompt Builder), weave them into a coherent narrative.
+    3. **Structure**: Subject -> Context/Background -> Art Style/Medium -> Lighting/Atmosphere -> Technical Details (e.g., "4k", "highly detailed").
+    4. **No Restrictions**: Do NOT restrict word count. Use as many words as necessary to vividly describe the scene (aim for 50-100 words if needed for detail).
+    ${assetContext}
+    
+    Original Input: "${originalPrompt}"
+    
+    Output ONLY the refined prompt text. Do not add quotes.`;
   }
     
   try {

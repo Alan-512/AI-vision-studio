@@ -1,5 +1,3 @@
-
-
 import React, { useRef, useState, useEffect } from 'react';
 import { AppMode, AspectRatio, GenerationParams, ImageResolution, VideoResolution, ImageModel, VideoModel, ImageStyle, VideoStyle, VideoDuration, ChatMessage, AssetItem, SmartAsset } from '../types';
 import { Settings2, Sparkles, Image as ImageIcon, Video as VideoIcon, Upload, X, Camera, Palette, Film, RefreshCw, MessageSquare, Layers, ChevronDown, ChevronUp, SlidersHorizontal, Monitor, Eye, Lock, Dice5, Type, User, ScanFace, Frame, ArrowRight, Loader2, Clock, BookTemplate, Clapperboard, XCircle, Search, AlertTriangle, Briefcase, Layout, Brush } from 'lucide-react';
@@ -211,7 +209,8 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
     if (!params.prompt.trim()) return;
     setIsOptimizing(true);
     try {
-      const optimized = await optimizePrompt(params.prompt, mode);
+      // Pass smartAssets to the optimizer so it knows context!
+      const optimized = await optimizePrompt(params.prompt, mode, params.smartAssets);
       setParams(prev => ({ ...prev, prompt: optimized }));
     } catch (e) {
       console.error("Optimization failed", e);
@@ -669,17 +668,17 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
             {/* Search Grounding Toggle */}
             {mode === AppMode.IMAGE && params.imageModel === ImageModel.PRO && (
                <div className="flex flex-col gap-2 p-3 bg-dark-surface border border-dark-border rounded-xl animate-in fade-in slide-in-from-top-2">
-                  <div className="flex items-center justify-between">
-                      <div className="flex flex-col">
+                  <div className="flex items-center justify-between gap-3">
+                      <div className="flex flex-col flex-1 min-w-0">
                           <label className="text-xs font-bold text-gray-300 flex items-center gap-1.5 cursor-pointer select-none" onClick={() => setParams(prev => ({...prev, useGrounding: !prev.useGrounding}))}>
                               <Search size={12} className={params.useGrounding ? "text-brand-400" : "text-gray-500"} />
                               {t('lbl.use_search')}
                           </label>
-                          <p className="text-[10px] text-gray-500 mt-0.5">{t('help.search_desc')}</p>
+                          <p className="text-[10px] text-gray-500 mt-0.5 leading-tight">{t('help.search_desc')}</p>
                       </div>
                       <button 
                            onClick={() => setParams(prev => ({...prev, useGrounding: !prev.useGrounding}))}
-                           className={`w-9 h-5 rounded-full transition-colors relative flex items-center ${params.useGrounding ? 'bg-brand-500' : 'bg-gray-700'}`}
+                           className={`w-9 h-5 rounded-full transition-colors relative flex items-center shrink-0 ${params.useGrounding ? 'bg-brand-500' : 'bg-gray-700'}`}
                       >
                            <div className={`w-3.5 h-3.5 bg-white rounded-full shadow-sm transition-all absolute ${params.useGrounding ? 'translate-x-[18px]' : 'translate-x-[2px]'}`} />
                       </button>
