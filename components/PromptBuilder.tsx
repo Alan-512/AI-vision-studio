@@ -18,31 +18,50 @@ export const PromptBuilder: React.FC<PromptBuilderProps> = ({ onAppend, mode = A
       id: 'lighting',
       label: t('builder.lighting'),
       icon: <Sun size={14} />,
-      tags: ['Cinematic Lighting', 'Volumetric Fog', 'Golden Hour', 'Neon Lights', 'Rembrandt Lighting', 'Soft Studio Lighting', 'Bioluminescence', 'Dark Moody', 'God Rays', 'Rim Lighting']
+      tags: [
+        'bt.cinematic_lighting', 'bt.volumetric_fog', 'bt.golden_hour', 
+        'bt.neon_lights', 'bt.rembrandt', 'bt.soft_studio', 
+        'bt.bioluminescence', 'bt.dark_moody', 'bt.god_rays', 'bt.rim_lighting'
+      ]
     },
     {
       id: 'camera',
       label: t('builder.camera'),
       icon: <Camera size={14} />,
-      tags: ['Wide Angle', 'Macro Lens', 'Drone View', 'GoPro Footage', 'Bokeh Depth of Field', 'Fish-eye', 'Isometric View', 'Low Angle Shot', 'Telephoto', 'Motion Blur']
+      tags: [
+        'bt.wide_angle', 'bt.macro_lens', 'bt.drone_view', 'bt.gopro', 
+        'bt.bokeh', 'bt.fisheye', 'bt.isometric', 'bt.low_angle', 
+        'bt.telephoto', 'bt.motion_blur'
+      ]
     },
     {
       id: 'material',
       label: t('builder.material'),
       icon: <Box size={14} />,
-      tags: ['Metallic', 'Translucent', 'Matte Finish', 'Hyper-realistic Skin', 'Glass Texture', 'Rough Concrete', 'Silk Fabric', 'Holographic', 'Iridescent', 'Liquid Chrome']
+      tags: [
+        'bt.metallic', 'bt.translucent', 'bt.matte', 'bt.skin', 
+        'bt.glass', 'bt.concrete', 'bt.silk', 'bt.holographic', 
+        'bt.iridescent', 'bt.liquid_chrome'
+      ]
     },
     {
       id: 'style',
       label: t('builder.style'),
       icon: <Palette size={14} />,
-      tags: ['Minimalist', 'Abstract', 'Surrealism', 'Cyberpunk', 'Steampunk', 'Vaporwave', 'Gothic', 'Pop Art', 'Ukiyo-e', 'Noir']
+      tags: [
+        'bt.minimalist', 'bt.abstract', 'bt.surrealism', 'bt.cyberpunk', 
+        'bt.steampunk', 'bt.vaporwave', 'bt.gothic', 'bt.pop_art', 
+        'bt.ukiyo_e', 'bt.noir'
+      ]
     },
     {
       id: 'vibe',
       label: t('builder.vibe'),
       icon: <Move size={14} />,
-      tags: ['Chaos', 'Ethereal', 'Gritty', 'Dreamy', 'Epic Scale', 'Whimsical', 'Melancholic', 'Serene', 'Action Packed']
+      tags: [
+        'bt.chaos', 'bt.ethereal', 'bt.gritty', 'bt.dreamy', 'bt.epic_scale', 
+        'bt.whimsical', 'bt.melancholic', 'bt.serene', 'bt.action_packed'
+      ]
     }
   ];
 
@@ -51,25 +70,40 @@ export const PromptBuilder: React.FC<PromptBuilderProps> = ({ onAppend, mode = A
       id: 'camera_move',
       label: t('builder.camera_move'),
       icon: <Video size={14} />,
-      tags: ['Drone Shot / Aerial', 'Pan Left', 'Pan Right', 'Tilt Up', 'Tilt Down', 'Dolly In (Zoom In)', 'Dolly Out (Zoom Out)', 'Tracking Shot', 'Handheld Shake', 'FPV View', 'Low Angle / Worms Eye']
+      tags: [
+        'bt.drone_shot', 'bt.pan_left', 'bt.pan_right', 'bt.tilt_up', 
+        'bt.tilt_down', 'bt.dolly_in', 'bt.dolly_out', 'bt.tracking_shot', 
+        'bt.handheld', 'bt.fpv', 'bt.worms_eye'
+      ]
     },
     {
       id: 'motion',
       label: t('builder.motion'),
       icon: <Zap size={14} />,
-      tags: ['Slow Motion', 'Time-lapse', 'Hyper-lapse', 'High Speed Action', 'Static Camera', 'Motion Blur', 'Freeze Frame', 'Loop', 'Fluid Motion', 'Explosive Action']
+      tags: [
+        'bt.slow_motion', 'bt.time_lapse', 'bt.hyper_lapse', 'bt.high_speed', 
+        'bt.static_cam', 'bt.freeze_frame', 'bt.loop', 'bt.fluid_motion', 
+        'bt.explosive'
+      ]
     },
     {
       id: 'atmosphere',
       label: t('builder.atmosphere'),
       icon: <Sun size={14} />,
-      tags: ['Cinematic', 'Vintage Film Grain', 'Foggy / Hazy', 'Rainy / Stormy', 'Sunny Day', 'Night City Neon', 'Underwater', 'Dusty / Sandy', 'Sci-Fi Clean', 'Horror / Dark']
+      tags: [
+        'bt.vintage_film', 'bt.foggy', 'bt.rainy', 'bt.sunny', 
+        'bt.night_city', 'bt.underwater', 'bt.dusty', 'bt.scifi_clean', 
+        'bt.horror'
+      ]
     },
     {
       id: 'lens',
       label: t('builder.lens'),
       icon: <Aperture size={14} />,
-      tags: ['Shallow Depth of Field', 'Deep Focus', 'Rack Focus', 'Macro Close-up', 'Wide Angle Lens', 'Telephoto Lens', 'Fish-Eye Lens', 'Anamorphic Lens']
+      tags: [
+        'bt.shallow_dof', 'bt.deep_focus', 'bt.rack_focus', 'bt.macro_cu', 
+        'bt.wide_angle_lens', 'bt.telephoto_lens', 'bt.fisheye_lens', 'bt.anamorphic'
+      ]
     }
   ];
 
@@ -110,14 +144,14 @@ export const PromptBuilder: React.FC<PromptBuilderProps> = ({ onAppend, mode = A
       {/* Tag Grid */}
       {activeCategory && (
         <div className="bg-dark-surface/50 border border-dark-border rounded-xl p-3 grid grid-cols-2 md:grid-cols-3 gap-2 animate-in zoom-in-95 duration-200 max-h-48 overflow-y-auto custom-scrollbar">
-           {categories.find(c => c.id === activeCategory)?.tags.map(tag => (
+           {categories.find(c => c.id === activeCategory)?.tags.map(tagKey => (
              <button
-               key={tag}
-               onClick={() => onAppend(tag)}
+               key={tagKey}
+               onClick={() => onAppend(t(tagKey as any))}
                className="text-left text-xs text-gray-300 hover:text-brand-400 hover:bg-white/5 px-2 py-1.5 rounded transition-colors flex items-center gap-2 group"
              >
                <Tag size={10} className="text-gray-600 group-hover:text-brand-500" />
-               <span className="truncate">{tag}</span>
+               <span className="truncate">{t(tagKey as any)}</span>
              </button>
            ))}
         </div>

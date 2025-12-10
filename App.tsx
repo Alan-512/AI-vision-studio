@@ -1,5 +1,4 @@
 
-
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Image as ImageIcon, Video, LayoutGrid, Folder, Sparkles, Settings, Star, CheckSquare, MoveHorizontal, Brush, X, Languages, Trash2, Recycle } from 'lucide-react';
 import { AppMode, AspectRatio, GenerationParams, AssetItem, ImageResolution, VideoResolution, ImageModel, VideoModel, ImageStyle, Project, ChatMessage, BackgroundTask, SmartAsset } from './types';
@@ -570,14 +569,21 @@ export function App() {
              } catch {}
              playErrorSound();
 
-             if (error.message.includes('429') || error.message.includes('Quota') || error.message.includes('RESOURCE_EXHAUSTED')) {
+             const msg = error.message || "";
+             if (msg.includes('429') || msg.includes('Quota') || msg.includes('RESOURCE_EXHAUSTED')) {
                 const cooldownDuration = 60000; // 60s
                 setVideoCooldownEndTime(Date.now() + cooldownDuration);
-                addToast('error', 'Server Busy', 'Quota Limit reached. System is cooling down for 60 seconds.');
-             } else if (error.message === 'STORAGE_QUOTA_EXCEEDED') {
+                
+                // SPECIFIC VIDEO QUOTA HANDLING
+                if (currentMode === AppMode.VIDEO) {
+                    addToast('error', 'Daily Video Limit Reached', 'Google Veo has a daily generation limit. Please create a new API Key in Google Cloud Console and update it in Settings to continue.');
+                } else {
+                    addToast('error', 'Quota Exceeded', 'You have reached the API limit. Please wait or switch API Keys.');
+                }
+             } else if (msg === 'STORAGE_QUOTA_EXCEEDED') {
                 addToast('error', 'Storage Full', 'Browser storage is full. Please delete old videos from Trash.');
              } else {
-                addToast('error', 'Generation Failed', error.message);
+                addToast('error', 'Generation Failed', msg);
              }
          }
        } finally {
@@ -653,7 +659,7 @@ export function App() {
 
   return (
     <div className="flex h-screen bg-dark-bg text-gray-200 font-sans overflow-hidden selection:bg-brand-500/30">
-      <div className="w-20 flex flex-col items-center py-6 bg-dark-panel border-r border-dark-border z-30 shrink-0">
+      <div className="w-24 flex flex-col items-center py-6 bg-dark-panel border-r border-dark-border z-30 shrink-0">
         <div className="w-10 h-10 bg-gradient-to-br from-brand-500 to-indigo-600 rounded-xl shadow-lg shadow-brand-500/20 mb-8 flex items-center justify-center">
           <Sparkles className="text-white" size={24} />
         </div>

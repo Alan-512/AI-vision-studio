@@ -91,12 +91,12 @@ const parseError = (error: any): Error => {
       if (parsed.error) {
         // Specific check for 429/Quota
         if (parsed.error.code === 429 || parsed.error.status === 'RESOURCE_EXHAUSTED') {
-          return new Error("Server is busy (Quota Exceeded). This usually means a previous video is still processing in the background. Please wait 1-2 minutes.");
+          return new Error("Quota Exceeded. You have reached the daily generation limit for this API Key. Please create a new API Key to continue.");
         }
         if (parsed.error.message) {
           // If the inner message is the quota message, clean it up
           if (parsed.error.message.includes('quota') || parsed.error.message.includes('429')) {
-             return new Error("Server is busy (Quota Exceeded). This usually means a previous video is still processing in the background. Please wait 1-2 minutes.");
+             return new Error("Quota Exceeded. You have reached the daily generation limit for this API Key. Please create a new API Key to continue.");
           }
           message = parsed.error.message;
         }
@@ -108,7 +108,7 @@ const parseError = (error: any): Error => {
 
   // 3. Keyword checks on the cleaned message
   if (message.includes('429') || message.includes('RESOURCE_EXHAUSTED') || message.includes('Quota')) {
-      return new Error("Server is busy (Quota Exceeded). This usually means a previous video is still processing in the background. Please wait 1-2 minutes.");
+      return new Error("Quota Exceeded. You have reached the daily generation limit for this API Key. Please create a new API Key to continue.");
   }
 
   // Detect HTML in message directly (Proxy/WAF errors)
