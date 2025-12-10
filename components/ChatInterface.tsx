@@ -643,7 +643,7 @@ const ChatBubble: React.FC<{ message: ChatMessage }> = ({ message }) => {
               Code
            </div>
            <div className="p-3 overflow-x-auto">
-              <code className="font-mono text-xs text-gray-300 block whitespace-pre" {...props}>{children}</code>
+              <code className="font-mono text-xs text-gray-300 block whitespace-pre-wrap break-words" {...props}>{children}</code>
            </div>
         </div>
       )
