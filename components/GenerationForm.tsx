@@ -2,7 +2,7 @@ import React, { useRef, useState, useEffect } from 'react';
 import { AppMode, AspectRatio, GenerationParams, ImageResolution, VideoResolution, ImageModel, VideoModel, ImageStyle, VideoStyle, VideoDuration, ChatMessage, AssetItem, SmartAsset } from '../types';
 import { Settings2, Sparkles, Image as ImageIcon, Video as VideoIcon, Upload, X, Camera, Palette, Film, RefreshCw, MessageSquare, Layers, ChevronDown, ChevronUp, SlidersHorizontal, Monitor, Eye, Lock, Dice5, Type, User, ScanFace, Frame, ArrowRight, Loader2, Clock, BookTemplate, Clapperboard, XCircle, Search, AlertTriangle, Briefcase, Layout, Brush } from 'lucide-react';
 import { ChatInterface } from './ChatInterface';
-import { extractPromptFromHistory, optimizePrompt, describeImage } from '../services/geminiService';
+import { extractPromptFromHistory, optimizePrompt, describeImage, AgentAction } from '../services/geminiService';
 import { PromptBuilder } from './PromptBuilder';
 import { useLanguage } from '../contexts/LanguageContext';
 
@@ -11,7 +11,7 @@ interface GenerationFormProps {
   params: GenerationParams;
   setParams: React.Dispatch<React.SetStateAction<GenerationParams>>;
   isGenerating: boolean;
-  startTime?: number; // New prop: Absolute start time of generation
+  startTime?: number; 
   onGenerate: (overrideParams?: Partial<GenerationParams>) => void;
   onVerifyVeo: () => void;
   veoVerified: boolean;
@@ -22,7 +22,12 @@ interface GenerationFormProps {
   chatSelectedImages: string[];
   setChatSelectedImages: React.Dispatch<React.SetStateAction<string[]>>;
   projectId: string;
-  cooldownEndTime?: number; // New: Global Cooldown timestamp
+  cooldownEndTime?: number;
+  // Agent & Context Props
+  onToolCall?: (action: AgentAction) => void;
+  projectContextSummary?: string;
+  projectSummaryCursor?: number;
+  onUpdateProjectContext?: (summary: string, cursor: number) => void;
 }
 
 const VIDEO_TEMPLATES = [
@@ -49,7 +54,11 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
   chatSelectedImages,
   setChatSelectedImages,
   projectId,
-  cooldownEndTime = 0
+  cooldownEndTime = 0,
+  onToolCall,
+  projectContextSummary,
+  projectSummaryCursor,
+  onUpdateProjectContext
 }) => {
   const { t } = useLanguage();
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -588,16 +597,6 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
       }
   };
 
-  // We need to inject the recursive summary handlers to the ChatInterface here, 
-  // but GenerationForm doesn't receive them from App yet.
-  // Instead of prop drilling all the way down, let's use the App's state handling.
-  // Ideally GenerationForm should receive these, but for now we'll assume App passes them correctly if we add them to Props.
-  // Since we updated GenerationFormProps, App.tsx needs to pass contextSummary and cursor.
-  // Let's rely on React's prop spreading if we can, or just update GenerationFormProps explicitly.
-  
-  // Actually, I can't easily change App.tsx -> GenerationForm -> ChatInterface props without updating GenerationFormProps.
-  // Let's extend GenerationFormProps to include the summary handlers.
-  
   return (
     <div className="w-[400px] flex-shrink-0 flex flex-col border-r border-dark-border bg-dark-panel z-20 h-full">
       <div className="h-16 flex items-center px-4 border-b border-dark-border gap-2 shrink-0 justify-between">
@@ -635,13 +634,10 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
              params={params}
              setParams={setParams}
              mode={mode}
-             // Prop tunneling: The parent component (App) will pass these via {...props} effectively or we define them
-             // Since we didn't update the component signature in App.tsx fully to pass them explicitly yet,
-             // we rely on the fact that App *will* pass them.
-             // BUT Typescript will complain.
-             // We need to update GenerationFormProps above.
-             // I'll assume for now we use the state from App if provided.
-             {...((window as any).tempSummaryProps || {})} 
+             onToolCall={onToolCall}
+             projectContextSummary={projectContextSummary}
+             projectSummaryCursor={projectSummaryCursor}
+             onUpdateProjectContext={onUpdateProjectContext}
           />
         </div>
         {/* ... Rest of Studio Tab ... */}

@@ -138,6 +138,9 @@ export interface ChatMessage {
   image?: string; // Legacy: kept for backward compatibility
   images?: string[]; // New: Supports multiple images
   isThinking?: boolean; // Transient state for UI
+  toolCallId?: string; // If this message triggered a tool
+  toolName?: string; // Name of the tool used
+  toolStatus?: 'pending' | 'success' | 'failed'; // Status of the tool execution
 }
 
 export interface Project {
