@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Send, User, Sparkles, ChevronDown, ChevronRight, BrainCircuit, Zap, X, Box, ChevronUp, Copy, Check, Plus, Layers, Clock, MonitorPlay, Palette, Film, RefreshCw, Trash2, Bot, Square, Crop, Hammer, CheckCircle2, Globe, ScanFace } from 'lucide-react';
-import { ChatMessage, ChatModel, GenerationParams, ImageStyle, ImageResolution, AppMode, ImageModel, VideoResolution, VideoDuration, VideoModel, VideoStyle, AspectRatio, Project } from '../types';
+import { ChatMessage, ChatModel, GenerationParams, ImageStyle, ImageResolution, AppMode, ImageModel, VideoResolution, VideoDuration, VideoModel, VideoStyle, AspectRatio, Project, SmartAsset } from '../types';
 import { streamChatResponse, AgentAction } from '../services/geminiService';
 import { useLanguage } from '../contexts/LanguageContext';
 import ReactMarkdown from 'react-markdown';
@@ -20,6 +20,7 @@ interface ChatInterfaceProps {
   projectSummaryCursor?: number;
   onUpdateProjectContext?: (summary: string, cursor: number) => void;
   onToolCall?: (action: AgentAction) => void; 
+  agentContextAssets?: SmartAsset[]; // NEW: Added missing prop
 }
 
 export const ChatInterface: React.FC<ChatInterfaceProps> = ({ 
@@ -34,7 +35,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   projectContextSummary,
   projectSummaryCursor,
   onUpdateProjectContext,
-  onToolCall
+  onToolCall,
+  agentContextAssets // Destructure
 }) => {
   const { t } = useLanguage();
   const [input, setInput] = useState('');
@@ -215,8 +217,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         projectSummaryCursor,
         onUpdateProjectContext,
         onToolCall,
-        useSearch, // Pass Search State
-        params // Pass Current UI Params (including Auto Mode state)
+        useSearch, 
+        params, 
+        agentContextAssets // Pass context assets to service
       );
     } catch (error: any) {
        if (error.message === 'Cancelled' || error.name === 'AbortError') {

@@ -30,7 +30,7 @@ const DEFAULT_PARAMS: GenerationParams = {
 };
 
 // Helper to sanitize legacy models from old saves
-const sanitizeImageModel = (model: unknown): ImageModel => {
+const sanitizeImageModel = (model: any): ImageModel => {
   if (!model || typeof model !== 'string') return ImageModel.FLASH;
   
   // Valid models
@@ -508,7 +508,7 @@ export function App() {
         }
       };
       reader.readAsDataURL(blob);
-    } catch (e) {
+    } catch (e: any) {
       console.error("Remix failed", e);
       addToast('error', 'Remix Failed', 'Could not load image data.');
     }
@@ -533,7 +533,7 @@ export function App() {
               aspectRatio, 
               model, 
               style, 
-              resolution,
+              resolution, 
               negativePrompt,
               seed,
               guidanceScale,

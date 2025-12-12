@@ -28,6 +28,7 @@ interface GenerationFormProps {
   projectContextSummary?: string;
   projectSummaryCursor?: number;
   onUpdateProjectContext?: (summary: string, cursor: number) => void;
+  agentContextAssets?: SmartAsset[]; // NEW: Added missing prop
 }
 
 const VIDEO_TEMPLATES = [
@@ -58,7 +59,8 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
   onToolCall,
   projectContextSummary,
   projectSummaryCursor,
-  onUpdateProjectContext
+  onUpdateProjectContext,
+  agentContextAssets // Destructure new prop
 }) => {
   const { t } = useLanguage();
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -638,11 +640,13 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
              projectContextSummary={projectContextSummary}
              projectSummaryCursor={projectSummaryCursor}
              onUpdateProjectContext={onUpdateProjectContext}
+             agentContextAssets={agentContextAssets} // Pass down the prop
           />
         </div>
         {/* ... Rest of Studio Tab ... */}
         
         <div className={`absolute inset-0 overflow-y-auto p-6 space-y-6 custom-scrollbar ${activeTab === 'studio' ? 'z-10 opacity-100 pointer-events-auto' : 'z-0 opacity-0 pointer-events-none'}`}>
+          {/* ... existing Studio UI code ... */}
           {/* Model Selection */}
           <div className="space-y-3">
             <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">{t('lbl.model')}</label>

@@ -850,8 +850,8 @@ export const streamChatResponse = async (
   onUpdateContext?: (newSummary: string, newCursor: number) => void,
   onToolCall?: (action: AgentAction) => void,
   useGrounding: boolean = false,
-  currentParams?: GenerationParams, // NEW: Pass current UI params
-  contextAssets?: SmartAsset[] // NEW: Context Awareness Input
+  currentParams?: GenerationParams, 
+  contextAssets?: SmartAsset[] 
 ): Promise<string> => {
   const ai = getClient();
   const MAX_ACTIVE_WINDOW = 12;
@@ -886,18 +886,13 @@ export const streamChatResponse = async (
   const historyContent = buildHistoryContent(validActiveMessages, 3);
   
   const effectiveUseGrounding = useGrounding;
-  const isAutoMode = currentParams?.isAutoMode ?? true; // Default to Auto if not provided
+  const isAutoMode = currentParams?.isAutoMode ?? true; 
 
-  // Dynamic Tools Configuration
-  // CRITICAL FIX: The Google Search tool cannot be mixed with other Function Declarations.
-  // We must enforce mutual exclusivity based on whether search is requested.
   let activeTools: Tool[] = [];
 
   if (effectiveUseGrounding) {
-      // User explicitly requested Search, so we only provide the search tool
       activeTools = [{ googleSearch: {} }];
   } else {
-      // Default state: Provide custom tools (image generation)
       activeTools = [{ functionDeclarations: [generateImageTool] }];
   }
 
@@ -907,20 +902,14 @@ export const streamChatResponse = async (
 
   if (model === ChatModel.GEMINI_3_PRO_REASONING) {
     apiModelName = 'gemini-3-pro-preview';
-    
-    // Unconditionally enable thinking for Reasoning model
     modelConfig.thinkingConfig = {
         thinkingBudget: 16384, 
         includeThoughts: true
     };
-
-    // Enable Tools (Search or Image Gen)
     supportsFunctions = true;
     modelConfig.tools = activeTools;
   } else {
-    // Default to Flash for the Agent Logic as it handles tools well
     apiModelName = 'gemini-2.5-flash';
-    // ENABLE TOOLS for the default model
     modelConfig.tools = activeTools; 
   }
   
@@ -954,21 +943,31 @@ export const streamChatResponse = async (
     }) : "Unknown";
 
     // *** CONTEXT AWARENESS & LOOP PREVENTION ***
+    const identityAnchors = contextAssets?.filter(a => a.type === 'IDENTITY') || [];
+    const styleAnchors = contextAssets?.filter(a => a.type === 'STYLE') || [];
+
     let anchoringStatus = "";
     if (contextAssets && contextAssets.length > 0) {
-        const anchorCount = contextAssets.length;
         anchoringStatus = `
-        [CRITICAL STATE: PHASE 2 ACTIVE]
-        There are currently ${anchorCount} active Reference Anchors (Assets) attached to this context.
-        - The Character Sheet / Style Anchor step is COMPLETE.
-        - DO NOT generate more character sheets or anchors.
-        - PROCEED DIRECTLY to generating the specific panels/scenes requested by the user.
-        - When calling 'generate_image', MUST set 'use_ref_context=true'.
+        [CRITICAL MEMORY STATE: PHASE 2 - PRODUCTION]
+        STATUS: Reference Anchors are successfully loaded in memory.
+        - Active Identity Anchors: ${identityAnchors.length} (Character is locked)
+        - Active Style Anchors: ${styleAnchors.length} (Art style is locked)
+
+        [STRICT RULES FOR PHASE 2]:
+        1. **STOP** generating character sheets or reference grids. That task is complete.
+        2. **START** generating the actual panels/scenes requested immediately.
+        3. **MANDATORY**: You MUST set \`use_ref_context=true\` in the \`generate_image\` tool for all future calls to maintain consistency.
+        4. If the user asks for a "comic" or "storyboard", generate the panels one by one or in batch, but DO NOT regenerate the character design.
         `;
     } else {
         anchoringStatus = `
-        [STATE: PHASE 1]
-        No active anchors detected. If the user wants a consistent story/character, you should first generate a Character Sheet/Style Anchor (save_as_reference="IDENTITY").
+        [MEMORY STATE: PHASE 1 - SETUP]
+        STATUS: No character/style anchors detected.
+        
+        [RULES FOR PHASE 1]:
+        1. If the user wants a consistent character, generate a Character Sheet first.
+        2. Set \`save_as_reference="IDENTITY"\` in the tool call.
         `;
     }
 
