@@ -161,6 +161,8 @@ const translations = {
     'chat.stop': 'Stop Generation',
     'chat.tools': 'Tools',
     'chat.upload': 'Upload Image',
+    'chat.search_on': 'Search On',
+    'chat.search_off': 'Search Off',
     
     // Canvas
     'editor.title': 'Editor & Inpainting',
@@ -483,6 +485,8 @@ const translations = {
     'chat.stop': '停止生成',
     'chat.tools': '工具',
     'chat.upload': '上传图片',
+    'chat.search_on': 'Google 搜索已开启',
+    'chat.search_off': 'Google 搜索已关闭',
     
     // Canvas
     'editor.title': '编辑与重绘',

@@ -241,7 +241,7 @@ const generateImageTool: FunctionDeclaration = {
         description: "A highly detailed, descriptive prompt for the image generation model. Include style, lighting, composition, and subject details." 
       },
       aspectRatio: {
-        type: "STRING",
+        type: "STRING", 
         enum: ["1:1", "16:9", "9:16", "4:3", "3:4"],
         description: "The aspect ratio of the image. Default to 1:1 if not specified."
       }
@@ -250,9 +250,6 @@ const generateImageTool: FunctionDeclaration = {
   }
 };
 
-const tools: Tool[] = [
-  { functionDeclarations: [generateImageTool] }
-];
 // -------------------
 
 // --- NEW EXPORTED FUNCTIONS ---
@@ -802,7 +799,8 @@ export const streamChatResponse = async (
   projectContextSummary?: string,
   projectSummaryCursor?: number,
   onUpdateContext?: (newSummary: string, newCursor: number) => void,
-  onToolCall?: (action: AgentAction) => void // NEW CALLBACK
+  onToolCall?: (action: AgentAction) => void, // NEW CALLBACK
+  useGrounding: boolean = false // New Parameter
 ): Promise<string> => {
   const ai = getClient();
   const MAX_ACTIVE_WINDOW = 12;
@@ -835,25 +833,49 @@ export const streamChatResponse = async (
   }
 
   const historyContent = buildHistoryContent(validActiveMessages, 3);
+  
+  const effectiveUseGrounding = useGrounding;
+
+  // Dynamic Tools Configuration
+  // CRITICAL FIX: The Google Search tool cannot be mixed with other Function Declarations.
+  // We must enforce mutual exclusivity based on whether search is requested.
+  let activeTools: Tool[] = [];
+
+  if (effectiveUseGrounding) {
+      // User explicitly requested Search, so we only provide the search tool
+      activeTools = [{ googleSearch: {} }];
+  } else {
+      // Default state: Provide custom tools (image generation)
+      activeTools = [{ functionDeclarations: [generateImageTool] }];
+  }
 
   let apiModelName = 'gemini-2.5-flash'; 
   let modelConfig: any = {};
-  
+  let supportsFunctions = true; // Flag to track if functions are supported for system prompt
+
   if (model === ChatModel.GEMINI_3_PRO_REASONING) {
     apiModelName = 'gemini-3-pro-preview';
-    modelConfig = {
-      thinkingConfig: {
-        thinkingBudget: 16384, 
-        includeThoughts: true
-      },
-      // FIXED: Ensure tools are enabled for Thinking Model too
-      tools: tools
-    };
+    
+    if (effectiveUseGrounding) {
+        // CONFLICT RESOLUTION: Tools (Search) vs Thinking.
+        // User explicitly requested Search, so we prioritize Tools and disable Thinking for this turn.
+        supportsFunctions = true;
+        modelConfig.tools = activeTools;
+        // No thinkingConfig
+    } else {
+        // Standard Reasoning Mode
+        supportsFunctions = false;
+        modelConfig.thinkingConfig = {
+            thinkingBudget: 16384, 
+            includeThoughts: true
+        };
+        // No tools
+    }
   } else {
     // Default to Flash for the Agent Logic as it handles tools well
     apiModelName = 'gemini-2.5-flash';
     // ENABLE TOOLS for the default model
-    modelConfig.tools = tools; 
+    modelConfig.tools = activeTools; 
   }
   
   let roleInstruction = "";
@@ -864,16 +886,27 @@ export const streamChatResponse = async (
     Note: You cannot directly generate videos via tools yet, but you can guide them.
     `;
   } else {
-    // UPDATED SYSTEM PROMPT FOR CONSULTATIVE AGENT
+    // Calculate capabilities based on current config
+    const canGenImage = !effectiveUseGrounding && supportsFunctions;
+    
+    const toolsDesc = [];
+    if (canGenImage) toolsDesc.push("'generate_image'");
+    if (effectiveUseGrounding) toolsDesc.push("'googleSearch'");
+    
+    const toolAccessStr = toolsDesc.length > 0 
+        ? `You have access to ${toolsDesc.join(' and ')} tools.` 
+        : "You do not have access to tools (search/image generation) in this reasoning mode.";
+
     roleInstruction = `You are a professional Creative Director and Agent.
-    You have access to a 'generate_image' tool.
+    ${toolAccessStr}
     
     PROTOCOL:
     1. **Evaluation**: Analyze if the request is for a SINGLE image or a SEQUENCE (e.g. "PPT deck", "Storyboard", "Comic strip", "3 variations").
     
+    ${canGenImage ? `
     2. **Sequences (PPT/Comics/Storyboards)**:
        - **Planning**: Internally plan the content for each slide/panel.
-       - **Consistency**: You MUST strictly maintain style consistency. Define a "Global Style String" (e.g. "Flat vector art, corporate blue palette") and append it to the prompt of EVERY image in the sequence.
+       - **Consistency**: You MUST strictly maintain style consistency. Define a "Global Style String" (e.g. "Flat vector art, corporate blue palette") and append it to the prompt of EVERY image in the batch.
        - **Execution**: You MUST issue MULTIPLE 'generate_image' tool calls in a SINGLE response. One tool call per slide/panel. Do not ask for confirmation between slides.
        - **Response**: Tell the user you are generating the full set (e.g. "Generating 5 slides for your PPT...").
     
@@ -882,8 +915,16 @@ export const streamChatResponse = async (
        - If detailed OR if user says "surprise me", call 'generate_image'.
     
     4. **Confirmation**: When calling tools, you MUST also reply to the user with a confirmation message explaining what you are doing. Never call the tool silently.
+    ` : `
+    2. **Image Requests**:
+       - You CANNOT generate images directly in this specific turn ${effectiveUseGrounding ? "(Search is active)" : "(Reasoning mode active)"}. 
+       - If the user asks to generate an image, guide them to switch to the "Flash" model or turn off Search.
+       - Alternatively, provide a very detailed text description of what the image would look like, which the user can use as a prompt later.
+    `}
     
-    [CRITICAL]: Do not simulate the tool. You must emit native tool calls.
+    ${effectiveUseGrounding ? "5. **Search**: Use 'googleSearch' when the user asks for real-time information, trends, or specific data." : ""}
+    
+    [CRITICAL]: Do not simulate the tool. ${canGenImage ? "You must emit native tool calls." : ""}
     `;
   }
 
@@ -895,7 +936,7 @@ export const streamChatResponse = async (
   const systemInstruction = `
     ${roleInstruction}
     ${contextInjection}
-    INSTRUCTION: Provide direct, concise answers. Call tools when appropriate.
+    INSTRUCTION: Provide direct, concise answers. ${supportsFunctions ? "Call tools when appropriate." : ""}
     `;
 
   const messageParts = messageToParts(currentMessage);

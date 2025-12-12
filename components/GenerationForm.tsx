@@ -1201,8 +1201,8 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
         </div>
       </div>
       
-      {/* Footer Button - Fixed at Bottom - Only show if NOT in Video Mode + Chat Tab */}
-      {!(activeTab === 'chat' && mode === AppMode.VIDEO) && (
+      {/* Footer Button - Fixed at Bottom - Only show in Studio Tab */}
+      {activeTab === 'studio' && (
         <div className="p-4 bg-dark-panel border-t border-dark-border z-20 shrink-0">
             <button
               onClick={handleGenerateClick}

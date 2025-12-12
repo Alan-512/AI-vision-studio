@@ -1,6 +1,5 @@
-
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, User, Sparkles, ChevronDown, ChevronRight, BrainCircuit, Zap, X, SlidersHorizontal, ChevronUp, Copy, Check, Plus, Layers, Clock, MonitorPlay, Palette, Film, RefreshCw, Trash2, Bot, Square, Crop, Hammer, CheckCircle2 } from 'lucide-react';
+import { Send, User, Sparkles, ChevronDown, ChevronRight, BrainCircuit, Zap, X, SlidersHorizontal, ChevronUp, Copy, Check, Plus, Layers, Clock, MonitorPlay, Palette, Film, RefreshCw, Trash2, Bot, Square, Crop, Hammer, CheckCircle2, Globe } from 'lucide-react';
 import { ChatMessage, ChatModel, GenerationParams, ImageStyle, ImageResolution, AppMode, ImageModel, VideoResolution, VideoDuration, VideoModel, VideoStyle, AspectRatio, Project } from '../types';
 import { streamChatResponse, AgentAction } from '../services/geminiService';
 import { useLanguage } from '../contexts/LanguageContext';
@@ -41,6 +40,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [selectedModel, setSelectedModel] = useState<ChatModel>(ChatModel.GEMINI_3_PRO_FAST);
+  const [useSearch, setUseSearch] = useState(false); // NEW Search State
   
   const [showSettings, setShowSettings] = useState(false);
   const [showModelSelector, setShowModelSelector] = useState(false);
@@ -212,7 +212,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         projectContextSummary,
         projectSummaryCursor,
         onUpdateProjectContext,
-        onToolCall
+        onToolCall,
+        useSearch // Pass Search State
       );
     } catch (error: any) {
        if (error.message === 'Cancelled' || error.name === 'AbortError') {
@@ -312,6 +313,20 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
               <div className="flex items-center justify-between pt-2 border-t border-white/5">
                  <div className="flex items-center gap-1">
                      <button onClick={() => fileInputRef.current?.click()} className="p-2 text-gray-400 hover:text-white hover:bg-white/10 rounded-full transition-colors" title={t('chat.upload')}><Plus size={20} /></button>
+                     
+                     {/* Search Toggle */}
+                     <button 
+                        onClick={() => setUseSearch(!useSearch)}
+                        className={`p-2 rounded-full transition-colors flex items-center gap-1.5 ${
+                            useSearch 
+                            ? 'text-brand-400 bg-brand-500/10' 
+                            : 'text-gray-400 hover:text-white hover:bg-white/10'
+                        }`}
+                        title={useSearch ? t('chat.search_on') : t('chat.search_off')}
+                     >
+                        <Globe size={18} />
+                     </button>
+
                      {mode !== AppMode.VIDEO && (
                         <div className="relative">
                           <button className="settings-trigger p-2 text-gray-400 hover:text-white hover:bg-white/10 rounded-full transition-colors flex items-center gap-1.5" onClick={() => setShowSettings(!showSettings)} title="Generation Settings">
