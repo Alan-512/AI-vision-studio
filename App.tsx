@@ -19,6 +19,7 @@ const DEFAULT_PARAMS: GenerationParams = {
   prompt: '',
   aspectRatio: AspectRatio.SQUARE,
   continuousMode: false,
+  isAutoMode: true, // Default to Auto Mode
   imageModel: ImageModel.FLASH,
   imageResolution: ImageResolution.RES_1K,
   imageStyle: ImageStyle.NONE,
@@ -26,6 +27,25 @@ const DEFAULT_PARAMS: GenerationParams = {
   videoResolution: VideoResolution.RES_720P,
   isAnnotatedReference: false,
   numberOfImages: 1
+};
+
+// Helper to sanitize legacy models from old saves
+const sanitizeImageModel = (model: string | undefined): ImageModel => {
+  if (!model) return ImageModel.FLASH;
+  
+  // Valid models
+  if (model === ImageModel.FLASH || model === ImageModel.PRO) {
+    return model as ImageModel;
+  }
+
+  // Migration logic for "ghost" models
+  if (model.includes('imagen') || model.includes('pro') || model.includes('generate-002')) {
+    console.log(`[Migration] Migrating legacy model '${model}' to Gemini 3 Pro`);
+    return ImageModel.PRO;
+  }
+
+  // Default fallback
+  return ImageModel.FLASH;
 };
 
 const playSuccessSound = () => {
@@ -116,6 +136,11 @@ export function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
   const [chatSelectedImages, setChatSelectedImages] = useState<string[]>([]); 
+  
+  // NEW: AGENT CONTEXT ASSETS (Separated from Manual Studio Params)
+  // This stores the assets the Agent has decided to use as reference (Anchor-First workflow)
+  const [agentContextAssets, setAgentContextAssets] = useState<SmartAsset[]>([]);
+
   const [assets, setAssets] = useState<AssetItem[]>([]);
   const [showFavoritesOnly, setShowFavoritesOnly] = useState(false);
   
@@ -149,7 +174,16 @@ export function App() {
           setProjects(loadedProjects);
           const lastActive = loadedProjects[0];
           setActiveProjectId(lastActive.id);
-          if (lastActive.savedParams) setParams(lastActive.savedParams);
+          
+          if (lastActive.savedParams) {
+              const safeParams = { ...lastActive.savedParams };
+              // FORCE SANITIZATION ON LOAD
+              safeParams.imageModel = sanitizeImageModel(safeParams.imageModel as string);
+              setParams(safeParams);
+          } else {
+              setParams(DEFAULT_PARAMS);
+          }
+
           if (lastActive.savedMode) {
              setMode(lastActive.savedMode);
              if (lastActive.savedMode === AppMode.VIDEO) setChatHistory(lastActive.videoChatHistory || []);
@@ -232,6 +266,8 @@ export function App() {
           }
       };
       fetchAssets();
+      // Reset Agent Context when switching projects to avoid cross-contamination
+      setAgentContextAssets([]); 
   }, [activeProjectId]);
 
   useEffect(() => {
@@ -302,7 +338,18 @@ export function App() {
     const targetProject = targetProjectOverride || projects.find(p => p.id === projectId);
     if (!targetProject) return;
     setActiveProjectId(projectId);
-    setParams(targetProject.savedParams || DEFAULT_PARAMS);
+    
+    // Load Params safely
+    let loadedParams = targetProject.savedParams || DEFAULT_PARAMS;
+    
+    // FORCE SANITIZATION ON SWITCH
+    loadedParams = {
+        ...loadedParams,
+        imageModel: sanitizeImageModel(loadedParams.imageModel as string)
+    };
+    
+    setParams(loadedParams);
+
     setMode(targetProject.savedMode || AppMode.IMAGE);
     setChatHistory((targetProject.savedMode === AppMode.VIDEO ? targetProject.videoChatHistory : targetProject.chatHistory) || []);
     setContextSummary(targetProject.contextSummary || '');
@@ -404,7 +451,7 @@ export function App() {
            setParams(prev => ({
              ...prev, prompt: asset.prompt, seed: asset.metadata?.seed,
              aspectRatio: (asset.metadata?.aspectRatio as AspectRatio) || prev.aspectRatio,
-             imageModel: (asset.metadata?.model as ImageModel) || prev.imageModel,
+             imageModel: sanitizeImageModel(asset.metadata?.model), // SANITIZE HERE TOO
              imageStyle: (asset.metadata?.style as ImageStyle) || ImageStyle.NONE,
              imageResolution: (asset.metadata?.resolution as ImageResolution) || prev.imageResolution,
              smartAssets: [remixAsset],
@@ -434,33 +481,76 @@ export function App() {
   // --- AGENT TOOL EXECUTION HANDLER ---
   const handleAgentToolCall = async (action: AgentAction) => {
       if (action.toolName === 'generate_image') {
-          const { prompt, aspectRatio } = action.args;
+          const { 
+              prompt, 
+              aspectRatio, 
+              model, 
+              style, 
+              resolution,
+              negativePrompt,
+              seed,
+              guidanceScale,
+              save_as_reference,
+              use_ref_context,
+              numberOfImages // NEW: Support Batch Argument
+          } = action.args;
           
-          // 1. Force visual state to Gallery so user sees the loading card
           setRightPanelMode('GALLERY');
           
-          // 2. Ensure we are in Image Mode
           if (mode !== AppMode.IMAGE) handleModeSwitch(AppMode.IMAGE);
           
-          // 3. (Removed Toast) - Reduced verbosity
-
-          // 4. Update UI params (Async, won't be ready immediately)
-          setParams(prev => ({
-              ...prev,
-              prompt: prompt || prev.prompt,
-              aspectRatio: aspectRatio || prev.aspectRatio
-          }));
+          const executionParams: Partial<GenerationParams> = {
+              prompt: prompt || params.prompt,
+              aspectRatio: aspectRatio || params.aspectRatio,
+              imageModel: sanitizeImageModel(model || params.imageModel), // SANITIZE AGENT INPUT
+              imageStyle: style || params.imageStyle,
+              imageResolution: resolution || params.imageResolution,
+              negativePrompt: negativePrompt || params.negativePrompt,
+              seed: seed !== undefined ? seed : params.seed,
+              guidanceScale: guidanceScale || params.guidanceScale,
+              numberOfImages: numberOfImages || 1 // Atomic Batch Execution
+          };
           
-          // 5. Execute IMMEDIATELY with explicit overrides
-          // Passing AppMode.IMAGE explicitly to avoid race condition with state update
-          await handleGenerate({ 
-              prompt: prompt,
-              aspectRatio: aspectRatio
-          }, AppMode.IMAGE);
+          if (use_ref_context && agentContextAssets.length > 0) {
+              executionParams.smartAssets = [...(params.smartAssets || []), ...agentContextAssets];
+              addToast('info', 'Agent Context Active', `Using ${agentContextAssets.length} referenced assets.`);
+          }
+
+          let onSuccessCallback: ((asset: AssetItem) => void) | undefined;
+          
+          if (save_as_reference && save_as_reference !== 'NONE') {
+             onSuccessCallback = async (asset: AssetItem) => {
+                 try {
+                     const response = await fetch(asset.url);
+                     const blob = await response.blob();
+                     const reader = new FileReader();
+                     reader.onloadend = () => {
+                         const base64data = reader.result as string;
+                         const matches = base64data.match(/^data:(.+);base64,(.+)$/);
+                         if (matches) {
+                             const newSmartAsset: SmartAsset = {
+                                 id: crypto.randomUUID(),
+                                 data: matches[2],
+                                 mimeType: matches[1],
+                                 type: save_as_reference === 'STYLE' ? 'STYLE' : 'IDENTITY',
+                                 label: 'Agent Reference'
+                             };
+                             setAgentContextAssets(prev => [...prev, newSmartAsset]);
+                             addToast('success', 'Context Anchored', `New ${save_as_reference} reference saved.`);
+                         }
+                     };
+                     reader.readAsDataURL(blob);
+                 } catch (e) {
+                     console.error("Failed to capture asset context", e);
+                 }
+             };
+          }
+          
+          await handleGenerate(executionParams, AppMode.IMAGE, onSuccessCallback);
       }
   };
 
-  const handleGenerate = async (overrideParams?: Partial<GenerationParams>, modeOverride?: AppMode) => {
+  const handleGenerate = async (overrideParams?: Partial<GenerationParams>, modeOverride?: AppMode, onSuccess?: (asset: AssetItem) => void) => {
     if (Date.now() < videoCooldownEndTime) {
        addToast('error', 'System Cooled Down', 'Please wait for the timer to finish before generating again.');
        return;
@@ -469,12 +559,12 @@ export function App() {
     const userKey = getUserApiKey();
     if (!process.env.API_KEY && !userKey) { setShowSettings(true); return; }
     
-    // Merge params. If overrideParams has values, they take precedence.
-    // If not, fall back to current state 'params'.
-    const activeParams = { ...params, ...overrideParams };
-    
+    // Merge and SANITIZE final params before using them
+    let activeParams = { ...params, ...overrideParams };
+    activeParams.imageModel = sanitizeImageModel(activeParams.imageModel);
+
     const currentProjectId = activeProjectId;
-    const currentMode = modeOverride || mode; // Use override if provided
+    const currentMode = modeOverride || mode;
 
     const project = projects.find(p => p.id === currentProjectId);
     if (project && (project.name === 'New Project' || project.name === t('nav.new_project')) && activeParams.prompt) {
@@ -511,7 +601,8 @@ export function App() {
                  style: currentMode === AppMode.IMAGE ? activeParams.imageStyle : activeParams.videoStyle,
                  resolution: currentMode === AppMode.IMAGE ? activeParams.imageResolution : activeParams.videoResolution,
                  duration: currentMode === AppMode.VIDEO ? activeParams.videoDuration : undefined,
-                 seed: taskSeed
+                 seed: taskSeed,
+                 guidanceScale: activeParams.guidanceScale
              }
          };
          
@@ -531,6 +622,8 @@ export function App() {
                 setAssets(prev => prev.map(a => a.id === taskId ? asset : a));
             }
             setTasks(prev => prev.map(t => t.id === taskId ? { ...t, status: 'COMPLETED' } : t));
+            if (onSuccess) onSuccess(asset);
+
          } else {
             const videoUrl = await generateVideo(genParams, async (operationName) => { await updateAsset(taskId, { operationName }); }, onStart, controller.signal);
             const updates = { status: 'COMPLETED' as const, url: videoUrl, isNew: true };
@@ -602,7 +695,6 @@ export function App() {
       if (taskControllers.current[taskId]) {
           taskControllers.current[taskId].abort(); 
       } else {
-          // If no active controller (e.g. task is stuck or completed/failed in list), remove it from UI list manually
           setTasks(prev => prev.filter(t => t.id !== taskId));
       }
   };
@@ -792,6 +884,17 @@ export function App() {
                           )}
                        </div>
                        <div className="flex items-center gap-4">
+                          {/* Agent Context Indicator */}
+                          {agentContextAssets.length > 0 && rightPanelMode !== 'TRASH' && (
+                              <div className="flex items-center gap-2 bg-indigo-500/10 border border-indigo-500/30 px-3 py-1.5 rounded-full animate-in fade-in slide-in-from-top-2">
+                                  <div className="flex -space-x-2">
+                                      {agentContextAssets.slice(0, 3).map((a, i) => (
+                                          <img key={i} src={`data:${a.mimeType};base64,${a.data}`} className="w-5 h-5 rounded-full border border-dark-bg object-cover" alt="Context" />
+                                      ))}
+                                  </div>
+                                  <span className="text-[10px] text-indigo-300 font-bold">Active Context</span>
+                              </div>
+                          )}
                           <div className="text-xs text-gray-500 font-medium">{displayedAssets.length} {rightPanelMode === 'TRASH' ? t('header.trash_count') : t('header.assets')}</div>
                           <button onClick={() => setLanguage(language === 'en' ? 'zh' : 'en')} className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-xs font-medium text-gray-400 hover:text-white hover:bg-white/5 transition-all" title={language === 'en' ? 'Switch to Chinese' : 'Switch to English'}><Languages size={16} />{language === 'en' ? 'EN' : 'CN'}</button>
                        </div>

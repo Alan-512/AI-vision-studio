@@ -160,6 +160,7 @@ const translations = {
     'chat.copied': 'Copied',
     'chat.stop': 'Stop Generation',
     'chat.tools': 'Tools',
+    'chat.settings_tooltip': 'Generation Settings',
     'chat.upload': 'Upload Image',
     'chat.search_on': 'Search On',
     'chat.search_off': 'Search Off',
@@ -484,6 +485,7 @@ const translations = {
     'chat.copied': '已复制',
     'chat.stop': '停止生成',
     'chat.tools': '工具',
+    'chat.settings_tooltip': '生成设置',
     'chat.upload': '上传图片',
     'chat.search_on': 'Google 搜索已开启',
     'chat.search_off': 'Google 搜索已关闭',
@@ -650,7 +652,7 @@ const translations = {
     'bt.anamorphic': '变形宽银幕镜头',
 
     // Templates
-    'tmpl.select': '选择模版',
+    'tmpl.select': 'Select Template',
   }
 };
 

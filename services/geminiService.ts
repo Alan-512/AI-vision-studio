@@ -232,18 +232,58 @@ const videoQueue = new RequestQueue(1);
 // --- AGENT TOOLS ---
 const generateImageTool: FunctionDeclaration = {
   name: "generate_image",
-  description: "Generate an image based on a detailed text prompt. Use this when the user asks to create, draw, or generate an image.",
+  description: "Generate one or more images based on a detailed text prompt. Supports batch generation for consistency.",
   parameters: {
     type: "OBJECT",
     properties: {
       prompt: { 
         type: "STRING", 
-        description: "A highly detailed, descriptive prompt for the image generation model. Include style, lighting, composition, and subject details." 
+        description: "A highly detailed, descriptive prompt for the image generation model." 
+      },
+      numberOfImages: {
+        type: "INTEGER",
+        description: "The number of images to generate (1 to 4). Use this for batch generation (e.g., '2 panels', 'a sequence') to ensure parameters are identical across all images.",
+        enum: [1, 2, 3, 4]
       },
       aspectRatio: {
         type: "STRING", 
         enum: ["1:1", "16:9", "9:16", "4:3", "3:4"],
-        description: "The aspect ratio of the image. Default to 1:1 if not specified."
+        description: "The aspect ratio of the image."
+      },
+      model: {
+        type: "STRING",
+        enum: [ImageModel.FLASH, ImageModel.PRO],
+        description: "The AI model to use. 'gemini-2.5-flash-image' for speed/simple tasks, 'gemini-3-pro-image-preview' for high quality/text/complex scenes."
+      },
+      style: {
+        type: "STRING",
+        description: "The artistic style (e.g. 'Photorealistic', 'Anime & Manga', 'Cinematic', 'Digital Art', 'None')."
+      },
+      resolution: {
+        type: "STRING",
+        enum: ["1K", "2K", "4K"],
+        description: "Resolution. Use '1K' for Flash. Use '2K' or '4K' ONLY for Pro model."
+      },
+      negativePrompt: {
+        type: "STRING",
+        description: "Elements to exclude from the image (e.g. 'blurry, distorted, text')."
+      },
+      seed: {
+        type: "INTEGER",
+        description: "Random seed for reproducible generation."
+      },
+      guidanceScale: {
+        type: "NUMBER",
+        description: "Guidance scale (CFG), usually between 0 and 10. Higher values force the model to follow the prompt more strictly."
+      },
+      save_as_reference: {
+          type: "STRING",
+          enum: ["IDENTITY", "STYLE", "NONE"],
+          description: "Crucial for consistency. 'IDENTITY': Save this generated character as a reference for future panels. 'STYLE': Save this artistic style. 'NONE': One-off generation."
+      },
+      use_ref_context: {
+          type: "BOOLEAN",
+          description: "Set to TRUE if you want to use the previously saved IDENTITY/STYLE references to generate this image."
       }
     },
     required: ["prompt"]
@@ -279,7 +319,14 @@ export const generateImage = async (
     
     const ai = getClient();
     
-    const modelName = params.imageModel || ImageModel.FLASH; 
+    // SAFEGUARD: Ensure model is valid. Fallback to FLASH if not.
+    let modelName = params.imageModel;
+    const validModels: string[] = [ImageModel.FLASH, ImageModel.PRO];
+    
+    if (!validModels.includes(modelName)) {
+        console.warn(`[Service] Invalid model '${modelName}' detected. Falling back to Gemini 3 Pro.`);
+        modelName = ImageModel.PRO; // Default to Pro as safer high-quality fallback
+    }
     
     // Construct Content
     const parts: Part[] = [];
@@ -321,7 +368,9 @@ export const generateImage = async (
         if (params.useGrounding) config.tools = [{ googleSearch: {} }];
     }
     
+    // Advanced Params
     if (params.seed !== undefined) config.seed = params.seed;
+    if (params.guidanceScale !== undefined) config.imageConfig.guidanceScale = params.guidanceScale;
 
     // WRAP IN ABORTABLE
     const response: GenerateContentResponse = await makeAbortable(ai.models.generateContent({
@@ -369,6 +418,7 @@ export const generateImage = async (
             style: params.imageStyle,
             resolution: params.imageResolution,
             seed: params.seed,
+            guidanceScale: params.guidanceScale,
             usedGrounding: params.useGrounding
         }
     };
@@ -799,8 +849,9 @@ export const streamChatResponse = async (
   projectContextSummary?: string,
   projectSummaryCursor?: number,
   onUpdateContext?: (newSummary: string, newCursor: number) => void,
-  onToolCall?: (action: AgentAction) => void, // NEW CALLBACK
-  useGrounding: boolean = false // New Parameter
+  onToolCall?: (action: AgentAction) => void,
+  useGrounding: boolean = false,
+  currentParams?: GenerationParams // NEW: Pass current UI params
 ): Promise<string> => {
   const ai = getClient();
   const MAX_ACTIVE_WINDOW = 12;
@@ -835,6 +886,7 @@ export const streamChatResponse = async (
   const historyContent = buildHistoryContent(validActiveMessages, 3);
   
   const effectiveUseGrounding = useGrounding;
+  const isAutoMode = currentParams?.isAutoMode ?? true; // Default to Auto if not provided
 
   // Dynamic Tools Configuration
   // CRITICAL FIX: The Google Search tool cannot be mixed with other Function Declarations.
@@ -851,26 +903,20 @@ export const streamChatResponse = async (
 
   let apiModelName = 'gemini-2.5-flash'; 
   let modelConfig: any = {};
-  let supportsFunctions = true; // Flag to track if functions are supported for system prompt
+  let supportsFunctions = true; 
 
   if (model === ChatModel.GEMINI_3_PRO_REASONING) {
     apiModelName = 'gemini-3-pro-preview';
     
-    if (effectiveUseGrounding) {
-        // CONFLICT RESOLUTION: Tools (Search) vs Thinking.
-        // User explicitly requested Search, so we prioritize Tools and disable Thinking for this turn.
-        supportsFunctions = true;
-        modelConfig.tools = activeTools;
-        // No thinkingConfig
-    } else {
-        // Standard Reasoning Mode
-        supportsFunctions = false;
-        modelConfig.thinkingConfig = {
-            thinkingBudget: 16384, 
-            includeThoughts: true
-        };
-        // No tools
-    }
+    // Unconditionally enable thinking for Reasoning model
+    modelConfig.thinkingConfig = {
+        thinkingBudget: 16384, 
+        includeThoughts: true
+    };
+
+    // Enable Tools (Search or Image Gen)
+    supportsFunctions = true;
+    modelConfig.tools = activeTools;
   } else {
     // Default to Flash for the Agent Logic as it handles tools well
     apiModelName = 'gemini-2.5-flash';
@@ -897,34 +943,76 @@ export const streamChatResponse = async (
         ? `You have access to ${toolsDesc.join(' and ')} tools.` 
         : "You do not have access to tools (search/image generation) in this reasoning mode.";
 
+    // Context for Manual Mode
+    const currentSettingsContext = currentParams ? JSON.stringify({
+        model: currentParams.imageModel,
+        aspectRatio: currentParams.aspectRatio,
+        style: currentParams.imageStyle,
+        resolution: currentParams.imageResolution,
+        seed: currentParams.seed,
+        guidanceScale: currentParams.guidanceScale
+    }) : "Unknown";
+
+    const autoModeInstruction = isAutoMode 
+      ? `
+        **AUTO MODE IS ON - DIRECTOR MODE ENABLED**:
+        You are an expert Creative Director. You manage the visual assets and production pipeline.
+
+        **CONSISTENCY PROTOCOL (Source Grounding / Anchor-First)**:
+        If the user asks for a continuous story, comic, or consistent character:
+        1. **PHASE 1 - ANCHORING**:
+           - First, generate the "Character Sheet" or "Style Reference".
+           - **CRITICAL**: Call 'generate_image' with \`save_as_reference="IDENTITY"\` (or "STYLE").
+           - Tell the user: "I am creating the character reference sheet first."
+        
+        2. **PHASE 2 - GENERATION**:
+           - Once the anchor is established, generate the actual panels/scenes.
+           - **CRITICAL**: Call 'generate_image' with \`use_ref_context=true\`.
+           - This ensures the model uses the previously saved anchor image as a source.
+        
+        **BATCH / SEQUENCE CONSISTENCY PROTOCOL**:
+        If the user asks for MULTIPLE images (e.g., "draw 2 panels", "a sequence", "3 variations"):
+        - **DO NOT** call the tool multiple times.
+        - **DO** call 'generate_image' **ONCE** with the \`numberOfImages\` parameter set to the desired count (1-4).
+        - This guarantees that 'model', 'aspectRatio', and 'style' remain mathematically identical for the entire batch.
+      `
+      : `
+        **AUTO MODE IS OFF (MANUAL MODE)**:
+        - The user has manually selected specific settings.
+        - **YOU MUST USE** the following current settings for the tool call unless the user explicitly asks to change them in this specific prompt:
+        ${currentSettingsContext}
+        - Do not deviate from these settings unless instructed.
+      `;
+
     roleInstruction = `You are a professional Creative Director and Agent.
     ${toolAccessStr}
     
+    ${autoModeInstruction}
+
     PROTOCOL:
-    1. **Evaluation**: Analyze if the request is for a SINGLE image or a SEQUENCE (e.g. "PPT deck", "Storyboard", "Comic strip", "3 variations").
+    1. **Evaluation**: Analyze if the request is for a SINGLE image or a SEQUENCE.
     
     ${canGenImage ? `
-    2. **Sequences (PPT/Comics/Storyboards)**:
-       - **Planning**: Internally plan the content for each slide/panel.
-       - **Consistency**: You MUST strictly maintain style consistency. Define a "Global Style String" (e.g. "Flat vector art, corporate blue palette") and append it to the prompt of EVERY image in the batch.
-       - **Execution**: You MUST issue MULTIPLE 'generate_image' tool calls in a SINGLE response. One tool call per slide/panel. Do not ask for confirmation between slides.
-       - **Response**: Tell the user you are generating the full set (e.g. "Generating 5 slides for your PPT...").
-    
-    3. **Single Image**:
-       - If vague (e.g., "draw a cat"), DO NOT call the tool. Ask clarifying questions about style/mood.
-       - If detailed OR if user says "surprise me", call 'generate_image'.
-    
-    4. **Confirmation**: When calling tools, you MUST also reply to the user with a confirmation message explaining what you are doing. Never call the tool silently.
+    2. **Image Generation**:
+       - Call 'generate_image' with the appropriate arguments based on the Auto/Manual mode rules above.
+       - Use 'numberOfImages' for batch requests (1-4).
+       - Use 'save_as_reference' if you are establishing a new character/style anchor.
+       - Use 'use_ref_context' if you want to maintain consistency with previous anchors.
+       - **Response**: Confirm you are generating the image.
     ` : `
-    2. **Image Requests**:
-       - You CANNOT generate images directly in this specific turn ${effectiveUseGrounding ? "(Search is active)" : "(Reasoning mode active)"}. 
-       - If the user asks to generate an image, guide them to switch to the "Flash" model or turn off Search.
-       - Alternatively, provide a very detailed text description of what the image would look like, which the user can use as a prompt later.
+    2. **Image Requests (Search Active)**:
+       - Since Google Search is active, the native 'generate_image' tool is disabled.
+       - Use the SPECIAL COMMAND to generate:
+         !!!GENERATE_IMAGE prompt="..." aspectRatio="..." model="..." style="..." resolution="..."!!!
+       - **IMPORTANT**: 
+         - Include 'model', 'style', 'resolution' attributes in the command based on the same Auto/Manual logic.
+         - Ensure the prompt attribute value does not contain unescaped double quotes.
+         - Do not output markdown code blocks for this command. Just raw text.
     `}
     
-    ${effectiveUseGrounding ? "5. **Search**: Use 'googleSearch' when the user asks for real-time information, trends, or specific data." : ""}
+    ${effectiveUseGrounding ? "3. **Search**: Use 'googleSearch' when the user asks for real-time information, trends, or specific data." : ""}
     
-    [CRITICAL]: Do not simulate the tool. ${canGenImage ? "You must emit native tool calls." : ""}
+    [CRITICAL]: Do not simulate the tool. ${canGenImage ? "You must emit native tool calls." : "Use the !!!GENERATE_IMAGE...!!! command if you need to create an image while search is active."}
     `;
   }
 
@@ -956,6 +1044,10 @@ export const streamChatResponse = async (
       let fullText = '';
       let hasOpenedThought = false;
       let toolCallDetected = false;
+      const processedToolCalls = new Set<string>();
+      
+      // Extended regex to capture new params
+      const virtualToolRegex = /!!!GENERATE_IMAGE\s+prompt="([\s\S]*?)"(?:\s+aspectRatio="([^"]*)")?(?:\s+model="([^"]*)")?(?:\s+style="([^"]*)")?(?:\s+resolution="([^"]*)")?\s*!!!/g;
 
       for await (const chunk of result) {
         if (signal?.aborted) break;
@@ -997,12 +1089,53 @@ export const streamChatResponse = async (
             if (text) fullText += text;
         }
 
-        onChunk(fullText);
+        // VIRTUAL TOOL DETECTION (Regex Parsing on accumulated text)
+        if (effectiveUseGrounding) {
+            let match;
+            // Reset regex lastIndex because we are scanning fullText which grows
+            virtualToolRegex.lastIndex = 0; 
+            
+            while ((match = virtualToolRegex.exec(fullText)) !== null) {
+                const fullMatch = match[0];
+                if (!processedToolCalls.has(fullMatch)) {
+                    processedToolCalls.add(fullMatch);
+                    const prompt = match[1];
+                    const aspectRatio = match[2];
+                    const model = match[3];
+                    const style = match[4];
+                    const resolution = match[5];
+                    
+                    toolCallDetected = true; // Mark as tool used to show correct UI status
+
+                    if (onToolCall) {
+                        setTimeout(() => {
+                             onToolCall({
+                                 toolName: 'generate_image',
+                                 args: { prompt, aspectRatio, model, style, resolution }
+                             });
+                        }, 0);
+                    }
+                }
+            }
+        }
+
+        // Clean output for UI
+        let displayUI = fullText;
+        if (effectiveUseGrounding) {
+            displayUI = fullText.replace(virtualToolRegex, '\n[Generating Image...]');
+        }
+
+        onChunk(displayUI);
       }
       
       if (hasOpenedThought) {
           fullText += '</thought>';
-          onChunk(fullText);
+          // Clean output for UI one last time
+          let displayUI = fullText;
+          if (effectiveUseGrounding) {
+              displayUI = fullText.replace(virtualToolRegex, '\n[Generating Image...]');
+          }
+          onChunk(displayUI);
       }
       
       // Safety: If tool called but no text, ensure we don't leave it completely blank or it might look stuck
@@ -1011,6 +1144,10 @@ export const streamChatResponse = async (
           onChunk(fullText);
       }
       
+      // Return the CLEANED text so history doesn't contain the raw command
+      if (effectiveUseGrounding) {
+          return fullText.replace(virtualToolRegex, '');
+      }
       return fullText;
   };
 

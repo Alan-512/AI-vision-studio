@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, User, Sparkles, ChevronDown, ChevronRight, BrainCircuit, Zap, X, SlidersHorizontal, ChevronUp, Copy, Check, Plus, Layers, Clock, MonitorPlay, Palette, Film, RefreshCw, Trash2, Bot, Square, Crop, Hammer, CheckCircle2, Globe } from 'lucide-react';
+import { Send, User, Sparkles, ChevronDown, ChevronRight, BrainCircuit, Zap, X, Box, ChevronUp, Copy, Check, Plus, Layers, Clock, MonitorPlay, Palette, Film, RefreshCw, Trash2, Bot, Square, Crop, Hammer, CheckCircle2, Globe, ScanFace } from 'lucide-react';
 import { ChatMessage, ChatModel, GenerationParams, ImageStyle, ImageResolution, AppMode, ImageModel, VideoResolution, VideoDuration, VideoModel, VideoStyle, AspectRatio, Project } from '../types';
 import { streamChatResponse, AgentAction } from '../services/geminiService';
 import { useLanguage } from '../contexts/LanguageContext';
@@ -19,7 +19,7 @@ interface ChatInterfaceProps {
   projectContextSummary?: string;
   projectSummaryCursor?: number;
   onUpdateProjectContext?: (summary: string, cursor: number) => void;
-  onToolCall?: (action: AgentAction) => void; // New prop
+  onToolCall?: (action: AgentAction) => void; 
 }
 
 export const ChatInterface: React.FC<ChatInterfaceProps> = ({ 
@@ -40,7 +40,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [selectedModel, setSelectedModel] = useState<ChatModel>(ChatModel.GEMINI_3_PRO_FAST);
-  const [useSearch, setUseSearch] = useState(false); // NEW Search State
+  const [useSearch, setUseSearch] = useState(false); 
   
   const [showSettings, setShowSettings] = useState(false);
   const [showModelSelector, setShowModelSelector] = useState(false);
@@ -53,6 +53,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   const abortControllerRef = useRef<AbortController | null>(null);
 
   const MAX_FILE_SIZE = 20 * 1024 * 1024;
+
+  const isAutoMode = params.isAutoMode ?? true;
 
   const getRatioLabel = (r: AspectRatio) => {
     const enumKey = Object.keys(AspectRatio).find(k => AspectRatio[k as keyof typeof AspectRatio] === r);
@@ -213,7 +215,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         projectSummaryCursor,
         onUpdateProjectContext,
         onToolCall,
-        useSearch // Pass Search State
+        useSearch, // Pass Search State
+        params // Pass Current UI Params (including Auto Mode state)
       );
     } catch (error: any) {
        if (error.message === 'Cancelled' || error.name === 'AbortError') {
@@ -305,7 +308,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 onKeyDown={handleKeyDown}
                 onPaste={handlePaste}
                 placeholder={t('chat.placeholder')}
-                className="w-full bg-transparent border-0 focus:ring-0 text-sm text-gray-200 placeholder-gray-500 resize-none overflow-hidden px-1 py-1 leading-relaxed"
+                className="w-full bg-transparent border-0 focus:ring-0 focus:outline-none outline-none text-sm text-gray-200 placeholder-gray-500 resize-none overflow-hidden px-1 py-1 leading-relaxed"
                 rows={1}
                 style={{ minHeight: '32px' }}
               />
@@ -329,9 +332,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
 
                      {mode !== AppMode.VIDEO && (
                         <div className="relative">
-                          <button className="settings-trigger p-2 text-gray-400 hover:text-white hover:bg-white/10 rounded-full transition-colors flex items-center gap-1.5" onClick={() => setShowSettings(!showSettings)} title="Generation Settings">
-                            <SlidersHorizontal size={18} />
-                            <span className="text-xs font-medium">{t('chat.tools')}</span>
+                          <button className="settings-trigger p-2 text-gray-400 hover:text-white hover:bg-white/10 rounded-full transition-colors flex items-center justify-center" onClick={() => setShowSettings(!showSettings)} title={t('chat.settings_tooltip')}>
+                            <Box size={20} />
                           </button>
                           {showSettings && (
                             <div className="settings-popover absolute bottom-12 left-0 w-64 bg-dark-surface border border-dark-border rounded-xl shadow-xl p-4 z-50 animate-in slide-in-from-bottom-2 fade-in">
@@ -340,29 +342,44 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                   <button onClick={() => setShowSettings(false)} className="text-gray-500 hover:text-white"><X size={14}/></button>
                                 </div>
                                 <div className="space-y-4 max-h-[300px] overflow-y-auto pr-1 custom-scrollbar">
-                                  <div className="space-y-1.5">
-                                      <label className="text-[10px] text-gray-400 font-bold flex items-center gap-1"><Bot size={10} /> {t('lbl.model').toUpperCase()}</label>
-                                      <select value={mode === AppMode.IMAGE ? params.imageModel : params.videoModel} onChange={(e) => setParams(prev => mode === AppMode.IMAGE ? ({...prev, imageModel: e.target.value as ImageModel}) : ({...prev, videoModel: e.target.value as VideoModel}))} className="w-full bg-dark-bg border border-dark-border rounded-lg px-2 py-1.5 text-xs text-white">
-                                        {mode === AppMode.IMAGE ? (<><option value={ImageModel.FLASH}>{t('model.flash')}</option><option value={ImageModel.PRO}>{t('model.pro')}</option></>) : (<><option value={VideoModel.VEO_FAST}>{t('model.veo_fast')}</option><option value={VideoModel.VEO_HQ}>{t('model.veo_hq')}</option></>)}
-                                      </select>
+                                  
+                                  {/* AUTO MODE TOGGLE */}
+                                  <div className="flex items-center justify-between p-2 rounded-lg bg-black/20 border border-dark-border">
+                                      <span className="text-xs font-bold text-brand-400">Auto Mode</span>
+                                      <button 
+                                          onClick={() => setParams(prev => ({...prev, isAutoMode: !prev.isAutoMode}))}
+                                          className={`w-8 h-4 rounded-full transition-colors relative flex items-center shrink-0 ${isAutoMode ? 'bg-brand-500' : 'bg-gray-700'}`}
+                                      >
+                                          <div className={`w-3 h-3 bg-white rounded-full shadow-sm transition-all absolute ${isAutoMode ? 'translate-x-[18px]' : 'translate-x-[2px]'}`} />
+                                      </button>
                                   </div>
-                                  <div className="space-y-1.5">
-                                      <label className="text-[10px] text-gray-400 font-bold flex items-center gap-1"><Crop size={10} /> {t('lbl.aspect_ratio').toUpperCase()}</label>
-                                      <select value={params.aspectRatio} onChange={(e) => setParams(prev => ({...prev, aspectRatio: e.target.value as AspectRatio}))} className="w-full bg-dark-bg border border-dark-border rounded-lg px-2 py-1.5 text-xs text-white">
-                                        {Object.values(AspectRatio).map(ratio => (<option key={ratio} value={ratio}>{getRatioLabel(ratio)}</option>))}
-                                      </select>
-                                  </div>
-                                  <div className="space-y-1.5">
-                                      <label className="text-[10px] text-gray-400 font-bold flex items-center gap-1"><Palette size={10} /> {t('lbl.style').toUpperCase()}</label>
-                                      <select value={mode === AppMode.IMAGE ? params.imageStyle : params.videoStyle} onChange={(e) => setParams(prev => mode === AppMode.IMAGE ? ({...prev, imageStyle: e.target.value as ImageStyle}) : ({...prev, videoStyle: e.target.value as VideoStyle}))} className="w-full bg-dark-bg border border-dark-border rounded-lg px-2 py-1.5 text-xs text-white">
-                                        {mode === AppMode.IMAGE ? Object.entries(ImageStyle).map(([k, v]) => <option key={k} value={v}>{t(`style.${k}` as any) || v}</option>) : Object.entries(VideoStyle).map(([k, v]) => <option key={k} value={v}>{t(`style.${k}` as any) || v}</option>)}
-                                      </select>
-                                  </div>
-                                  <div className="space-y-1.5">
-                                      <label className="text-[10px] text-gray-400 font-bold flex items-center gap-1"><MonitorPlay size={10} /> {t('lbl.resolution').toUpperCase()}</label>
-                                      <select value={mode === AppMode.IMAGE ? params.imageResolution : params.videoResolution} onChange={(e) => setParams(prev => mode === AppMode.IMAGE ? ({...prev, imageResolution: e.target.value as ImageResolution}) : ({...prev, videoResolution: e.target.value as VideoResolution}))} className="w-full bg-dark-bg border border-dark-border rounded-lg px-2 py-1.5 text-xs text-white">
-                                        {mode === AppMode.IMAGE ? (<><option value={ImageResolution.RES_1K}>1K</option><option value={ImageResolution.RES_2K}>2K (Pro)</option><option value={ImageResolution.RES_4K}>4K (Pro)</option></>) : (<><option value={VideoResolution.RES_720P}>720p</option><option value={VideoResolution.RES_1080P}>1080p</option></>)}
-                                      </select>
+
+                                  {/* MANUAL CONTROLS */}
+                                  <div className={`space-y-4 transition-opacity ${isAutoMode ? 'opacity-50 pointer-events-none' : ''}`}>
+                                      <div className="space-y-1.5">
+                                          <label className="text-[10px] text-gray-400 font-bold flex items-center gap-1"><Bot size={10} /> {t('lbl.model').toUpperCase()}</label>
+                                          <select value={mode === AppMode.IMAGE ? params.imageModel : params.videoModel} onChange={(e) => setParams(prev => mode === AppMode.IMAGE ? ({...prev, imageModel: e.target.value as ImageModel}) : ({...prev, videoModel: e.target.value as VideoModel}))} className="w-full bg-dark-bg border border-dark-border rounded-lg px-2 py-1.5 text-xs text-white">
+                                            {mode === AppMode.IMAGE ? (<><option value={ImageModel.FLASH}>{t('model.flash')}</option><option value={ImageModel.PRO}>{t('model.pro')}</option></>) : (<><option value={VideoModel.VEO_FAST}>{t('model.veo_fast')}</option><option value={VideoModel.VEO_HQ}>{t('model.veo_hq')}</option></>)}
+                                          </select>
+                                      </div>
+                                      <div className="space-y-1.5">
+                                          <label className="text-[10px] text-gray-400 font-bold flex items-center gap-1"><Crop size={10} /> {t('lbl.aspect_ratio').toUpperCase()}</label>
+                                          <select value={params.aspectRatio} onChange={(e) => setParams(prev => ({...prev, aspectRatio: e.target.value as AspectRatio}))} className="w-full bg-dark-bg border border-dark-border rounded-lg px-2 py-1.5 text-xs text-white">
+                                            {Object.values(AspectRatio).map(ratio => (<option key={ratio} value={ratio}>{getRatioLabel(ratio)}</option>))}
+                                          </select>
+                                      </div>
+                                      <div className="space-y-1.5">
+                                          <label className="text-[10px] text-gray-400 font-bold flex items-center gap-1"><Palette size={10} /> {t('lbl.style').toUpperCase()}</label>
+                                          <select value={mode === AppMode.IMAGE ? params.imageStyle : params.videoStyle} onChange={(e) => setParams(prev => mode === AppMode.IMAGE ? ({...prev, imageStyle: e.target.value as ImageStyle}) : ({...prev, videoStyle: e.target.value as VideoStyle}))} className="w-full bg-dark-bg border border-dark-border rounded-lg px-2 py-1.5 text-xs text-white">
+                                            {mode === AppMode.IMAGE ? Object.entries(ImageStyle).map(([k, v]) => <option key={k} value={v}>{t(`style.${k}` as any) || v}</option>) : Object.entries(VideoStyle).map(([k, v]) => <option key={k} value={v}>{t(`style.${k}` as any) || v}</option>)}
+                                          </select>
+                                      </div>
+                                      <div className="space-y-1.5">
+                                          <label className="text-[10px] text-gray-400 font-bold flex items-center gap-1"><MonitorPlay size={10} /> {t('lbl.resolution').toUpperCase()}</label>
+                                          <select value={mode === AppMode.IMAGE ? params.imageResolution : params.videoResolution} onChange={(e) => setParams(prev => mode === AppMode.IMAGE ? ({...prev, imageResolution: e.target.value as ImageResolution}) : ({...prev, videoResolution: e.target.value as VideoResolution}))} className="w-full bg-dark-bg border border-dark-border rounded-lg px-2 py-1.5 text-xs text-white">
+                                            {mode === AppMode.IMAGE ? (<><option value={ImageResolution.RES_1K}>1K</option><option value={ImageResolution.RES_2K}>2K (Pro)</option><option value={ImageResolution.RES_4K}>4K (Pro)</option></>) : (<><option value={VideoResolution.RES_720P}>720p</option><option value={VideoResolution.RES_1080P}>1080p</option></>)}
+                                          </select>
+                                      </div>
                                   </div>
                                 </div>
                             </div>
@@ -421,8 +438,11 @@ const ChatBubble: React.FC<{ message: ChatMessage }> = ({ message }) => {
   }, [message.isThinking, message.role]);
 
   let thoughtContent = '';
-  // Clean raw content from internal tool logs
-  let finalContent = message.content.replace(/\[Using Tool:.*?\]/g, '').trim();
+  // Clean raw content from internal tool logs AND any residual Virtual Tool commands
+  let finalContent = message.content
+      .replace(/\[Using Tool:.*?\]/g, '')
+      .replace(/!!!GENERATE_IMAGE\s+prompt="([\s\S]*?)"(?:\s+aspectRatio="([^"]*)")?\s*!!!/g, '') // Extra cleanup in case stream leaked
+      .trim();
   
   const openMatch = message.content.match(/<\s*thought\s*>([\s\S]*)/i);
   let hasThoughtTag = false;
@@ -444,7 +464,9 @@ const ChatBubble: React.FC<{ message: ChatMessage }> = ({ message }) => {
   }
 
   // Check if tool was used in this message
-  const isUsingTool = message.content.includes('[Using Tool:');
+  const isUsingTool = message.content.includes('[Using Tool:') || message.content.includes('!!!GENERATE_IMAGE');
+  // Check if it was a Context Setting tool
+  const isAnchoring = message.content.includes('save_as_reference');
 
   const handleCopy = () => {
     navigator.clipboard.writeText(finalContent);
@@ -525,8 +547,18 @@ const ChatBubble: React.FC<{ message: ChatMessage }> = ({ message }) => {
                 </div>
                 <div className="flex-1">
                     <div className="text-xs font-bold text-brand-300">Tool Used: Image Generator</div>
-                    <div className="text-[10px] text-brand-400/70">{message.isThinking ? "Processing request..." : "Task added to queue."}</div>
+                    <div className="text-[10px] text-brand-400/70">
+                        {message.isThinking 
+                            ? "Processing request..." 
+                            : isAnchoring ? "Creating & Locking Character Reference..." : "Generating visual content..."}
+                    </div>
                 </div>
+                {isAnchoring && (
+                   <div className="flex items-center gap-1 text-[10px] text-indigo-300 bg-indigo-500/20 px-2 py-1 rounded">
+                       <ScanFace size={10} />
+                       Anchor
+                   </div>
+                )}
             </div>
         )}
 

@@ -86,6 +86,7 @@ export interface GenerationParams {
   negativePrompt?: string; // Not directly supported by all Gemini models but good for UI
   aspectRatio: AspectRatio;
   continuousMode?: boolean; // New: Auto-use result as reference for next turn
+  isAutoMode?: boolean; // New: Agent Autonomous Mode
   
   // Image specific
   imageModel: ImageModel;
@@ -93,6 +94,7 @@ export interface GenerationParams {
   imageStyle?: ImageStyle;
   numberOfImages?: number; // New: Number of images to generate (1-4)
   useGrounding?: boolean; // New: Use Google Search Grounding (Pro model only)
+  guidanceScale?: number; // New: CFG Scale (0-10 or higher)
   
   // --- NEW: UNIFIED VISUAL CONTROL ---
   smartAssets?: SmartAsset[];
@@ -181,6 +183,7 @@ export interface AssetItem {
     duration?: string;
     resolution?: string;
     seed?: number; // Added seed
+    guidanceScale?: number; // Added CFG
     usedGrounding?: boolean; // New: Metadata to track if grounding was used
   };
 }
