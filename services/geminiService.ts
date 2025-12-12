@@ -1,4 +1,4 @@
-import { GoogleGenAI, GenerateContentResponse, Content, Part, FunctionDeclaration, Tool, FunctionCall } from "@google/genai";
+import { GoogleGenAI, GenerateContentResponse, Content, Part, FunctionDeclaration, Tool, FunctionCall, Type } from "@google/genai";
 import { GenerationParams, AspectRatio, ImageResolution, VideoResolution, AssetItem, ImageModel, ImageStyle, VideoStyle, VideoDuration, VideoModel, ChatMessage, ChatModel, AppMode, SmartAsset } from "../types";
 
 const USER_API_KEY_STORAGE_KEY = 'user_gemini_api_key';
@@ -19,6 +19,11 @@ const TAG_TO_ENGLISH: Record<string, string> = {
     'tag.texture': 'Texture',
     'tag.artstyle': 'Art Style'
 };
+
+export interface AgentAction {
+  toolName: string;
+  args: any;
+}
 
 export const saveUserApiKey = (key: string) => {
   localStorage.setItem(USER_API_KEY_STORAGE_KEY, key);
@@ -234,55 +239,54 @@ const generateImageTool: FunctionDeclaration = {
   name: "generate_image",
   description: "Generate one or more images based on a detailed text prompt. Supports batch generation for consistency.",
   parameters: {
-    type: "OBJECT",
+    type: Type.OBJECT,
     properties: {
       prompt: { 
-        type: "STRING", 
+        type: Type.STRING, 
         description: "A highly detailed, descriptive prompt for the image generation model." 
       },
       numberOfImages: {
-        type: "INTEGER",
+        type: Type.INTEGER,
         description: "The number of images to generate (1 to 4). Use this for batch generation (e.g., '2 panels', 'a sequence') to ensure parameters are identical across all images.",
-        enum: [1, 2, 3, 4]
       },
       aspectRatio: {
-        type: "STRING", 
+        type: Type.STRING, 
         enum: ["1:1", "16:9", "9:16", "4:3", "3:4"],
         description: "The aspect ratio of the image."
       },
       model: {
-        type: "STRING",
+        type: Type.STRING,
         enum: [ImageModel.FLASH, ImageModel.PRO],
         description: "The AI model to use. 'gemini-2.5-flash-image' for speed/simple tasks, 'gemini-3-pro-image-preview' for high quality/text/complex scenes."
       },
       style: {
-        type: "STRING",
+        type: Type.STRING,
         description: "The artistic style (e.g. 'Photorealistic', 'Anime & Manga', 'Cinematic', 'Digital Art', 'None')."
       },
       resolution: {
-        type: "STRING",
+        type: Type.STRING,
         enum: ["1K", "2K", "4K"],
         description: "Resolution. Use '1K' for Flash. Use '2K' or '4K' ONLY for Pro model."
       },
       negativePrompt: {
-        type: "STRING",
+        type: Type.STRING,
         description: "Elements to exclude from the image (e.g. 'blurry, distorted, text')."
       },
       seed: {
-        type: "INTEGER",
+        type: Type.INTEGER,
         description: "Random seed for reproducible generation."
       },
       guidanceScale: {
-        type: "NUMBER",
+        type: Type.NUMBER,
         description: "Guidance scale (CFG), usually between 0 and 10. Higher values force the model to follow the prompt more strictly."
       },
       save_as_reference: {
-          type: "STRING",
+          type: Type.STRING,
           enum: ["IDENTITY", "STYLE", "NONE"],
           description: "Crucial for consistency. 'IDENTITY': Save this generated character as a reference for future panels. 'STYLE': Save this artistic style. 'NONE': One-off generation."
       },
       use_ref_context: {
-          type: "BOOLEAN",
+          type: Type.BOOLEAN,
           description: "Set to TRUE if you want to use the previously saved IDENTITY/STYLE references to generate this image."
       }
     },
@@ -834,11 +838,6 @@ const buildHistoryContent = (pastMessages: ChatMessage[], maxImagesToKeep: numbe
   return historyContent;
 };
 
-export interface AgentAction {
-  toolName: string;
-  args: any;
-}
-
 export const streamChatResponse = async (
   history: ChatMessage[], 
   newMessage: string, 
@@ -851,7 +850,8 @@ export const streamChatResponse = async (
   onUpdateContext?: (newSummary: string, newCursor: number) => void,
   onToolCall?: (action: AgentAction) => void,
   useGrounding: boolean = false,
-  currentParams?: GenerationParams // NEW: Pass current UI params
+  currentParams?: GenerationParams, // NEW: Pass current UI params
+  contextAssets?: SmartAsset[] // NEW: Context Awareness Input
 ): Promise<string> => {
   const ai = getClient();
   const MAX_ACTIVE_WINDOW = 12;
@@ -953,22 +953,31 @@ export const streamChatResponse = async (
         guidanceScale: currentParams.guidanceScale
     }) : "Unknown";
 
+    // *** CONTEXT AWARENESS & LOOP PREVENTION ***
+    let anchoringStatus = "";
+    if (contextAssets && contextAssets.length > 0) {
+        const anchorCount = contextAssets.length;
+        anchoringStatus = `
+        [CRITICAL STATE: PHASE 2 ACTIVE]
+        There are currently ${anchorCount} active Reference Anchors (Assets) attached to this context.
+        - The Character Sheet / Style Anchor step is COMPLETE.
+        - DO NOT generate more character sheets or anchors.
+        - PROCEED DIRECTLY to generating the specific panels/scenes requested by the user.
+        - When calling 'generate_image', MUST set 'use_ref_context=true'.
+        `;
+    } else {
+        anchoringStatus = `
+        [STATE: PHASE 1]
+        No active anchors detected. If the user wants a consistent story/character, you should first generate a Character Sheet/Style Anchor (save_as_reference="IDENTITY").
+        `;
+    }
+
     const autoModeInstruction = isAutoMode 
       ? `
         **AUTO MODE IS ON - DIRECTOR MODE ENABLED**:
         You are an expert Creative Director. You manage the visual assets and production pipeline.
 
-        **CONSISTENCY PROTOCOL (Source Grounding / Anchor-First)**:
-        If the user asks for a continuous story, comic, or consistent character:
-        1. **PHASE 1 - ANCHORING**:
-           - First, generate the "Character Sheet" or "Style Reference".
-           - **CRITICAL**: Call 'generate_image' with \`save_as_reference="IDENTITY"\` (or "STYLE").
-           - Tell the user: "I am creating the character reference sheet first."
-        
-        2. **PHASE 2 - GENERATION**:
-           - Once the anchor is established, generate the actual panels/scenes.
-           - **CRITICAL**: Call 'generate_image' with \`use_ref_context=true\`.
-           - This ensures the model uses the previously saved anchor image as a source.
+        ${anchoringStatus}
         
         **BATCH / SEQUENCE CONSISTENCY PROTOCOL**:
         If the user asks for MULTIPLE images (e.g., "draw 2 panels", "a sequence", "3 variations"):

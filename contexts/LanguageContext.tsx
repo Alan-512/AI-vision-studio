@@ -1,4 +1,3 @@
-
 import React, { createContext, useContext, useState, useEffect } from 'react';
 
 type Language = 'en' | 'zh';
@@ -21,6 +20,7 @@ const translations = {
     'header.favorites': 'Favorites',
     'header.assets': 'Assets',
     'header.selected': 'Selected',
+    'header.select_mode': 'Select',
     'header.trash': 'Recycle Bin',
     'header.trash_count': 'Items',
     
@@ -102,7 +102,9 @@ const translations = {
     'btn.magic_enhance': 'Magic Enhance',
     'btn.describe': 'Describe Image',
     'btn.download': 'Download',
+    'btn.download_selected': 'Download Selected',
     'btn.delete': 'Delete',
+    'btn.delete_selected': 'Delete Selected',
     'btn.use_ref': 'Use as Ref',
     'btn.remix': 'Remix',
     'btn.verify': 'Verify Paid Account',
@@ -117,6 +119,7 @@ const translations = {
     // Confirmation
     'confirm.delete.title': 'Move to Recycle Bin?',
     'confirm.delete.desc': 'This item will be moved to the Recycle Bin. You can restore it later.',
+    'confirm.delete_bulk.title': 'Delete Selected Items?',
     'confirm.empty_trash.title': 'Empty Recycle Bin?',
     'confirm.empty_trash.desc': 'This will permanently delete all items in the trash. This action cannot be undone.',
     'confirm.delete_forever.title': 'Delete Permanently?',
@@ -346,6 +349,7 @@ const translations = {
     'header.favorites': '收藏',
     'header.assets': '个资源',
     'header.selected': '已选择',
+    'header.select_mode': '批量选择',
     'header.trash': '回收站',
     'header.trash_count': '项',
     
@@ -427,7 +431,9 @@ const translations = {
     'btn.magic_enhance': '魔法优化',
     'btn.describe': '图片反推',
     'btn.download': '下载',
+    'btn.download_selected': '批量下载',
     'btn.delete': '删除',
+    'btn.delete_selected': '批量删除',
     'btn.use_ref': '设为参考图',
     'btn.remix': '重绘 (Remix)',
     'btn.verify': '验证付费账户',
@@ -442,6 +448,7 @@ const translations = {
     // Confirmation
     'confirm.delete.title': '移入回收站?',
     'confirm.delete.desc': '该资源将被移入回收站，你可以随时恢复它。',
+    'confirm.delete_bulk.title': '删除选中项?',
     'confirm.empty_trash.title': '清空回收站?',
     'confirm.empty_trash.desc': '将永久删除回收站中的所有项目。此操作无法撤销。',
     'confirm.delete_forever.title': '彻底删除?',

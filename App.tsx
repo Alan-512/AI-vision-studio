@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { Image as ImageIcon, Video, LayoutGrid, Folder, Sparkles, Settings, Star, CheckSquare, MoveHorizontal, Brush, X, Languages, Trash2, Recycle } from 'lucide-react';
+import { Image as ImageIcon, Video, LayoutGrid, Folder, Sparkles, Settings, Star, CheckSquare, MoveHorizontal, Brush, X, Languages, Trash2, Recycle, Download } from 'lucide-react';
 import { AppMode, AspectRatio, GenerationParams, AssetItem, ImageResolution, VideoResolution, ImageModel, VideoModel, ImageStyle, Project, ChatMessage, BackgroundTask, SmartAsset } from './types';
 import { GenerationForm } from './components/GenerationForm';
 import { AssetCard } from './components/AssetCard';
@@ -30,8 +30,8 @@ const DEFAULT_PARAMS: GenerationParams = {
 };
 
 // Helper to sanitize legacy models from old saves
-const sanitizeImageModel = (model: string | undefined): ImageModel => {
-  if (!model) return ImageModel.FLASH;
+const sanitizeImageModel = (model: unknown): ImageModel => {
+  if (!model || typeof model !== 'string') return ImageModel.FLASH;
   
   // Valid models
   if (model === ImageModel.FLASH || model === ImageModel.PRO) {
@@ -178,7 +178,7 @@ export function App() {
           if (lastActive.savedParams) {
               const safeParams = { ...lastActive.savedParams };
               // FORCE SANITIZATION ON LOAD
-              safeParams.imageModel = sanitizeImageModel(safeParams.imageModel as string);
+              safeParams.imageModel = sanitizeImageModel(safeParams.imageModel);
               setParams(safeParams);
           } else {
               setParams(DEFAULT_PARAMS);
@@ -304,6 +304,9 @@ export function App() {
 
   const handleModeSwitch = (targetMode: AppMode) => {
     setRightPanelMode('GALLERY'); 
+    setIsSelectionMode(false); // Reset selection
+    setSelectedAssetIds(new Set());
+    
     if (mode === targetMode) return;
     promptCache.current[mode] = params.prompt;
     setProjects(prev => prev.map(p => p.id === activeProjectId ? {
@@ -345,7 +348,7 @@ export function App() {
     // FORCE SANITIZATION ON SWITCH
     loadedParams = {
         ...loadedParams,
-        imageModel: sanitizeImageModel(loadedParams.imageModel as string)
+        imageModel: sanitizeImageModel(loadedParams.imageModel)
     };
     
     setParams(loadedParams);
@@ -371,7 +374,6 @@ export function App() {
      if (selectedAssetIds.has(asset.id)) {
         setSelectedAssetIds(prev => { const next = new Set(prev); next.delete(asset.id); return next; });
      } else {
-        if (selectedAssetIds.size >= 2) { addToast('info', 'Comparison Limit', 'You can only select up to 2 images to compare.'); return; }
         setSelectedAssetIds(prev => { const next = new Set(prev); next.add(asset.id); return next; });
      }
   };
@@ -380,6 +382,51 @@ export function App() {
      const selected = assets.filter(a => selectedAssetIds.has(a.id));
      if (selected.length !== 2) { addToast('info', 'Comparison', 'Please select exactly 2 items to compare.'); return; }
      setComparisonAssets([selected[0], selected[1]]);
+  };
+
+  const handleBulkDownload = () => {
+      const selected = assets.filter(a => selectedAssetIds.has(a.id));
+      let delay = 0;
+      selected.forEach(asset => {
+          setTimeout(() => {
+              const link = document.createElement('a');
+              link.href = asset.url;
+              link.download = `lumina-${asset.type.toLowerCase()}-${asset.id}.${asset.type === 'IMAGE' ? 'png' : 'mp4'}`;
+              document.body.appendChild(link);
+              link.click();
+              document.body.removeChild(link);
+          }, delay);
+          delay += 500; // Stagger downloads slightly
+      });
+      addToast('success', 'Download Started', `Downloading ${selected.length} items...`);
+  };
+
+  const handleBulkDelete = () => {
+      setConfirmDialog({
+          isOpen: true,
+          title: t('confirm.delete_bulk.title'),
+          message: `Are you sure you want to delete ${selectedAssetIds.size} items?`,
+          confirmLabel: t('btn.delete'),
+          cancelLabel: t('btn.cancel'),
+          isDestructive: true,
+          action: async () => {
+              const ids = Array.from(selectedAssetIds);
+              // Check mode for delete type
+              if (rightPanelMode === 'TRASH') {
+                   // Permanent Delete
+                   await Promise.all(ids.map(id => permanentlyDeleteAssetFromDB(id)));
+                   setAssets(prev => prev.filter(a => !selectedAssetIds.has(a.id)));
+              } else {
+                   // Soft Delete
+                   const selectedAssets = assets.filter(a => selectedAssetIds.has(a.id));
+                   await Promise.all(selectedAssets.map(a => softDeleteAssetInDB(a)));
+                   setAssets(prev => prev.map(a => selectedAssetIds.has(a.id) ? { ...a, deletedAt: Date.now() } : a));
+              }
+              setSelectedAssetIds(new Set());
+              setIsSelectionMode(false);
+              setConfirmDialog(prev => ({ ...prev, isOpen: false }));
+          }
+      });
   };
 
   const handleCanvasSave = async (dataUrl: string) => {
@@ -500,15 +547,30 @@ export function App() {
           if (mode !== AppMode.IMAGE) handleModeSwitch(AppMode.IMAGE);
           
           const executionParams: Partial<GenerationParams> = {
-              prompt: prompt || params.prompt,
-              aspectRatio: aspectRatio || params.aspectRatio,
-              imageModel: sanitizeImageModel(model || params.imageModel), // SANITIZE AGENT INPUT
-              imageStyle: style || params.imageStyle,
-              imageResolution: resolution || params.imageResolution,
-              negativePrompt: negativePrompt || params.negativePrompt,
-              seed: seed !== undefined ? seed : params.seed,
-              guidanceScale: guidanceScale || params.guidanceScale,
-              numberOfImages: numberOfImages || 1 // Atomic Batch Execution
+              prompt: (prompt as string) || params.prompt,
+              // SAFEGUARD: Validate Aspect Ratio (Fallback to current if invalid/missing)
+              aspectRatio: Object.values(AspectRatio).includes(aspectRatio as AspectRatio) 
+                  ? (aspectRatio as AspectRatio) 
+                  : params.aspectRatio,
+              
+              // SAFEGUARD: Validate Model
+              imageModel: sanitizeImageModel((model as any) ?? params.imageModel), 
+              
+              // SAFEGUARD: Validate Style
+              imageStyle: Object.values(ImageStyle).includes(style as ImageStyle) 
+                  ? (style as ImageStyle) 
+                  : params.imageStyle,
+                  
+              // SAFEGUARD: Validate Resolution
+              imageResolution: Object.values(ImageResolution).includes(resolution as ImageResolution) 
+                  ? (resolution as ImageResolution) 
+                  : params.imageResolution,
+
+              negativePrompt: (negativePrompt as string) || params.negativePrompt,
+              // ROBUST CASTING: Ensure numbers are actually numbers
+              seed: seed !== undefined ? Number(seed) : params.seed,
+              guidanceScale: guidanceScale !== undefined ? Number(guidanceScale) : params.guidanceScale,
+              numberOfImages: numberOfImages !== undefined ? Number(numberOfImages) : 1 
           };
           
           if (use_ref_context && agentContextAssets.length > 0) {
@@ -833,7 +895,9 @@ export function App() {
                projectContextSummary: contextSummary,
                projectSummaryCursor: summaryCursor,
                onUpdateProjectContext: (s: string, c: number) => { setContextSummary(s); setSummaryCursor(c); },
-               onToolCall: handleAgentToolCall
+               onToolCall: handleAgentToolCall,
+               // NEW: Pass agent memory state
+               agentContextAssets: agentContextAssets 
            } as any)}
          />
 
@@ -870,15 +934,28 @@ export function App() {
                              isSelectionMode ? (
                                 <div className="flex items-center gap-2 animate-in slide-in-from-left-5 fade-in">
                                    <span className="px-2 py-1 bg-brand-500/20 text-brand-400 text-xs font-bold rounded-lg border border-brand-500/30">{selectedAssetIds.size} {t('header.selected')}</span>
+                                   
                                    {selectedAssetIds.size === 2 && (
-                                      <button onClick={handleCompare} className="flex items-center gap-1.5 px-3 py-1.5 bg-white/10 hover:bg-white/20 text-white rounded-lg text-xs font-medium transition-colors"><MoveHorizontal size={14} /> {t('header.compare')}</button>
+                                      <button onClick={handleCompare} className="flex items-center gap-1.5 px-3 py-1.5 bg-white/10 hover:bg-white/20 text-white rounded-lg text-xs font-medium transition-colors" title={t('header.compare')}><MoveHorizontal size={14} /></button>
                                    )}
+                                   
+                                   {selectedAssetIds.size > 0 && (
+                                       <>
+                                           <button onClick={handleBulkDownload} className="flex items-center gap-1.5 px-3 py-1.5 bg-white/10 hover:bg-white/20 text-white rounded-lg text-xs font-medium transition-colors" title={t('btn.download_selected')}>
+                                               <Download size={14} />
+                                           </button>
+                                           <button onClick={handleBulkDelete} className="flex items-center gap-1.5 px-3 py-1.5 bg-red-500/20 hover:bg-red-500/30 text-red-400 rounded-lg text-xs font-medium transition-colors" title={t('btn.delete_selected')}>
+                                               <Trash2 size={14} />
+                                           </button>
+                                       </>
+                                   )}
+
                                    <button onClick={() => { setIsSelectionMode(false); setSelectedAssetIds(new Set()); }} className="p-1.5 text-gray-400 hover:text-white"><X size={16} /></button>
                                 </div>
                              ) : (
                                 <div className="flex items-center gap-2">
                                    <button onClick={() => setShowFavoritesOnly(!showFavoritesOnly)} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${showFavoritesOnly ? 'bg-yellow-500/20 text-yellow-500 border border-yellow-500/30' : 'text-gray-400 hover:bg-white/5'}`}><Star size={14} fill={showFavoritesOnly ? "currentColor" : "none"} /> {t('header.favorites')}</button>
-                                   <button onClick={() => setIsSelectionMode(true)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-gray-400 hover:bg-white/5 transition-all"><MoveHorizontal size={14} /> {t('header.compare')}</button>
+                                   <button onClick={() => setIsSelectionMode(true)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-gray-400 hover:bg-white/5 transition-all"><CheckSquare size={14} /> {t('header.select_mode')}</button>
                                 </div>
                              )
                           )}

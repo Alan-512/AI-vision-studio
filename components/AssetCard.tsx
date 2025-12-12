@@ -1,4 +1,3 @@
-
 import React from 'react';
 import { AssetItem, ImageModel, VideoModel } from '../types';
 import { Download, ZoomIn, RefreshCcw, Trash2, MessageSquarePlus, Star, Check, RotateCcw, X, Loader2, AlertCircle, Sparkles } from 'lucide-react';
@@ -131,7 +130,7 @@ export const AssetCard: React.FC<AssetCardProps> = ({
 
   const handleClick = () => {
      if (isGenerating || isPending || isFailed) return; 
-     if (isSelectionMode && onToggleSelection && !isTrashMode) {
+     if (isSelectionMode && onToggleSelection) {
         onToggleSelection(asset);
      } else {
         onClick(asset);
@@ -249,7 +248,7 @@ export const AssetCard: React.FC<AssetCardProps> = ({
       )}
       
       {/* Selection Overlay (Always visible when selected) */}
-      {(isSelectionMode || isSelected) && !isTrashMode && !isGenerating && !isPending && !isFailed && (
+      {(isSelectionMode || isSelected) && !isGenerating && !isPending && !isFailed && (
          <div className={`absolute inset-0 bg-black/20 transition-opacity ${isSelected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
             <div className={`absolute top-2 right-2 w-6 h-6 rounded-full border-2 flex items-center justify-center transition-all ${isSelected ? 'bg-brand-500 border-brand-500' : 'bg-black/40 border-white/50'}`}>
                {isSelected && <Check size={14} className="text-white" />}
