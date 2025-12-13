@@ -251,13 +251,13 @@ export function App() {
                             addToast('success', 'Video Recovered', 'A background video generation has finished.');
                             playSuccessSound();
                         })
-                        .catch(async (err) => {
+                        .catch(async (err: any) => {
                             const updates = { status: 'FAILED' as const };
                             await updateAsset(asset.id, updates);
                             if (activeProjectIdRef.current === asset.projectId) {
                                 setAssets(prev => prev.map(a => a.id === asset.id ? { ...a, ...updates } : a));
                             }
-                            setTasks(prev => prev.map(t => t.id === taskId ? { ...t, status: 'FAILED', error: err.message } : t));
+                            setTasks(prev => prev.map(t => t.id === taskId ? { ...t, status: 'FAILED', error: err.message || "Unknown error" } : t));
                         });
                  });
              }

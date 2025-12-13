@@ -1011,10 +1011,11 @@ export const streamChatResponse = async (
     2. **Image Requests (Search Active)**:
        - Since Google Search is active, the native 'generate_image' tool is disabled.
        - Use the SPECIAL COMMAND to generate:
-         !!!GENERATE_IMAGE prompt="..." aspectRatio="..." model="..." style="..." resolution="..."!!!
+         !!!GENERATE_IMAGE prompt="..." aspectRatio="..." model="..." style="..." resolution="..." save_as_reference="..."!!!
        - **IMPORTANT**: 
          - Include 'model', 'style', 'resolution' attributes in the command based on the same Auto/Manual logic.
          - Ensure the prompt attribute value does not contain unescaped double quotes.
+         - **CRITICAL**: If this is a character sheet or style anchor, you MUST include 'save_as_reference="IDENTITY"' or 'save_as_reference="STYLE"'.
          - Do not output markdown code blocks for this command. Just raw text.
     `}
     
@@ -1054,8 +1055,8 @@ export const streamChatResponse = async (
       let toolCallDetected = false;
       const processedToolCalls = new Set<string>();
       
-      // Extended regex to capture new params
-      const virtualToolRegex = /!!!GENERATE_IMAGE\s+prompt="([\s\S]*?)"(?:\s+aspectRatio="([^"]*)")?(?:\s+model="([^"]*)")?(?:\s+style="([^"]*)")?(?:\s+resolution="([^"]*)")?\s*!!!/g;
+      // Extended regex to capture new params including save_as_reference
+      const virtualToolRegex = /!!!GENERATE_IMAGE\s+prompt="([\s\S]*?)"(?:\s+aspectRatio="([^"]*)")?(?:\s+model="([^"]*)")?(?:\s+style="([^"]*)")?(?:\s+resolution="([^"]*)")?(?:\s+save_as_reference="([^"]*)")?\s*!!!/g;
 
       for await (const chunk of result) {
         if (signal?.aborted) break;
@@ -1112,6 +1113,7 @@ export const streamChatResponse = async (
                     const model = match[3];
                     const style = match[4];
                     const resolution = match[5];
+                    const save_as_reference = match[6];
                     
                     toolCallDetected = true; // Mark as tool used to show correct UI status
 
@@ -1119,7 +1121,7 @@ export const streamChatResponse = async (
                         setTimeout(() => {
                              onToolCall({
                                  toolName: 'generate_image',
-                                 args: { prompt, aspectRatio, model, style, resolution }
+                                 args: { prompt, aspectRatio, model, style, resolution, save_as_reference }
                              });
                         }, 0);
                     }
