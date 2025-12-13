@@ -1,28 +1,17 @@
-import { GoogleGenAI, GenerateContentResponse, Content, Part, FunctionDeclaration, Tool, FunctionCall, Type } from "@google/genai";
-import { GenerationParams, AspectRatio, ImageResolution, VideoResolution, AssetItem, ImageModel, ImageStyle, VideoStyle, VideoDuration, VideoModel, ChatMessage, ChatModel, AppMode, SmartAsset } from "../types";
+import { GoogleGenAI, GenerateContentResponse, Content, Part, FunctionDeclaration, Tool as GeminiTool, FunctionCall, Type } from "@google/genai";
+import { createGoogleGenerativeAI } from '@ai-sdk/google';
+import { streamText, tool, CoreMessage } from 'ai';
+import { z } from 'zod';
+import { GenerationParams, AspectRatio, ImageResolution, VideoResolution, AssetItem, ImageModel, ImageStyle, VideoStyle, VideoDuration, VideoModel, ChatMessage, ChatModel, AppMode, SmartAsset, AgentJob, JobStep } from "../types";
 
 const USER_API_KEY_STORAGE_KEY = 'user_gemini_api_key';
 
-// Mapping of translation keys to English descriptors for AI prompting consistency
-const TAG_TO_ENGLISH: Record<string, string> = {
-    'tag.person': 'Person',
-    'tag.face': 'Face',
-    'tag.product': 'Product',
-    'tag.clothing': 'Clothing',
-    'tag.background': 'Background',
-    'tag.layout': 'Layout',
-    'tag.pose': 'Pose',
-    'tag.depth': 'Depth',
-    'tag.sketch': 'Sketch',
-    'tag.color': 'Color',
-    'tag.lighting': 'Lighting',
-    'tag.texture': 'Texture',
-    'tag.artstyle': 'Art Style'
-};
+// --- TOOL CONTRACTS ---
 
 export interface AgentAction {
   toolName: string;
   args: any;
+  jobId?: string; // Link action to a job
 }
 
 export const saveUserApiKey = (key: string) => {
@@ -50,6 +39,16 @@ const getClient = (): GoogleGenAI => {
   return new GoogleGenAI({ apiKey });
 };
 
+// Vercel SDK Client Helper
+const getVercelGoogle = () => {
+    const userKey = getUserApiKey();
+    const envKey = process.env.API_KEY;
+    const apiKey = userKey || envKey;
+    if (!apiKey) throw new Error("API Key required");
+    
+    return createGoogleGenerativeAI({ apiKey });
+};
+
 export const checkVeoAuth = async (): Promise<boolean> => {
   if (window.aistudio && window.aistudio.hasSelectedApiKey) {
     return await window.aistudio.hasSelectedApiKey();
@@ -69,7 +68,6 @@ export const promptForVeoKey = async (): Promise<void> => {
 const parseError = (error: any): Error => {
   let message = "Unknown Error";
   
-  // 1. Extract the raw string message from various error forms
   if (typeof error === 'string') {
     message = error;
   } else if (error instanceof Error) {
@@ -86,7 +84,6 @@ const parseError = (error: any): Error => {
     }
   }
 
-  // 2. Try to parse if the message looks like JSON (handling prefixes like "Error: ...")
   if (message.includes('{"error"') || message.includes('{"code"')) {
     try {
       const jsonMatch = message.match(/(\{.*\})/);
@@ -94,12 +91,10 @@ const parseError = (error: any): Error => {
       const parsed = JSON.parse(jsonStr);
 
       if (parsed.error) {
-        // Specific check for 429/Quota
         if (parsed.error.code === 429 || parsed.error.status === 'RESOURCE_EXHAUSTED') {
           return new Error("Quota Exceeded. You have reached the daily generation limit for this API Key. Please create a new API Key to continue.");
         }
         if (parsed.error.message) {
-          // If the inner message is the quota message, clean it up
           if (parsed.error.message.includes('quota') || parsed.error.message.includes('429')) {
              return new Error("Quota Exceeded. You have reached the daily generation limit for this API Key. Please create a new API Key to continue.");
           }
@@ -107,21 +102,18 @@ const parseError = (error: any): Error => {
         }
       }
     } catch (e) {
-      // Ignore parsing errors, stick with original message
+      // Ignore parsing errors
     }
   }
 
-  // 3. Keyword checks on the cleaned message
   if (message.includes('429') || message.includes('RESOURCE_EXHAUSTED') || message.includes('Quota')) {
       return new Error("Quota Exceeded. You have reached the daily generation limit for this API Key. Please create a new API Key to continue.");
   }
 
-  // Detect HTML in message directly (Proxy/WAF errors)
   if (message.includes('<html') || message.includes('<!DOCTYPE')) {
       return new Error("Access Denied (403). The model request was blocked by the server. Please try the 'Gemini 2.5 Flash' model.");
   }
 
-  // Common Google API 403 text
   if (message.includes('403') || message.includes('permission')) {
      return new Error("Access Denied. This model (Pro/Veo) requires a paid API Key. Please switch to 'Gemini 2.5 Flash'.");
   }
@@ -198,7 +190,6 @@ class RequestQueue {
     try {
       return await task();
     } catch (error: any) {
-      // Don't retry if cancelled
       if (error.message === 'Cancelled' || error.name === 'AbortError') {
         throw error;
       }
@@ -206,12 +197,10 @@ class RequestQueue {
       const parsedError = parseError(error);
       const msg = parsedError.message;
 
-      // CRITICAL: Do NOT retry on Quota Exceeded as it won't resolve instantly
       if (msg.includes('Quota') || msg.includes('429') || msg.includes('Limit') || msg.includes('RESOURCE_EXHAUSTED')) {
           throw parsedError;
       }
 
-      // Retry on Server Errors (503, 500, 504)
       const status = error?.status || error?.response?.status;
       const isRetryable =
         (status === 503 || status === 504 || status === 500) ||
@@ -227,72 +216,8 @@ class RequestQueue {
   }
 }
 
-// Separate queues for Image (fast/bursty) and Video (slow/heavy)
 const imageQueue = new RequestQueue(4); 
-// CRITICAL: Limit video concurrency to 1 to avoid 429 quota errors
 const videoQueue = new RequestQueue(1);
-
-// --- End Concurrency Logic ---
-
-// --- AGENT TOOLS ---
-const generateImageTool: FunctionDeclaration = {
-  name: "generate_image",
-  description: "Generate one or more images based on a detailed text prompt. Supports batch generation for consistency.",
-  parameters: {
-    type: Type.OBJECT,
-    properties: {
-      prompt: { 
-        type: Type.STRING, 
-        description: "A highly detailed, descriptive prompt for the image generation model." 
-      },
-      numberOfImages: {
-        type: Type.INTEGER,
-        description: "The number of images to generate (1 to 4). Use this for batch generation (e.g., '2 panels', 'a sequence') to ensure parameters are identical across all images.",
-      },
-      aspectRatio: {
-        type: Type.STRING, 
-        enum: ["1:1", "16:9", "9:16", "4:3", "3:4"],
-        description: "The aspect ratio of the image."
-      },
-      model: {
-        type: Type.STRING,
-        enum: [ImageModel.FLASH, ImageModel.PRO],
-        description: "The AI model to use. 'gemini-2.5-flash-image' for speed/simple tasks, 'gemini-3-pro-image-preview' for high quality/text/complex scenes."
-      },
-      style: {
-        type: Type.STRING,
-        description: "The artistic style (e.g. 'Photorealistic', 'Anime & Manga', 'Cinematic', 'Digital Art', 'None')."
-      },
-      resolution: {
-        type: Type.STRING,
-        enum: ["1K", "2K", "4K"],
-        description: "Resolution. Use '1K' for Flash. Use '2K' or '4K' ONLY for Pro model."
-      },
-      negativePrompt: {
-        type: Type.STRING,
-        description: "Elements to exclude from the image (e.g. 'blurry, distorted, text')."
-      },
-      seed: {
-        type: Type.INTEGER,
-        description: "Random seed for reproducible generation."
-      },
-      guidanceScale: {
-        type: Type.NUMBER,
-        description: "Guidance scale (CFG), usually between 0 and 10. Higher values force the model to follow the prompt more strictly."
-      },
-      save_as_reference: {
-          type: Type.STRING,
-          enum: ["IDENTITY", "STYLE", "NONE"],
-          description: "Crucial for consistency. 'IDENTITY': Save this generated character as a reference for future panels. 'STYLE': Save this artistic style. 'NONE': One-off generation."
-      },
-      use_ref_context: {
-          type: Type.BOOLEAN,
-          description: "Set to TRUE if you want to use the previously saved IDENTITY/STYLE references to generate this image."
-      }
-    },
-    required: ["prompt"]
-  }
-};
 
 // -------------------
 
@@ -323,19 +248,16 @@ export const generateImage = async (
     
     const ai = getClient();
     
-    // SAFEGUARD: Ensure model is valid. Fallback to FLASH if not.
     let modelName = params.imageModel;
     const validModels: string[] = [ImageModel.FLASH, ImageModel.PRO];
     
     if (!validModels.includes(modelName)) {
         console.warn(`[Service] Invalid model '${modelName}' detected. Falling back to Gemini 3 Pro.`);
-        modelName = ImageModel.PRO; // Default to Pro as safer high-quality fallback
+        modelName = ImageModel.PRO; 
     }
     
-    // Construct Content
     const parts: Part[] = [];
     
-    // Add Smart Assets
     if (params.smartAssets) {
         for (const asset of params.smartAssets) {
             parts.push({
@@ -347,10 +269,8 @@ export const generateImage = async (
         }
     }
     
-    // Add Prompt
     let finalPrompt = params.prompt;
     if (params.negativePrompt) {
-        // Appending negative prompt as text convention, though native support varies
         finalPrompt += ` --negative_prompt="${params.negativePrompt}"`; 
     }
     if (params.imageStyle && params.imageStyle !== ImageStyle.NONE) {
@@ -359,7 +279,6 @@ export const generateImage = async (
     
     parts.push({ text: finalPrompt });
 
-    // Config
     const config: any = {
         imageConfig: {
             aspectRatio: params.aspectRatio,
@@ -367,23 +286,19 @@ export const generateImage = async (
     };
 
     if (modelName === ImageModel.PRO) {
-        // Pro features
         if (params.imageResolution) config.imageConfig.imageSize = params.imageResolution;
         if (params.useGrounding) config.tools = [{ googleSearch: {} }];
     }
     
-    // Advanced Params
     if (params.seed !== undefined) config.seed = params.seed;
     if (params.guidanceScale !== undefined) config.imageConfig.guidanceScale = params.guidanceScale;
 
-    // WRAP IN ABORTABLE
     const response: GenerateContentResponse = await makeAbortable(ai.models.generateContent({
         model: modelName,
         contents: { parts },
         config
     }), signal);
     
-    // Extract Image
     let imageUrl = '';
     let imageBase64 = '';
     let mimeType = '';
@@ -400,7 +315,6 @@ export const generateImage = async (
     }
 
     if (!imageUrl) {
-        // Fallback check if text was returned instead (e.g. refusal)
         const textPart = response.candidates?.[0]?.content?.parts?.find(p => p.text);
         if (textPart) {
              throw new Error(`Model Refusal: ${textPart.text}`);
@@ -478,18 +392,15 @@ export const generateVideo = async (
        
        if (onStart) onStart();
        
-       // WRAP IN ABORTABLE
        operation = await makeAbortable(ai.models.generateVideos(requestParams), signal);
        
        if (onOperationId && operation.name) {
            await onOperationId(operation.name);
        }
 
-       // Polling
        while (!operation.done) {
            if (signal?.aborted) throw new Error("Cancelled");
            
-           // Abortable Sleep
            await new Promise((resolve, reject) => {
                const timer = setTimeout(resolve, 5000);
                if (signal) {
@@ -552,7 +463,6 @@ export const optimizePrompt = async (originalPrompt: string, mode: AppMode, smar
   
   const ai = getClient();
   
-  // Construct context string about assets
   let assetContext = "";
   if (smartAssets && smartAssets.length > 0) {
       const types = smartAssets.map(a => a.type);
@@ -737,106 +647,104 @@ const updateRecursiveSummary = async (
   }
 };
 
-const messageToParts = (msg: ChatMessage): Part[] => {
-  const parts: Part[] = [];
-  if (msg.images && msg.images.length > 0) {
-    msg.images.forEach(img => {
-      const matches = img.match(/^data:(.+);base64,(.+)$/);
-      if (matches) {
-        parts.push({
-          inlineData: {
-            mimeType: matches[1],
-            data: matches[2]
-          }
-        });
-      }
-    });
-  } else if (msg.image) {
-    const matches = msg.image.match(/^data:(.+);base64,(.+)$/);
-    if (matches) {
-      parts.push({
-        inlineData: {
-          mimeType: matches[1],
-          data: matches[2]
+// Convert chat history to Vercel AI SDK Core format
+// UPDATED: Prefer string content for simplicity when no images are present to avoid "ContentUnion" schema errors.
+const convertHistoryToVercelFormat = (history: ChatMessage[]): CoreMessage[] => {
+    return history.map(msg => {
+        const parts: any[] = [];
+        
+        // Add Images
+        if (msg.images?.length) {
+            msg.images.forEach(img => {
+                const matches = img.match(/^data:(.+);base64,(.+)$/);
+                if (matches) parts.push({ type: 'image', image: matches[2], mimeType: matches[1] });
+            });
+        } else if (msg.image) {
+             const matches = msg.image.match(/^data:(.+);base64,(.+)$/);
+             if (matches) parts.push({ type: 'image', image: matches[2], mimeType: matches[1] });
         }
-      });
-    }
-  }
-
-  if (msg.content && msg.content.trim() !== "") {
-    parts.push({ text: msg.content });
-  } else {
-    parts.push({ text: " " });
-  }
-  return parts;
+        
+        const textContent = msg.content || ''; // Do not strip thoughts here for history context
+        
+        if (parts.length > 0) {
+            // Mixed content (Image + Text)
+            if (textContent) {
+                parts.push({ type: 'text', text: textContent });
+            } else if (parts.length > 0 && !textContent) {
+                 // If we have images but no text, Vercel SDK sometimes dislikes empty text parts in mixed array.
+                 // But we don't need to push empty text part if images exist.
+            }
+            return {
+                role: msg.role === 'model' ? 'assistant' : 'user',
+                content: parts
+            } as CoreMessage;
+        } else {
+            // Text only - Return simple string to minimize schema issues
+            return {
+                role: msg.role === 'model' ? 'assistant' : 'user',
+                content: textContent || ' ' // Ensure non-empty string
+            } as CoreMessage;
+        }
+    });
 };
 
-const buildHistoryContent = (pastMessages: ChatMessage[], maxImagesToKeep: number = 3): Content[] => {
-  const historyContent: Content[] = [];
-  let lastRole: string | null = null;
-  const allowedImageIndices = new Set<number>();
-  let imagesFound = 0;
-  
-  for (let i = pastMessages.length - 1; i >= 0; i--) {
-     const msg = pastMessages[i];
-     const hasImage = (msg.images && msg.images.length > 0) || !!msg.image;
-     if (hasImage && msg.role === 'user') {
-        if (imagesFound < maxImagesToKeep) {
-            allowedImageIndices.add(i);
-            imagesFound++;
-        }
-     }
-  }
-
-  for (let i = 0; i < pastMessages.length; i++) {
-    const msg = pastMessages[i];
-    let parts: Part[] = [];
-    const hasImage = (msg.images && msg.images.length > 0) || !!msg.image;
-    
-    if (hasImage && !allowedImageIndices.has(i)) {
-       if (msg.content && msg.content.trim() !== "") {
-           parts.push({ text: msg.content + "\n\n[System: Older image attachments removed to conserve context window. Focus on recent images.]" });
-       } else {
-           parts.push({ text: "[System: Older image attachments removed to conserve context window.]" });
-       }
-    } else {
-       parts = messageToParts(msg);
-    }
-    
-    if (msg.role === 'model') {
-       parts = parts.map(p => {
-           if (p.text) {
-               const cleanedText = p.text.replace(/<thought>[\s\S]*?<\/thought>/g, '').trim();
-               return cleanedText.length > 0 ? { ...p, text: cleanedText } : { ...p, text: " " };
-           }
-           return p;
-       });
-    }
-    
-    const validParts = parts.filter(p => p.inlineData || (p.text && p.text.trim().length >= 0));
-
-    if (validParts.length > 0) {
-        if (lastRole === msg.role) {
-            if (msg.role === 'user') {
-                historyContent.push({ role: 'model', parts: [{ text: " " }] });
-            } else {
-                historyContent.push({ role: 'user', parts: [{ text: " " }] });
+// --- NATIVE SDK HELPERS FOR REASONING MODEL ---
+const convertHistoryToNativeFormat = (history: ChatMessage[]): Content[] => {
+    return history.map(msg => {
+        const parts: Part[] = [];
+        if (msg.images && msg.images.length > 0) {
+            msg.images.forEach(img => {
+                const matches = img.match(/^data:(.+);base64,(.+)$/);
+                if (matches) {
+                    parts.push({ inlineData: { mimeType: matches[1], data: matches[2] } });
+                }
+            });
+        } else if (msg.image) {
+            const matches = msg.image.match(/^data:(.+);base64,(.+)$/);
+            if (matches) {
+                parts.push({ inlineData: { mimeType: matches[1], data: matches[2] } });
             }
         }
-        historyContent.push({
-          role: msg.role,
-          parts: validParts
-        });
-        lastRole = msg.role;
-    }
-  }
+        
+        if (msg.content) {
+             parts.push({ text: msg.content });
+        }
 
-  if (historyContent.length > 0 && historyContent[historyContent.length - 1].role === 'user') {
-      historyContent.push({ role: 'model', parts: [{ text: " " }] });
-  }
-
-  return historyContent;
+        // FAILSAFE: Ensure at least one part exists
+        if (parts.length === 0) {
+            parts.push({ text: ' ' });
+        }
+        
+        return {
+            role: msg.role,
+            parts: parts
+        };
+    });
 };
+
+const NATIVE_IMAGE_TOOL: FunctionDeclaration = {
+    name: 'generate_image',
+    description: "Generate one or more images based on a detailed text prompt.",
+    parameters: {
+        type: Type.OBJECT,
+        properties: {
+            prompt: { type: Type.STRING, description: "A highly detailed, descriptive prompt." },
+            numberOfImages: { type: Type.NUMBER, description: "Number of images (1-4)." },
+            aspectRatio: { type: Type.STRING, enum: ["1:1", "16:9", "9:16", "4:3", "3:4"] },
+            model: { type: Type.STRING, enum: [ImageModel.FLASH, ImageModel.PRO] },
+            style: { type: Type.STRING },
+            resolution: { type: Type.STRING, enum: ["1K", "2K", "4K"] },
+            negativePrompt: { type: Type.STRING },
+            seed: { type: Type.NUMBER },
+            guidanceScale: { type: Type.NUMBER },
+            save_as_reference: { type: Type.STRING, enum: ["IDENTITY", "STYLE", "NONE"] },
+            use_ref_context: { type: Type.BOOLEAN }
+        },
+        required: ["prompt"]
+    }
+};
+
+// ----------------------------------------------
 
 export const streamChatResponse = async (
   history: ChatMessage[], 
@@ -853,12 +761,11 @@ export const streamChatResponse = async (
   currentParams?: GenerationParams, 
   contextAssets?: SmartAsset[] 
 ): Promise<string> => {
-  const ai = getClient();
+  
+  // Update Recursive Summary Logic
   const MAX_ACTIVE_WINDOW = 12;
-
   let currentContextSummary = projectContextSummary || "";
   let currentCursor = projectSummaryCursor || 0;
-  
   const historyLen = history.length;
   const archiveBoundary = Math.max(0, historyLen - 1 - MAX_ACTIVE_WINDOW);
 
@@ -867,304 +774,223 @@ export const streamChatResponse = async (
       try {
           currentContextSummary = await updateRecursiveSummary(currentContextSummary, deltaMessages);
           currentCursor = archiveBoundary;
-          if (onUpdateContext) {
-              onUpdateContext(currentContextSummary, currentCursor);
-          }
+          if (onUpdateContext) onUpdateContext(currentContextSummary, currentCursor);
       } catch (e) {
           console.warn("Failed to update recursive summary, continuing with old context", e);
       }
   }
 
-  const activeMessages = history.slice(-MAX_ACTIVE_WINDOW - 1, -1);
-  const currentMessage = history[history.length - 1];
-
-  let validActiveMessages = [...activeMessages];
-  if (validActiveMessages.length > 0 && validActiveMessages[0].role === 'model') {
-       validActiveMessages.shift();
-  }
-
-  const historyContent = buildHistoryContent(validActiveMessages, 3);
-  
-  const effectiveUseGrounding = useGrounding;
-  const isAutoMode = currentParams?.isAutoMode ?? true; 
-
-  let activeTools: Tool[] = [];
-
-  if (effectiveUseGrounding) {
-      activeTools = [{ googleSearch: {} }];
-  } else {
-      activeTools = [{ functionDeclarations: [generateImageTool] }];
-  }
-
-  let apiModelName = 'gemini-2.5-flash'; 
-  let modelConfig: any = {};
-  let supportsFunctions = true; 
-
-  if (model === ChatModel.GEMINI_3_PRO_REASONING) {
-    apiModelName = 'gemini-3-pro-preview';
-    modelConfig.thinkingConfig = {
-        thinkingBudget: 16384, 
-        includeThoughts: true
-    };
-    supportsFunctions = true;
-    modelConfig.tools = activeTools;
-  } else {
-    apiModelName = 'gemini-2.5-flash';
-    modelConfig.tools = activeTools; 
-  }
-  
-  let roleInstruction = "";
-  if (mode === AppMode.VIDEO) {
-    roleInstruction = `You are a professional Film Director AI assistant.
-    Your goal is to help the user create videos.
-    If the user asks to generate a video, confirm the details (subject, motion, camera) and then acknowledge.
-    Note: You cannot directly generate videos via tools yet, but you can guide them.
-    `;
-  } else {
-    // Calculate capabilities based on current config
-    const canGenImage = !effectiveUseGrounding && supportsFunctions;
-    
-    const toolsDesc = [];
-    if (canGenImage) toolsDesc.push("'generate_image'");
-    if (effectiveUseGrounding) toolsDesc.push("'googleSearch'");
-    
-    const toolAccessStr = toolsDesc.length > 0 
-        ? `You have access to ${toolsDesc.join(' and ')} tools.` 
-        : "You do not have access to tools (search/image generation) in this reasoning mode.";
-
-    // Context for Manual Mode
-    const currentSettingsContext = currentParams ? JSON.stringify({
+  // Build Context for System Prompt
+  const currentSettingsContext = currentParams ? JSON.stringify({
         model: currentParams.imageModel,
         aspectRatio: currentParams.aspectRatio,
         style: currentParams.imageStyle,
         resolution: currentParams.imageResolution,
         seed: currentParams.seed,
         guidanceScale: currentParams.guidanceScale
-    }) : "Unknown";
+  }) : "Unknown";
 
-    // *** CONTEXT AWARENESS & LOOP PREVENTION ***
-    const identityAnchors = contextAssets?.filter(a => a.type === 'IDENTITY') || [];
-    const styleAnchors = contextAssets?.filter(a => a.type === 'STYLE') || [];
+  const contextInjection = currentContextSummary ? `\n[LONG-TERM MEMORY]\n${currentContextSummary}` : "";
+  const isAutoMode = currentParams?.isAutoMode ?? true;
+  
+  // Determine if using reasoning model (Thinking)
+  const isReasoning = model === ChatModel.GEMINI_3_PRO_REASONING;
 
-    let anchoringStatus = "";
-    if (contextAssets && contextAssets.length > 0) {
-        anchoringStatus = `
-        [CRITICAL MEMORY STATE: PHASE 2 - PRODUCTION]
-        STATUS: Reference Anchors are successfully loaded in memory.
-        - Active Identity Anchors: ${identityAnchors.length} (Character is locked)
-        - Active Style Anchors: ${styleAnchors.length} (Art style is locked)
-
-        [STRICT RULES FOR PHASE 2]:
-        1. **STOP** generating character sheets or reference grids. That task is complete.
-        2. **START** generating the actual panels/scenes requested immediately.
-        3. **MANDATORY**: You MUST set \`use_ref_context=true\` in the \`generate_image\` tool for all future calls to maintain consistency.
-        4. If the user asks for a "comic" or "storyboard", generate the panels one by one or in batch, but DO NOT regenerate the character design.
-        `;
-    } else {
-        anchoringStatus = `
-        [MEMORY STATE: PHASE 1 - SETUP]
-        STATUS: No character/style anchors detected.
-        
-        [RULES FOR PHASE 1]:
-        1. If the user wants a consistent character, generate a Character Sheet first.
-        2. Set \`save_as_reference="IDENTITY"\` in the tool call.
-        `;
-    }
-
-    const autoModeInstruction = isAutoMode 
-      ? `
-        **AUTO MODE IS ON - DIRECTOR MODE ENABLED**:
-        You are an expert Creative Director. You manage the visual assets and production pipeline.
-
-        ${anchoringStatus}
-        
-        **BATCH / SEQUENCE CONSISTENCY PROTOCOL**:
-        If the user asks for MULTIPLE images (e.g., "draw 2 panels", "a sequence", "3 variations"):
-        - **DO NOT** call the tool multiple times.
-        - **DO** call 'generate_image' **ONCE** with the \`numberOfImages\` parameter set to the desired count (1-4).
-        - This guarantees that 'model', 'aspectRatio', and 'style' remain mathematically identical for the entire batch.
-      `
-      : `
-        **AUTO MODE IS OFF (MANUAL MODE)**:
-        - The user has manually selected specific settings.
-        - **YOU MUST USE** the following current settings for the tool call unless the user explicitly asks to change them in this specific prompt:
-        ${currentSettingsContext}
-        - Do not deviate from these settings unless instructed.
-      `;
-
-    roleInstruction = `You are a professional Creative Director and Agent.
-    ${toolAccessStr}
-    
-    ${autoModeInstruction}
-
-    PROTOCOL:
-    1. **Evaluation**: Analyze if the request is for a SINGLE image or a SEQUENCE.
-    
-    ${canGenImage ? `
-    2. **Image Generation**:
-       - Call 'generate_image' with the appropriate arguments based on the Auto/Manual mode rules above.
-       - Use 'numberOfImages' for batch requests (1-4).
-       - Use 'save_as_reference' if you are establishing a new character/style anchor.
-       - Use 'use_ref_context' if you want to maintain consistency with previous anchors.
-       - **Response**: Confirm you are generating the image.
-    ` : `
-    2. **Image Requests (Search Active)**:
-       - Since Google Search is active, the native 'generate_image' tool is disabled.
-       - Use the SPECIAL COMMAND to generate:
-         !!!GENERATE_IMAGE prompt="..." aspectRatio="..." model="..." style="..." resolution="..." save_as_reference="..."!!!
-       - **IMPORTANT**: 
-         - Include 'model', 'style', 'resolution' attributes in the command based on the same Auto/Manual logic.
-         - Ensure the prompt attribute value does not contain unescaped double quotes.
-         - **CRITICAL**: If this is a character sheet or style anchor, you MUST include 'save_as_reference="IDENTITY"' or 'save_as_reference="STYLE"'.
-         - Do not output markdown code blocks for this command. Just raw text.
-    `}
-    
-    ${effectiveUseGrounding ? "3. **Search**: Use 'googleSearch' when the user asks for real-time information, trends, or specific data." : ""}
-    
-    [CRITICAL]: Do not simulate the tool. ${canGenImage ? "You must emit native tool calls." : "Use the !!!GENERATE_IMAGE...!!! command if you need to create an image while search is active."}
-    `;
-  }
-
-  const contextInjection = currentContextSummary ? `
-  [LONG-TERM MEMORY]
-  ${currentContextSummary}
-  ` : "";
+  // UI Protocol
+  const uiProtocolInstruction = `
+    [IMPORTANT UI PROTOCOL]
+    When you call the 'generate_image' tool, you MUST preface your response with this EXACT string on a new line:
+    "[Using Tool: Image Generator]"
+  `;
+  
+  const reasoningProtocol = `
+    [PROTOCOL]
+    1. Think through the user's request.
+    2. If an image is needed, call the 'generate_image' tool immediately after your thought process.
+    3. Do NOT output conversational filler like "Okay" before the tool call.
+  `;
 
   const systemInstruction = `
-    ${roleInstruction}
+    You are Lumina, a professional Creative Director and Agent.
+    
+    [CONTEXT]
+    Current Settings: ${currentSettingsContext}
+    Auto Mode: ${isAutoMode ? 'ON' : 'OFF'}
     ${contextInjection}
-    INSTRUCTION: Provide direct, concise answers. ${supportsFunctions ? "Call tools when appropriate." : ""}
-    `;
 
-  const messageParts = messageToParts(currentMessage);
-  const msgPayload = messageParts.length === 1 && messageParts[0].text ? messageParts[0].text : messageParts;
+    [PROTOCOL]
+    1. If the user asks for an image, analyze if it requires batch generation (sequence/variations).
+    2. Use the 'generate_image' tool. If Auto Mode is ON, you can infer best settings. If OFF, adhere strictly to Current Settings unless overridden.
+    3. If the first image isn't perfect, you can call the tool again with refined prompts (Self-Correction).
+    4. Provide concise, helpful responses.
+    
+    ${isReasoning ? reasoningProtocol : uiProtocolInstruction}
+  `;
 
-  const executeStream = async (targetModel: string, config: any, customHistory?: Content[]) => {
-      const chat = ai.chats.create({
-        model: targetModel,
-        history: customHistory || historyContent,
-        config: { systemInstruction, ...config }
-      });
+  // === STRATEGY SELECTION ===
 
-      const result = await chat.sendMessageStream({ 
-        message: msgPayload
-      });
+  // STRATEGY A: NATIVE SDK (For Reasoning/Thinking Models)
+  // This bypasses Vercel SDK to correctly handle 'thought_signature' in the session state.
+  if (isReasoning) {
+      const ai = getClient();
       
-      let fullText = '';
-      let hasOpenedThought = false;
-      let toolCallDetected = false;
-      const processedToolCalls = new Set<string>();
+      // Calculate effective history length to slice
+      // We want to initialize the chat with history EXCLUDING the latest user message
+      // because we send the latest message via sendMessageStream to trigger generation.
+      const rawHistory = history.slice(0, Math.max(0, history.length - 1)).slice(-50);
+      const effectiveHistory = convertHistoryToNativeFormat(rawHistory);
       
-      // Extended regex to capture new params including save_as_reference
-      const virtualToolRegex = /!!!GENERATE_IMAGE\s+prompt="([\s\S]*?)"(?:\s+aspectRatio="([^"]*)")?(?:\s+model="([^"]*)")?(?:\s+style="([^"]*)")?(?:\s+resolution="([^"]*)")?(?:\s+save_as_reference="([^"]*)")?\s*!!!/g;
-
-      for await (const chunk of result) {
-        if (signal?.aborted) break;
-
-        // Check for Tool Calls in the chunk
-        const candidates = chunk.candidates || [];
-        if (candidates.length > 0 && candidates[0].content && candidates[0].content.parts) {
-            for (const part of candidates[0].content.parts) {
-                if (part.functionCall) {
-                   // Found a tool call!
-                   toolCallDetected = true;
-                   
-                   if (onToolCall) {
-                       // We yield execution slightly to allow UI to render first
-                       setTimeout(() => {
-                           if (onToolCall) onToolCall({
-                                toolName: part.functionCall!.name,
-                                args: part.functionCall!.args
-                           });
-                       }, 0);
-                   }
-                   // We append a marker so UI knows a tool was used, but the UI component should strip this from view
-                   fullText += `\n[Using Tool: ${part.functionCall.name}...]`; 
-                }
-                
-                // Native Thinking
-                if ((part as any).thought) {
-                    if (!hasOpenedThought) { fullText += '<thought>'; hasOpenedThought = true; }
-                    fullText += (part as any).thought;
-                }
-                
-                if (part.text) {
-                   if (hasOpenedThought && !(part as any).thought) { fullText += '</thought>'; hasOpenedThought = false; }
-                   fullText += part.text;
-                }
-            }
-        } else {
-            const text = chunk.text;
-            if (text) fullText += text;
-        }
-
-        // VIRTUAL TOOL DETECTION (Regex Parsing on accumulated text)
-        if (effectiveUseGrounding) {
-            let match;
-            // Reset regex lastIndex because we are scanning fullText which grows
-            virtualToolRegex.lastIndex = 0; 
-            
-            while ((match = virtualToolRegex.exec(fullText)) !== null) {
-                const fullMatch = match[0];
-                if (!processedToolCalls.has(fullMatch)) {
-                    processedToolCalls.add(fullMatch);
-                    const prompt = match[1];
-                    const aspectRatio = match[2];
-                    const model = match[3];
-                    const style = match[4];
-                    const resolution = match[5];
-                    const save_as_reference = match[6];
-                    
-                    toolCallDetected = true; // Mark as tool used to show correct UI status
-
-                    if (onToolCall) {
-                        setTimeout(() => {
-                             onToolCall({
-                                 toolName: 'generate_image',
-                                 args: { prompt, aspectRatio, model, style, resolution, save_as_reference }
-                             });
-                        }, 0);
-                    }
-                }
-            }
-        }
-
-        // Clean output for UI
-        let displayUI = fullText;
-        if (effectiveUseGrounding) {
-            displayUI = fullText.replace(virtualToolRegex, '\n[Generating Image...]');
-        }
-
-        onChunk(displayUI);
-      }
-      
-      if (hasOpenedThought) {
-          fullText += '</thought>';
-          // Clean output for UI one last time
-          let displayUI = fullText;
-          if (effectiveUseGrounding) {
-              displayUI = fullText.replace(virtualToolRegex, '\n[Generating Image...]');
+      const freshChat = ai.chats.create({
+          model: 'gemini-3-pro-preview',
+          history: effectiveHistory,
+          config: {
+              systemInstruction: systemInstruction,
+              tools: [{ functionDeclarations: [NATIVE_IMAGE_TOOL] }]
           }
-          onChunk(displayUI);
-      }
-      
-      // Safety: If tool called but no text, ensure we don't leave it completely blank or it might look stuck
-      if (toolCallDetected && fullText.trim() === '') {
-          fullText += '\n[Using Tool: generate_image...]'; 
-          onChunk(fullText);
-      }
-      
-      // Return the CLEANED text so history doesn't contain the raw command
-      if (effectiveUseGrounding) {
-          return fullText.replace(virtualToolRegex, '');
-      }
-      return fullText;
-  };
+      });
 
-  try {
-      return await executeStream(apiModelName, modelConfig);
-  } catch (err: any) {
-      console.warn("Stream failed, trying fallback...", err);
-      throw err;
+      // Prepare new message content
+      // IMPORTANT: We must reconstruct the latest message from the history object (last element)
+      // because the 'newMessage' argument string does NOT contain image data if the user uploaded images.
+      const lastMsg = history[history.length - 1];
+      let msgPartsToSend: Part[] = [];
+      
+      if (lastMsg) {
+          if (lastMsg.images && lastMsg.images.length > 0) {
+              lastMsg.images.forEach(img => {
+                  const matches = img.match(/^data:(.+);base64,(.+)$/);
+                  if (matches) {
+                      msgPartsToSend.push({ inlineData: { mimeType: matches[1], data: matches[2] } });
+                  }
+              });
+          } else if (lastMsg.image) {
+              const matches = lastMsg.image.match(/^data:(.+);base64,(.+)$/);
+              if (matches) {
+                  msgPartsToSend.push({ inlineData: { mimeType: matches[1], data: matches[2] } });
+              }
+          }
+          
+          if (lastMsg.content) {
+              msgPartsToSend.push({ text: lastMsg.content });
+          }
+      }
+
+      // Fallback if somehow empty
+      if (msgPartsToSend.length === 0) {
+           msgPartsToSend.push({ text: newMessage || ' ' });
+      }
+
+      // Send Message Stream
+      let fullText = "";
+      
+      const sendAndProcess = async (msgContent: string | Part[] | any) => {
+          const result = await freshChat.sendMessageStream(msgContent);
+          
+          for await (const chunk of result) {
+               // Check for Text
+               const chunkText = chunk.text;
+               if (chunkText) {
+                   fullText += chunkText;
+                   onChunk(fullText);
+               }
+
+               // Check for Tool Calls
+               const calls = chunk.functionCalls();
+               if (calls && calls.length > 0) {
+                   for (const call of calls) {
+                       // Notify UI we are using tool
+                       if (!fullText.includes('[Using Tool:')) {
+                           fullText += "\n[Using Tool: Image Generator]\n";
+                           onChunk(fullText);
+                       }
+                       
+                       // Execute Tool
+                       if (onToolCall) {
+                           setTimeout(() => {
+                               onToolCall({
+                                   toolName: call.name,
+                                   args: call.args,
+                                   jobId: crypto.randomUUID()
+                               });
+                           }, 0);
+                       }
+                       
+                       // Send Response back to Model to close the loop
+                       const functionResponse = {
+                           functionResponses: [{
+                               response: { result: "Image generation task queued successfully." },
+                               id: call.id,
+                               name: call.name
+                           }]
+                       };
+                       
+                       // Recursive call for the next turn
+                       await sendAndProcess(functionResponse); 
+                   }
+               }
+          }
+      };
+
+      await sendAndProcess(msgPartsToSend);
+      return fullText;
+  }
+
+  // STRATEGY B: VERCEL AI SDK (For Flash/Standard Models)
+  // Maintains compatibility with existing robust logic for non-thinking models.
+  else {
+      const vercelGoogle = getVercelGoogle();
+      const messages = convertHistoryToVercelFormat(history);
+
+      const tools: Record<string, any> = {
+          generate_image: tool({
+              description: "Generate one or more images based on a detailed text prompt.",
+              parameters: z.object({
+                  prompt: z.string().describe("A highly detailed, descriptive prompt."),
+                  numberOfImages: z.number().optional().describe("Number of images (1-4)."),
+                  aspectRatio: z.enum(["1:1", "16:9", "9:16", "4:3", "3:4"]).optional(),
+                  model: z.enum([ImageModel.FLASH, ImageModel.PRO]).optional(),
+                  style: z.string().optional(),
+                  resolution: z.enum(["1K", "2K", "4K"]).optional(),
+                  negativePrompt: z.string().optional(),
+                  seed: z.number().optional(),
+                  guidanceScale: z.number().optional(),
+                  save_as_reference: z.enum(["IDENTITY", "STYLE", "NONE"]).optional(),
+                  use_ref_context: z.boolean().optional()
+              }),
+              execute: async (args) => {
+                  if (onToolCall) {
+                      setTimeout(() => {
+                          onToolCall({
+                              toolName: 'generate_image',
+                              args: args,
+                              jobId: crypto.randomUUID()
+                          });
+                      }, 0);
+                  }
+                  return "Image generation task has been queued successfully. Tell the user you are generating it.";
+              }
+          })
+      };
+
+      try {
+          const result = await streamText({
+              model: vercelGoogle('gemini-2.5-flash'), 
+              messages,
+              system: systemInstruction,
+              maxSteps: 5, 
+              abortSignal: signal,
+              tools: tools,
+          });
+
+          let fullText = "";
+          for await (const textPart of result.textStream) {
+              fullText += textPart;
+              onChunk(fullText);
+          }
+          return fullText;
+      } catch (err: any) {
+          console.warn("Vercel SDK Stream failed", err);
+          throw err;
+      }
   }
 };

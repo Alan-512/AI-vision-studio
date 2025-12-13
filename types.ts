@@ -133,35 +133,82 @@ export interface GenerationParams {
   inputVideoMimeType?: string; 
 }
 
+// --- ARCHITECTURE UPGRADE: JOB MODEL & EVENT STREAM ---
+
+// 1. The Job Model (Separating Execution State from Chat)
+export interface AgentJob {
+  id: string;
+  projectId: string;
+  type: 'IMAGE_GENERATION' | 'VIDEO_GENERATION' | 'CONTEXT_UPDATE';
+  status: 'planning' | 'executing' | 'completed' | 'failed' | 'requires_action';
+  createdAt: number;
+  updatedAt: number;
+  steps: JobStep[];
+  artifacts: JobArtifact[];
+  cost?: number; // Token usage or estimated cost
+}
+
+export interface JobStep {
+  id: string;
+  name: string; // e.g., "generate_image", "optimize_prompt"
+  status: 'pending' | 'running' | 'success' | 'failed';
+  input?: any;
+  output?: any;
+  error?: string;
+  startTime?: number;
+  endTime?: number;
+}
+
+export interface JobArtifact {
+  id: string;
+  type: 'image' | 'video' | 'json' | 'text';
+  url?: string; // Blob URL or Remote URL
+  base64?: string; // Fallback
+  mimeType?: string;
+  metadata?: any;
+}
+
+// 2. Chat Message (Enhanced)
 export interface ChatMessage {
   role: 'user' | 'model';
   content: string;
   timestamp: number;
-  image?: string; // Legacy: kept for backward compatibility
-  images?: string[]; // New: Supports multiple images
-  isThinking?: boolean; // Transient state for UI
-  toolCallId?: string; // If this message triggered a tool
-  toolName?: string; // Name of the tool used
-  toolStatus?: 'pending' | 'success' | 'failed'; // Status of the tool execution
+  image?: string; // Legacy
+  images?: string[]; 
+  isThinking?: boolean; 
+  
+  // Link to the Job System
+  relatedJobId?: string; // If this message triggered a job
+  toolCalls?: ToolCallRecord[]; // Record of tools called in this turn
 }
 
+export interface ToolCallRecord {
+  id: string;
+  toolName: string;
+  args: any;
+  status: 'pending' | 'success' | 'failed';
+  result?: any;
+}
+
+// 3. Project Model
 export interface Project {
   id: string;
   name: string;
   createdAt: number;
   updatedAt: number;
-  // We save the "Context" (current params) of the project so users can pick up where they left off
   savedParams?: GenerationParams;
   savedMode?: AppMode; 
-  chatHistory?: ChatMessage[]; // Used for Image Mode
-  videoChatHistory?: ChatMessage[]; // Used for Video Mode
+  chatHistory?: ChatMessage[]; 
+  videoChatHistory?: ChatMessage[];
   
-  // RECURSIVE ROLLING SUMMARY STATE
-  contextSummary?: string; // The text summary of "Archived" history
-  summaryCursor?: number; // The index in chatHistory where the summary ends. 
-                          // Messages[0] to Messages[summaryCursor-1] are summarized.
-                          // Messages[summaryCursor] to End are "Active".
+  // Active Jobs (New)
+  activeJobs?: AgentJob[];
+  
+  contextSummary?: string; 
+  summaryCursor?: number; 
 }
+
+// --- EXISTING TYPES ---
 
 export interface AssetItem {
   id: string;
@@ -176,6 +223,10 @@ export interface AssetItem {
   isNew?: boolean; // New: Indicator for newly generated assets
   deletedAt?: number; // New: Timestamp when moved to trash
   operationName?: string; // New: Store the Google API Operation ID for long-running tasks
+  
+  // Link to Job System
+  jobId?: string; // Which job created this asset
+  
   metadata?: {
     aspectRatio: string;
     model: string;
@@ -200,6 +251,9 @@ export interface BackgroundTask {
   executionStartTime?: number; // When it actually started running (left queue)
   prompt: string;
   error?: string;
+  
+  // Link to Job System
+  jobId?: string;
 }
 
 // Window augmentation for Veo Key selection

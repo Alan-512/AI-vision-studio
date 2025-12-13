@@ -240,7 +240,7 @@ export function App() {
                         }];
                     });
 
-                    resumeVideoGeneration(asset.operationName!)
+                    resumeVideoGeneration(asset.operationName as string)
                         .then(async (url) => {
                             const updates = { status: 'COMPLETED' as const, url, isNew: true };
                             await updateAsset(asset.id, updates);
@@ -410,7 +410,7 @@ export function App() {
           cancelLabel: t('btn.cancel'),
           isDestructive: true,
           action: async () => {
-              const ids = Array.from(selectedAssetIds);
+              const ids = Array.from(selectedAssetIds) as string[];
               // Check mode for delete type
               if (rightPanelMode === 'TRASH') {
                    // Permanent Delete
@@ -444,9 +444,11 @@ export function App() {
                const reader = new FileReader();
                await new Promise<void>((resolve) => {
                   reader.onload = () => {
-                     const res = reader.result as string;
-                     const matches = res.match(/^data:(.+);base64,(.+)$/);
-                     if (matches) { originalMime = matches[1]; originalImage = matches[2]; }
+                     const res = reader.result;
+                     if (typeof res === 'string') {
+                         const matches = res.match(/^data:(.+);base64,(.+)$/);
+                         if (matches) { originalMime = matches[1]; originalImage = matches[2]; }
+                     }
                      resolve();
                   };
                   reader.readAsDataURL(blob);
