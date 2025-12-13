@@ -507,12 +507,12 @@ const convertHistoryToNativeFormat = (history: ChatMessage[]): Content[] => {
 
 const NATIVE_IMAGE_TOOL: FunctionDeclaration = {
     name: 'generate_image',
-    description: "Generate one or more images based on a detailed text prompt.",
+    description: "Generate an image. IMPORTANT: For storyboards/comics/sequences, you MUST call this tool SEPARATELY for EACH panel/frame to ensure high quality. Do NOT generate multiple panels in one single tool call unless explicitly asked for a grid/collage.",
     parameters: {
         type: Type.OBJECT,
         properties: {
             prompt: { type: Type.STRING, description: "A highly detailed, descriptive prompt." },
-            numberOfImages: { type: Type.NUMBER, description: "Number of images (1-4)." },
+            numberOfImages: { type: Type.NUMBER, description: "Number of images. Default 1. Keep as 1 for sequential storyboard generation." },
             aspectRatio: { type: Type.STRING, enum: ["1:1", "16:9", "9:16", "4:3", "3:4"] },
             model: { type: Type.STRING, enum: [ImageModel.FLASH, ImageModel.PRO] },
             style: { type: Type.STRING },
@@ -520,8 +520,16 @@ const NATIVE_IMAGE_TOOL: FunctionDeclaration = {
             negativePrompt: { type: Type.STRING },
             seed: { type: Type.NUMBER },
             guidanceScale: { type: Type.NUMBER },
-            save_as_reference: { type: Type.STRING, enum: ["IDENTITY", "STYLE", "NONE"] },
-            use_ref_context: { type: Type.BOOLEAN }
+            // NEW: Anchoring Params
+            save_as_reference: { 
+                type: Type.STRING, 
+                enum: ["IDENTITY", "STYLE", "NONE"],
+                description: "If 'IDENTITY', creates a reusable character anchor from this result. If 'STYLE', creates a style anchor. Use this for the FIRST image in a sequence."
+            },
+            use_ref_context: { 
+                type: Type.BOOLEAN,
+                description: "If true, uses the previously saved anchor/reference images to maintain consistency. Use this for SUBSEQUENT images."
+            }
         },
         required: ["prompt"]
     }
@@ -546,15 +554,13 @@ const runReasoningAgent = async (
         const rawHistory = history.slice(0, Math.max(0, history.length - 1)).slice(-50);
         const effectiveHistory = convertHistoryToNativeFormat(rawHistory);
         
-        // STRICT SYSTEM INSTRUCTION FORMAT: Use Part[] structure to satisfy ContentUnion requirements
-        const systemInstructionParts: Part[] = [{ text: systemInstruction }];
-
         // Use Gemini 3 Pro Preview for thinking/reasoning
         const chat = ai.chats.create({
             model: 'gemini-3-pro-preview', 
             history: effectiveHistory,
             config: {
-                systemInstruction: { parts: systemInstructionParts }, // Explicit Content Wrapper
+                // PASS STRING DIRECTLY for System Instruction to avoid Object/Union mismatch issues
+                systemInstruction: systemInstruction, 
                 tools: [{ functionDeclarations: [NATIVE_IMAGE_TOOL] }],
                 safetySettings: [
                     { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
@@ -583,54 +589,72 @@ const runReasoningAgent = async (
         let fullText = "";
 
         // Recursive Agent Loop
-        const processTurn = async (content: Part[] | any) => {
-            // STRICT MESSAGE FORMAT: Wrap in { parts: ... } for sendMessageStream
-            // This ensures we satisfy the `GenerateContentParameters` expectation which avoids "ContentUnion" ambiguity
-            const result = await chat.sendMessageStream({ parts: content });
-            let toolCallOccurred = false;
+        const processTurn = async (content: Part[]) => {
+            // STRICT MESSAGE FORMAT: WRAP IN { message: ... } for the new SDK signature
+            const result = await chat.sendMessageStream({ message: content });
+            
+            const toolCalls: FunctionCall[] = [];
             
             for await (const chunk of result) {
                 if (signal?.aborted) throw new Error("Cancelled");
                 
-                // 1. Accumulate Text
-                if (chunk.text) {
-                    fullText += chunk.text;
-                    onChunk(fullText);
-                }
-
-                // 2. Handle Tool Calls
-                const calls = chunk.functionCalls();
-                if (calls && calls.length > 0) {
-                    toolCallOccurred = true;
-                    for (const call of calls) {
-                        if (!fullText.includes('[Using Tool:')) {
-                            fullText += "\n[Using Tool: Image Generator]\n";
+                // 1. Accumulate Text (SAFE WAY)
+                // Use manual iteration to avoid .text getter warning when tool calls exist
+                if (chunk.candidates?.[0]?.content?.parts) {
+                    for (const part of chunk.candidates[0].content.parts) {
+                        if (part.text) {
+                            fullText += part.text;
                             onChunk(fullText);
                         }
-                        
-                        if (onToolCall) {
-                            // Execute tool async
-                            setTimeout(() => {
-                                onToolCall({
-                                    toolName: call.name,
-                                    args: call.args,
-                                    jobId: crypto.randomUUID()
-                                });
-                            }, 0);
-                        }
-                        
-                        // Respond to model to continue loop
-                        const functionResponse = {
-                            functionResponses: [{
-                                response: { result: "Image generation task queued successfully." },
-                                id: call.id,
-                                name: call.name
-                            }]
-                        };
-                        
-                        // Recursion
-                        await processTurn([functionResponse]); // Wrap tool response as Part[]
                     }
+                }
+
+                // 2. Collect Tool Calls
+                // Use property access `chunk.functionCalls` NOT a method call
+                if (chunk.functionCalls) {
+                    for (const call of chunk.functionCalls) {
+                         // Dedup calls if SDK yields same call across chunks
+                         if (!toolCalls.some(c => c.id === call.id)) {
+                             toolCalls.push(call);
+                         }
+                    }
+                }
+            }
+
+            // 3. Execute Tools (After stream finishes)
+            if (toolCalls.length > 0) {
+                const responseParts: Part[] = [];
+                
+                for (const call of toolCalls) {
+                    // Always append visual indicator for tool use, regardless of prior calls
+                    fullText += "\n[Using Tool: Image Generator]\n";
+                    onChunk(fullText);
+                    
+                    if (onToolCall) {
+                        setTimeout(() => {
+                            onToolCall({
+                                toolName: call.name,
+                                args: call.args,
+                                jobId: crypto.randomUUID()
+                            });
+                        }, 0);
+                    }
+                    
+                    responseParts.push({
+                        functionResponse: {
+                            name: call.name,
+                            response: { 
+                                // SYSTEM NUDGE: Explicitly tell the model to continue the loop.
+                                result: `[SYSTEM_CALLBACK]: Image queued. STATUS: PENDING. \n\nREMINDER: If you just generated a Reference/Anchor Sheet (save_as_reference='IDENTITY'), you MUST STOP and wait for the user to confirm/approve it before generating the rest of the panels. Do NOT generate the sequence yet.` 
+                            },
+                            id: call.id
+                        }
+                    });
+                }
+
+                // Recursion with function response parts wrapped in message object
+                if (responseParts.length > 0) {
+                    await processTurn(responseParts);
                 }
             }
         };
@@ -657,20 +681,17 @@ const runStandardAgent = async (
     onToolCall?: (action: AgentAction) => void,
     modelName: string = 'gemini-2.5-flash' // Default to Flash
 ): Promise<string> => {
-    console.log(`[Agent] Starting Vercel Standard Loop with model: ${modelName}`);
-    const vercelGoogle = getVercelGoogle();
-    
-    // Convert AND Sanitize history (removes <thought> tags to avoid confusion)
-    const messages = convertHistoryToVercelFormat(history);
-
-    // Map internal enum to Vercel provider string
+    // Determine provider name
     let providerModelName = 'gemini-2.5-flash';
     if (modelName === ChatModel.GEMINI_3_PRO_FAST) {
-        // If user wants Pro but NOT reasoning, we can use the preview model with Vercel SDK
-        // (Assuming Vercel SDK supports it, otherwise fallback to Flash is safe)
+        // Fallback or explicit usage
         providerModelName = 'gemini-2.5-flash'; 
-        // Note: Currently keeping Flash as stable default for "Fast" mode unless explicitly configured otherwise
     }
+    
+    console.log(`[Agent] Starting Vercel Standard Loop. Requested: ${modelName}, Using: ${providerModelName}`);
+    
+    const vercelGoogle = getVercelGoogle();
+    const messages = convertHistoryToVercelFormat(history);
 
     const result = await streamText({
         model: vercelGoogle(providerModelName), 
@@ -704,7 +725,7 @@ const runStandardAgent = async (
                             });
                         }, 0);
                     }
-                    return "Image generation task has been queued successfully.";
+                    return "Image generation task has been queued successfully. If multiple images were requested, proceed with the next one.";
                 }
             })
         },
@@ -776,10 +797,18 @@ export const streamChatResponse = async (
   `;
   
   const reasoningProtocol = `
-    [PROTOCOL]
-    1. Think through the user's request.
-    2. If an image is needed, call the 'generate_image' tool immediately after your thought process.
-    3. Do NOT output conversational filler like "Okay" before the tool call.
+    [PROTOCOL: CHAIN OF THOUGHT & CONSISTENCY]
+    1. **MANDATORY PLANNING**: Output a plan BEFORE calling any tool.
+    2. **ANCHOR-FIRST WORKFLOW (MANDATORY)**:
+       - Problem: Characters look different in every frame if you generate them all at once.
+       - Solution: You MUST generate a "Character Sheet" or "Reference Image" FIRST.
+       - Step A: Call \`generate_image(prompt="Character sheet of...", save_as_reference="IDENTITY")\`.
+       - Step B: STOP. Tell the user: "I have generated the character reference. Please confirm if you want to proceed with this look."
+       - Step C: WAIT for user input.
+       - Step D: ONLY AFTER the user confirms, generate the rest of the storyboard panels using \`use_ref_context=true\`.
+    3. **SEQUENTIAL LOOP**: 
+       - When generating the final storyboard (after approval), generate ONE image at a time. Call tool -> Wait -> Call tool.
+       - Do NOT stop after the first image of the *sequence*. Loop until the plan is complete.
   `;
 
   const systemInstruction = `

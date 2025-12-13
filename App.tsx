@@ -575,13 +575,16 @@ export function App() {
               numberOfImages: numberOfImages !== undefined ? Number(numberOfImages) : 1 
           };
           
+          // INJECT AGENT CONTEXT (ANCHOR-FIRST LOGIC)
           if (use_ref_context && agentContextAssets.length > 0) {
+              // Priority: Agent Context > Current Params
               executionParams.smartAssets = [...(params.smartAssets || []), ...agentContextAssets];
               addToast('info', 'Agent Context Active', `Using ${agentContextAssets.length} referenced assets.`);
           }
 
           let onSuccessCallback: ((asset: AssetItem) => void) | undefined;
           
+          // CAPTURE ANCHOR (ANCHOR-FIRST LOGIC)
           if (save_as_reference && save_as_reference !== 'NONE') {
              onSuccessCallback = async (asset: AssetItem) => {
                  try {
