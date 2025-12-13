@@ -1,4 +1,4 @@
-import { GoogleGenAI, GenerateContentResponse, Content, Part, FunctionDeclaration, Tool as GeminiTool, FunctionCall, Type } from "@google/genai";
+import { GoogleGenAI, GenerateContentResponse, Content, Part, FunctionDeclaration, Tool as GeminiTool, FunctionCall, Type, HarmCategory, HarmBlockThreshold } from "@google/genai";
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { streamText, tool, CoreMessage } from 'ai';
 import { z } from 'zod';
@@ -84,38 +84,9 @@ const parseError = (error: any): Error => {
     }
   }
 
-  if (message.includes('{"error"') || message.includes('{"code"')) {
-    try {
-      const jsonMatch = message.match(/(\{.*\})/);
-      const jsonStr = jsonMatch ? jsonMatch[0] : message;
-      const parsed = JSON.parse(jsonStr);
-
-      if (parsed.error) {
-        if (parsed.error.code === 429 || parsed.error.status === 'RESOURCE_EXHAUSTED') {
-          return new Error("Quota Exceeded. You have reached the daily generation limit for this API Key. Please create a new API Key to continue.");
-        }
-        if (parsed.error.message) {
-          if (parsed.error.message.includes('quota') || parsed.error.message.includes('429')) {
-             return new Error("Quota Exceeded. You have reached the daily generation limit for this API Key. Please create a new API Key to continue.");
-          }
-          message = parsed.error.message;
-        }
-      }
-    } catch (e) {
-      // Ignore parsing errors
-    }
-  }
-
-  if (message.includes('429') || message.includes('RESOURCE_EXHAUSTED') || message.includes('Quota')) {
-      return new Error("Quota Exceeded. You have reached the daily generation limit for this API Key. Please create a new API Key to continue.");
-  }
-
-  if (message.includes('<html') || message.includes('<!DOCTYPE')) {
-      return new Error("Access Denied (403). The model request was blocked by the server. Please try the 'Gemini 2.5 Flash' model.");
-  }
-
-  if (message.includes('403') || message.includes('permission')) {
-     return new Error("Access Denied. This model (Pro/Veo) requires a paid API Key. Please switch to 'Gemini 2.5 Flash'.");
+  // Handle common error patterns
+  if (message.includes('429') || message.includes('RESOURCE_EXHAUSTED')) {
+      return new Error("Quota Exceeded. You have reached the daily generation limit.");
   }
   
   if (message.includes('503') || message.includes('overloaded')) {
@@ -190,24 +161,12 @@ class RequestQueue {
     try {
       return await task();
     } catch (error: any) {
-      if (error.message === 'Cancelled' || error.name === 'AbortError') {
-        throw error;
-      }
-
+      if (error.message === 'Cancelled' || error.name === 'AbortError') throw error;
+      
       const parsedError = parseError(error);
-      const msg = parsedError.message;
+      if (parsedError.message.includes('Quota')) throw parsedError;
 
-      if (msg.includes('Quota') || msg.includes('429') || msg.includes('Limit') || msg.includes('RESOURCE_EXHAUSTED')) {
-          throw parsedError;
-      }
-
-      const status = error?.status || error?.response?.status;
-      const isRetryable =
-        (status === 503 || status === 504 || status === 500) ||
-        (msg.includes('503') || msg.includes('overloaded'));
-
-      if (retries > 0 && isRetryable) {
-        console.warn(`[Lumina] Request failed (${status || msg}). Retrying in ${delay}ms...`);
+      if (retries > 0) {
         await new Promise(res => setTimeout(res, delay));
         return this.retry(task, retries - 1, delay * 2);
       }
@@ -219,17 +178,12 @@ class RequestQueue {
 const imageQueue = new RequestQueue(4); 
 const videoQueue = new RequestQueue(1);
 
-// -------------------
-
-// --- NEW EXPORTED FUNCTIONS ---
+// --- ASSET GENERATION FUNCTIONS ---
 
 export const testConnection = async (apiKey: string): Promise<boolean> => {
   try {
     const ai = new GoogleGenAI({ apiKey });
-    await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: 'Test',
-    });
+    await ai.models.generateContent({ model: 'gemini-2.5-flash', contents: 'Test' });
     return true;
   } catch (e) {
     throw parseError(e);
@@ -245,51 +199,30 @@ export const generateImage = async (
 ): Promise<AssetItem> => {
   return imageQueue.add(async () => {
     if (signal?.aborted) throw new Error("Cancelled");
-    
     const ai = getClient();
     
     let modelName = params.imageModel;
     const validModels: string[] = [ImageModel.FLASH, ImageModel.PRO];
-    
-    if (!validModels.includes(modelName)) {
-        console.warn(`[Service] Invalid model '${modelName}' detected. Falling back to Gemini 3 Pro.`);
-        modelName = ImageModel.PRO; 
-    }
+    if (!validModels.includes(modelName)) modelName = ImageModel.PRO; 
     
     const parts: Part[] = [];
-    
     if (params.smartAssets) {
         for (const asset of params.smartAssets) {
-            parts.push({
-                inlineData: {
-                    mimeType: asset.mimeType,
-                    data: asset.data
-                }
-            });
+            parts.push({ inlineData: { mimeType: asset.mimeType, data: asset.data } });
         }
     }
     
     let finalPrompt = params.prompt;
-    if (params.negativePrompt) {
-        finalPrompt += ` --negative_prompt="${params.negativePrompt}"`; 
-    }
-    if (params.imageStyle && params.imageStyle !== ImageStyle.NONE) {
-        finalPrompt += `. Style: ${params.imageStyle}`;
-    }
+    if (params.negativePrompt) finalPrompt += ` --negative_prompt="${params.negativePrompt}"`; 
+    if (params.imageStyle && params.imageStyle !== ImageStyle.NONE) finalPrompt += `. Style: ${params.imageStyle}`;
     
     parts.push({ text: finalPrompt });
 
-    const config: any = {
-        imageConfig: {
-            aspectRatio: params.aspectRatio,
-        }
-    };
-
+    const config: any = { imageConfig: { aspectRatio: params.aspectRatio } };
     if (modelName === ImageModel.PRO) {
         if (params.imageResolution) config.imageConfig.imageSize = params.imageResolution;
         if (params.useGrounding) config.tools = [{ googleSearch: {} }];
     }
-    
     if (params.seed !== undefined) config.seed = params.seed;
     if (params.guidanceScale !== undefined) config.imageConfig.guidanceScale = params.guidanceScale;
 
@@ -303,7 +236,7 @@ export const generateImage = async (
     let imageBase64 = '';
     let mimeType = '';
 
-    if (response.candidates && response.candidates[0].content && response.candidates[0].content.parts) {
+    if (response.candidates && response.candidates[0].content?.parts) {
         for (const part of response.candidates[0].content.parts) {
             if (part.inlineData) {
                 imageBase64 = part.inlineData.data;
@@ -316,9 +249,7 @@ export const generateImage = async (
 
     if (!imageUrl) {
         const textPart = response.candidates?.[0]?.content?.parts?.find(p => p.text);
-        if (textPart) {
-             throw new Error(`Model Refusal: ${textPart.text}`);
-        }
+        if (textPart) throw new Error(`Model Refusal: ${textPart.text}`);
         throw new Error("No image generated.");
     }
 
@@ -336,8 +267,7 @@ export const generateImage = async (
             style: params.imageStyle,
             resolution: params.imageResolution,
             seed: params.seed,
-            guidanceScale: params.guidanceScale,
-            usedGrounding: params.useGrounding
+            guidanceScale: params.guidanceScale
         }
     };
   }, onStart);
@@ -353,7 +283,6 @@ export const generateVideo = async (
        if (signal?.aborted) throw new Error("Cancelled");
        const ai = getClient();
        
-       let operation: any;
        const config: any = {
            numberOfVideos: 1,
            resolution: params.videoResolution || VideoResolution.RES_720P,
@@ -367,56 +296,30 @@ export const generateVideo = async (
        };
 
        if (params.videoStartImage) {
-           requestParams.image = {
-               imageBytes: params.videoStartImage,
-               mimeType: params.videoStartImageMimeType || 'image/png'
-           };
+           requestParams.image = { imageBytes: params.videoStartImage, mimeType: params.videoStartImageMimeType || 'image/png' };
        }
-       
        if (params.videoEndImage) {
-           config.lastFrame = {
-               imageBytes: params.videoEndImage,
-               mimeType: params.videoEndImageMimeType || 'image/png'
-           };
+           config.lastFrame = { imageBytes: params.videoEndImage, mimeType: params.videoEndImageMimeType || 'image/png' };
        }
-       
        if (params.videoModel === VideoModel.VEO_HQ && params.videoStyleReferences && params.videoStyleReferences.length > 0) {
            config.referenceImages = params.videoStyleReferences.map(ref => ({
-               image: {
-                   imageBytes: ref.data,
-                   mimeType: ref.mimeType
-               },
+               image: { imageBytes: ref.data, mimeType: ref.mimeType },
                referenceType: 'ASSET'
            }));
        }
        
        if (onStart) onStart();
        
-       operation = await makeAbortable(ai.models.generateVideos(requestParams), signal);
-       
-       if (onOperationId && operation.name) {
-           await onOperationId(operation.name);
-       }
+       let operation: any = await makeAbortable(ai.models.generateVideos(requestParams), signal);
+       if (onOperationId && operation.name) await onOperationId(operation.name);
 
        while (!operation.done) {
            if (signal?.aborted) throw new Error("Cancelled");
-           
-           await new Promise((resolve, reject) => {
-               const timer = setTimeout(resolve, 5000);
-               if (signal) {
-                   signal.addEventListener('abort', () => {
-                       clearTimeout(timer);
-                       reject(new Error("Cancelled"));
-                   }, { once: true });
-               }
-           });
-           
-           operation = await makeAbortable(ai.operations.getVideosOperation({ operation }), signal);
+           await new Promise(resolve => setTimeout(resolve, 5000));
+           operation = await ai.operations.getVideosOperation({ operation });
        }
        
-       if (operation.error) {
-           throw parseError(operation.error);
-       }
+       if (operation.error) throw parseError(operation.error);
        
        const downloadLink = operation.response?.generatedVideos?.[0]?.video?.uri;
        if (!downloadLink) throw new Error("No video URI returned.");
@@ -440,9 +343,7 @@ export const resumeVideoGeneration = async (operationName: string): Promise<stri
             operation = await ai.operations.getVideosOperation({ operation: { name: operationName } });
         }
 
-        if (operation.error) {
-            throw parseError(operation.error);
-        }
+        if (operation.error) throw parseError(operation.error);
 
         const downloadLink = operation.response?.generatedVideos?.[0]?.video?.uri;
         if (!downloadLink) throw new Error("No video URI returned.");
@@ -456,70 +357,27 @@ export const resumeVideoGeneration = async (operationName: string): Promise<stri
     });
 };
 
-// ------------------------------
+// --- UTILS ---
 
 export const optimizePrompt = async (originalPrompt: string, mode: AppMode, smartAssets?: SmartAsset[]): Promise<string> => {
   if (!originalPrompt.trim()) return "";
-  
   const ai = getClient();
   
   let assetContext = "";
   if (smartAssets && smartAssets.length > 0) {
       const types = smartAssets.map(a => a.type);
-      assetContext = `\nCONTEXT: The user has attached ${smartAssets.length} reference images with the following roles: ${types.join(', ')}.`;
-      
-      if (types.includes('STRUCTURE')) {
-          assetContext += `\n- STRUCTURE/LAYOUT image provided: The prompt must explicitly state to "follow the composition and layout of the reference image".`;
-      }
-      if (types.includes('STYLE')) {
-          assetContext += `\n- STYLE image provided: The prompt should mention "in the artistic style of the reference image" but NOT describe the reference's content (unless relevant).`;
-      }
-      if (types.includes('IDENTITY')) {
-          assetContext += `\n- IDENTITY image provided: The prompt must emphasize "maintaining the character/object identity".`;
-      }
+      assetContext = `\nCONTEXT: The user has attached ${smartAssets.length} reference images: ${types.join(', ')}.`;
   }
 
-  let task = "";
-  if (mode === AppMode.VIDEO) {
-    task = `You are an expert Film Director and Prompt Engineer for AI Video generation (Google Veo). 
-    Rewrite the following user prompt into a single, high-quality, descriptive caption optimized for Veo.
-    
-    OFFICIAL GUIDELINES:
-    1. **Structure**: Follow this flow: (Subject + Action) + (Environment + Lighting) + (Camera Movement + Style).
-    2. **Natural Language**: Write as a fluid, natural sentence, NOT a list of tags.
-    3. **Visuals Only**: Describe what is seen. Avoid abstract words like "amazing" or "thought-provoking".
-    4. **Motion**: Use strong verbs to describe movement (e.g., "sprinting", "morphing", "gliding").
-    5. **Camera**: Explicitly state camera movement (e.g., "Drone tracking shot", "Slow pan right", "Static camera").
-    6. **Conciseness**: Keep it under 70 words.
-    ${assetContext}
-
-    Original Input: "${originalPrompt}"
-    
-    Output ONLY the refined prompt text. Do not add quotes.`;
-  } else {
-    task = `You are an expert Prompt Engineer for Google's Gemini Image Generation models.
-    Rewrite the user's prompt to be descriptive, visually rich, and structured.
-    
-    OFFICIAL BEST PRACTICES:
-    1. **Be Descriptive**: Gemini models thrive on detail. Don't say "a car"; say "a vintage 1960s red convertible sports car with chrome details".
-    2. **Natural Language**: Use fluid sentences, not a list of tags. If the input is a list of tags (e.g. from a Prompt Builder), weave them into a coherent narrative.
-    3. **Structure**: Subject -> Context/Background -> Art Style/Medium -> Lighting/Atmosphere -> Technical Details (e.g., "4k", "highly detailed").
-    4. **No Restrictions**: Do NOT restrict word count. Use as many words as necessary to vividly describe the scene (aim for 50-100 words if needed for detail).
-    ${assetContext}
-    
-    Original Input: "${originalPrompt}"
-    
-    Output ONLY the refined prompt text. Do not add quotes.`;
-  }
+  const task = `You are a professional Prompt Engineer. Rewrite this prompt to be more descriptive and detailed for an AI generator. 
+  ${assetContext}
+  Original: "${originalPrompt}"
+  Output ONLY the optimized prompt.`;
     
   try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: task,
-    });
+    const response = await ai.models.generateContent({ model: 'gemini-2.5-flash', contents: task });
     return response.text?.trim() || originalPrompt;
   } catch (e) {
-    console.warn("Prompt optimization failed", e);
     return originalPrompt;
   }
 };
@@ -531,21 +389,13 @@ export const describeImage = async (base64Data: string, mimeType: string): Promi
       model: 'gemini-2.5-flash',
       contents: {
         parts: [
-          {
-            inlineData: {
-              data: base64Data,
-              mimeType: mimeType
-            }
-          },
-          {
-            text: "Analyze this image and provide a concise, high-quality prompt for generating a similar image. Focus on subject, art style, lighting, composition, and key details. Output ONLY the prompt string without markdown or quotes."
-          }
+          { inlineData: { data: base64Data, mimeType } },
+          { text: "Describe this image in detail for a text-to-image prompt. Output ONLY the prompt." }
         ]
       }
     });
     return response.text?.trim() || "";
   } catch (e) {
-    console.error("Describe image failed", e);
     throw new Error("Failed to analyze image.");
   }
 };
@@ -555,11 +405,10 @@ export const generateProjectName = async (prompt: string): Promise<string> => {
     const ai = getClient();
     const response = await ai.models.generateContent({
       model: 'gemini-2.5-flash',
-      contents: `Generate a very short, concise title (max 4 words) for a creative project based on this prompt: "${prompt}". Do not use quotes.`,
+      contents: `Generate a very short title (max 4 words) based on this: "${prompt}". No quotes.`,
     });
-    return response.text?.trim() || "Creative Project";
+    return response.text?.trim() || "New Project";
   } catch (e) {
-    console.warn("Failed to auto-generate project name", e);
     return "New Project";
   }
 };
@@ -568,92 +417,44 @@ export const extractPromptFromHistory = async (history: ChatMessage[], mode: App
   try {
     const ai = getClient();
     const recentHistory = history.slice(-20);
-
     const conversationText = recentHistory.map(msg => {
-      const imgCount = (msg.images?.length || (msg.image ? 1 : 0));
-      const cleanContent = msg.content.replace(/<thought>[\s\S]*?<\/thought>/g, '').trim();
-      return `${msg.role}: ${cleanContent} ${imgCount > 0 ? `[User uploaded ${imgCount} images]` : ''}`;
+        // Strip thoughts from context analysis to save tokens
+        const clean = msg.content.replace(/<thought>[\s\S]*?<\/thought>/g, '').trim();
+        return `${msg.role}: ${clean}`;
     }).join('\n');
-    
-    const contextInstruction = mode === AppMode.VIDEO 
-      ? "Extract the final, most detailed VIDEO generation prompt. Focus on camera movement, scene description, motion, lighting, and mood."
-      : "Extract the final, most detailed IMAGE generation prompt. Focus on composition, lighting, style, and visual details.";
-
     const response = await ai.models.generateContent({
       model: 'gemini-2.5-flash',
-      contents: `You are a professional prompt engineer. Read the following conversation between a user and an AI assistant.
-      
-      CONVERSATION:
-      ${conversationText}
-      
-      TASK:
-      ${contextInstruction}
-      Ignore conversational filler, greetings, or "sure I can help with that". 
-      Output ONLY the raw prompt text. Do not add "Here is the prompt" or quotes.
-      `
+      contents: `Extract the final image/video generation prompt from this conversation. Output ONLY the raw prompt text.\n${conversationText}`
     });
-    
     return response.text?.trim() || "";
   } catch (e) {
-    console.error("Failed to extract prompt", e);
     throw new Error("Failed to summarize conversation.");
   }
 };
 
-const updateRecursiveSummary = async (
-    currentSummary: string, 
-    newMessages: ChatMessage[]
-): Promise<string> => {
+const updateRecursiveSummary = async (currentSummary: string, newMessages: ChatMessage[]): Promise<string> => {
   if (newMessages.length === 0) return currentSummary;
-  
   const ai = getClient();
   const deltaText = newMessages.map(m => {
-     const cleanContent = m.content.replace(/<thought>[\s\S]*?<\/thought>/g, '').trim();
-     let imgMarker = "";
-     if (m.images && m.images.length > 0) {
-         imgMarker = `[User uploaded ${m.images.length} images]`;
-     } else if (m.image) {
-         imgMarker = `[User uploaded 1 image]`;
-     }
-     return `${m.role.toUpperCase()}: ${cleanContent} ${imgMarker}`;
+      // Strip thoughts from summary
+      const clean = m.content.replace(/<thought>[\s\S]*?<\/thought>/g, '').trim();
+      return `${m.role.toUpperCase()}: ${clean}`;
   }).join('\n');
   
-  const prompt = `
-  You are the memory manager for a creative AI assistant.
-  
-  CURRENT MEMORY STATE:
-  "${currentSummary || "No previous context."}"
-  
-  NEW INTERACTIONS (Delta):
-  ${deltaText}
-  
-  TASK:
-  Update the "Current Memory State" to include key information from the "New Interactions".
-  - Keep it concise.
-  - Retain important user preferences, art styles, and project goals.
-  - Discard conversational filler (hello, thanks).
-  - Do NOT output JSON. Output the raw summary text.
-  `;
-
+  const prompt = `Update the memory summary based on new interactions. Keep it concise.\nCURRENT: ${currentSummary}\nNEW: ${deltaText}`;
   try {
-     const resp = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: prompt
-     });
+     const resp = await ai.models.generateContent({ model: 'gemini-2.5-flash', contents: prompt });
      return resp.text?.trim() || currentSummary;
   } catch (e) {
-     console.warn("Recursive summary update failed", e);
      return currentSummary;
   }
 };
 
-// Convert chat history to Vercel AI SDK Core format
-// UPDATED: Prefer string content for simplicity when no images are present to avoid "ContentUnion" schema errors.
+// --- DATA CONVERSION HELPERS ---
+
 const convertHistoryToVercelFormat = (history: ChatMessage[]): CoreMessage[] => {
     return history.map(msg => {
         const parts: any[] = [];
-        
-        // Add Images
         if (msg.images?.length) {
             msg.images.forEach(img => {
                 const matches = img.match(/^data:(.+);base64,(.+)$/);
@@ -664,61 +465,43 @@ const convertHistoryToVercelFormat = (history: ChatMessage[]): CoreMessage[] => 
              if (matches) parts.push({ type: 'image', image: matches[2], mimeType: matches[1] });
         }
         
-        const textContent = msg.content || ''; // Do not strip thoughts here for history context
+        // Vercel/Standard Models do not need to see the "Thinking" trace of previous messages.
+        // It consumes context window and can confuse the standard model.
+        let textContent = msg.content || ''; 
+        textContent = textContent.replace(/<thought>[\s\S]*?<\/thought>/g, '').trim();
+        // Also remove tool logs from history for Vercel model to avoid hallucinating them
+        textContent = textContent.replace(/\[Using Tool:.*?\]/g, '').trim();
         
         if (parts.length > 0) {
-            // Mixed content (Image + Text)
-            if (textContent) {
-                parts.push({ type: 'text', text: textContent });
-            } else if (parts.length > 0 && !textContent) {
-                 // If we have images but no text, Vercel SDK sometimes dislikes empty text parts in mixed array.
-                 // But we don't need to push empty text part if images exist.
-            }
-            return {
-                role: msg.role === 'model' ? 'assistant' : 'user',
-                content: parts
-            } as CoreMessage;
+            if (textContent) parts.push({ type: 'text', text: textContent });
+            return { role: msg.role === 'model' ? 'assistant' : 'user', content: parts } as CoreMessage;
         } else {
-            // Text only - Return simple string to minimize schema issues
-            return {
-                role: msg.role === 'model' ? 'assistant' : 'user',
-                content: textContent || ' ' // Ensure non-empty string
-            } as CoreMessage;
+            // FAILSAFE: Ensure content is never empty string, which triggers "ContentUnion is required" error in Zod
+            return { role: msg.role === 'model' ? 'assistant' : 'user', content: textContent || ' ' } as CoreMessage;
         }
     });
 };
 
-// --- NATIVE SDK HELPERS FOR REASONING MODEL ---
 const convertHistoryToNativeFormat = (history: ChatMessage[]): Content[] => {
     return history.map(msg => {
         const parts: Part[] = [];
         if (msg.images && msg.images.length > 0) {
             msg.images.forEach(img => {
                 const matches = img.match(/^data:(.+);base64,(.+)$/);
-                if (matches) {
-                    parts.push({ inlineData: { mimeType: matches[1], data: matches[2] } });
-                }
+                if (matches) parts.push({ inlineData: { mimeType: matches[1], data: matches[2] } });
             });
         } else if (msg.image) {
             const matches = msg.image.match(/^data:(.+);base64,(.+)$/);
-            if (matches) {
-                parts.push({ inlineData: { mimeType: matches[1], data: matches[2] } });
-            }
+            if (matches) parts.push({ inlineData: { mimeType: matches[1], data: matches[2] } });
         }
         
-        if (msg.content) {
-             parts.push({ text: msg.content });
-        }
-
-        // FAILSAFE: Ensure at least one part exists
-        if (parts.length === 0) {
-            parts.push({ text: ' ' });
-        }
+        if (msg.content) parts.push({ text: msg.content });
+        if (parts.length === 0) parts.push({ text: ' ' }); // Failsafe
         
-        return {
-            role: msg.role,
-            parts: parts
-        };
+        // STRICT ROLE ENFORCEMENT: Only 'user' or 'model' allowed by Native SDK
+        const validRole = (msg.role === 'user' || msg.role === 'model') ? msg.role : 'model';
+        
+        return { role: validRole, parts: parts };
     });
 };
 
@@ -744,7 +527,198 @@ const NATIVE_IMAGE_TOOL: FunctionDeclaration = {
     }
 };
 
-// ----------------------------------------------
+// --- CORE AGENT LOGIC: SPLIT EXECUTION PATHS ---
+
+// Path A: Native Google SDK Loop (For Thinking/Reasoning Models)
+const runReasoningAgent = async (
+    history: ChatMessage[],
+    newMessage: string,
+    onChunk: (text: string) => void,
+    signal: AbortSignal | undefined,
+    systemInstruction: string,
+    onToolCall?: (action: AgentAction) => void
+): Promise<string> => {
+    console.log("[Agent] Starting Native Reasoning Loop");
+    try {
+        const ai = getClient();
+        
+        // Prepare History (Excluding last message which is sent via sendMessageStream)
+        const rawHistory = history.slice(0, Math.max(0, history.length - 1)).slice(-50);
+        const effectiveHistory = convertHistoryToNativeFormat(rawHistory);
+        
+        // STRICT SYSTEM INSTRUCTION FORMAT: Use Part[] structure to satisfy ContentUnion requirements
+        const systemInstructionParts: Part[] = [{ text: systemInstruction }];
+
+        // Use Gemini 3 Pro Preview for thinking/reasoning
+        const chat = ai.chats.create({
+            model: 'gemini-3-pro-preview', 
+            history: effectiveHistory,
+            config: {
+                systemInstruction: { parts: systemInstructionParts }, // Explicit Content Wrapper
+                tools: [{ functionDeclarations: [NATIVE_IMAGE_TOOL] }],
+                safetySettings: [
+                    { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
+                    { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_NONE },
+                    { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE },
+                    { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE }
+                ]
+            }
+        });
+
+        // Reconstruct the latest message content
+        const lastMsg = history[history.length - 1];
+        let msgPartsToSend: Part[] = [];
+        
+        if (lastMsg) {
+            if (lastMsg.images?.length) {
+                lastMsg.images.forEach(img => {
+                    const matches = img.match(/^data:(.+);base64,(.+)$/);
+                    if (matches) msgPartsToSend.push({ inlineData: { mimeType: matches[1], data: matches[2] } });
+                });
+            }
+            if (lastMsg.content) msgPartsToSend.push({ text: lastMsg.content });
+        }
+        if (msgPartsToSend.length === 0) msgPartsToSend.push({ text: newMessage || ' ' });
+
+        let fullText = "";
+
+        // Recursive Agent Loop
+        const processTurn = async (content: Part[] | any) => {
+            // STRICT MESSAGE FORMAT: Wrap in { parts: ... } for sendMessageStream
+            // This ensures we satisfy the `GenerateContentParameters` expectation which avoids "ContentUnion" ambiguity
+            const result = await chat.sendMessageStream({ parts: content });
+            let toolCallOccurred = false;
+            
+            for await (const chunk of result) {
+                if (signal?.aborted) throw new Error("Cancelled");
+                
+                // 1. Accumulate Text
+                if (chunk.text) {
+                    fullText += chunk.text;
+                    onChunk(fullText);
+                }
+
+                // 2. Handle Tool Calls
+                const calls = chunk.functionCalls();
+                if (calls && calls.length > 0) {
+                    toolCallOccurred = true;
+                    for (const call of calls) {
+                        if (!fullText.includes('[Using Tool:')) {
+                            fullText += "\n[Using Tool: Image Generator]\n";
+                            onChunk(fullText);
+                        }
+                        
+                        if (onToolCall) {
+                            // Execute tool async
+                            setTimeout(() => {
+                                onToolCall({
+                                    toolName: call.name,
+                                    args: call.args,
+                                    jobId: crypto.randomUUID()
+                                });
+                            }, 0);
+                        }
+                        
+                        // Respond to model to continue loop
+                        const functionResponse = {
+                            functionResponses: [{
+                                response: { result: "Image generation task queued successfully." },
+                                id: call.id,
+                                name: call.name
+                            }]
+                        };
+                        
+                        // Recursion
+                        await processTurn([functionResponse]); // Wrap tool response as Part[]
+                    }
+                }
+            }
+        };
+
+        await processTurn(msgPartsToSend);
+        return fullText;
+        
+    } catch (error: any) {
+        console.error("Native Loop Error:", error);
+        // Ensure errors from Native loop are distinguished
+        if (error.message && error.message.includes("ContentUnion")) {
+             throw new Error("Native SDK Protocol Mismatch: " + error.message);
+        }
+        throw error;
+    }
+};
+
+// Path B: Vercel AI SDK Loop (For Flash/Standard Models)
+const runStandardAgent = async (
+    history: ChatMessage[],
+    onChunk: (text: string) => void,
+    signal: AbortSignal | undefined,
+    systemInstruction: string,
+    onToolCall?: (action: AgentAction) => void,
+    modelName: string = 'gemini-2.5-flash' // Default to Flash
+): Promise<string> => {
+    console.log(`[Agent] Starting Vercel Standard Loop with model: ${modelName}`);
+    const vercelGoogle = getVercelGoogle();
+    
+    // Convert AND Sanitize history (removes <thought> tags to avoid confusion)
+    const messages = convertHistoryToVercelFormat(history);
+
+    // Map internal enum to Vercel provider string
+    let providerModelName = 'gemini-2.5-flash';
+    if (modelName === ChatModel.GEMINI_3_PRO_FAST) {
+        // If user wants Pro but NOT reasoning, we can use the preview model with Vercel SDK
+        // (Assuming Vercel SDK supports it, otherwise fallback to Flash is safe)
+        providerModelName = 'gemini-2.5-flash'; 
+        // Note: Currently keeping Flash as stable default for "Fast" mode unless explicitly configured otherwise
+    }
+
+    const result = await streamText({
+        model: vercelGoogle(providerModelName), 
+        messages,
+        system: systemInstruction,
+        maxSteps: 5, // Vercel's Auto-Loop
+        abortSignal: signal,
+        tools: {
+            generate_image: tool({
+                description: "Generate one or more images based on a detailed text prompt.",
+                parameters: z.object({
+                    prompt: z.string().describe("A highly detailed, descriptive prompt."),
+                    numberOfImages: z.number().optional().describe("Number of images (1-4)."),
+                    aspectRatio: z.enum(["1:1", "16:9", "9:16", "4:3", "3:4"]).optional(),
+                    model: z.enum([ImageModel.FLASH, ImageModel.PRO]).optional(),
+                    style: z.string().optional(),
+                    resolution: z.enum(["1K", "2K", "4K"]).optional(),
+                    negativePrompt: z.string().optional(),
+                    seed: z.number().optional(),
+                    guidanceScale: z.number().optional(),
+                    save_as_reference: z.enum(["IDENTITY", "STYLE", "NONE"]).optional(),
+                    use_ref_context: z.boolean().optional()
+                }),
+                execute: async (args) => {
+                    if (onToolCall) {
+                        setTimeout(() => {
+                            onToolCall({
+                                toolName: 'generate_image',
+                                args: args,
+                                jobId: crypto.randomUUID()
+                            });
+                        }, 0);
+                    }
+                    return "Image generation task has been queued successfully.";
+                }
+            })
+        },
+    });
+
+    let fullText = "";
+    for await (const textPart of result.textStream) {
+        fullText += textPart;
+        onChunk(fullText);
+    }
+    return fullText;
+};
+
+// --- MAIN ENTRY POINT ---
 
 export const streamChatResponse = async (
   history: ChatMessage[], 
@@ -762,7 +736,7 @@ export const streamChatResponse = async (
   contextAssets?: SmartAsset[] 
 ): Promise<string> => {
   
-  // Update Recursive Summary Logic
+  // 1. Recursive Summary Update (Shared logic)
   const MAX_ACTIVE_WINDOW = 12;
   let currentContextSummary = projectContextSummary || "";
   let currentCursor = projectSummaryCursor || 0;
@@ -776,11 +750,11 @@ export const streamChatResponse = async (
           currentCursor = archiveBoundary;
           if (onUpdateContext) onUpdateContext(currentContextSummary, currentCursor);
       } catch (e) {
-          console.warn("Failed to update recursive summary, continuing with old context", e);
+          console.warn("Failed to update recursive summary", e);
       }
   }
 
-  // Build Context for System Prompt
+  // 2. System Instruction Build (Shared logic)
   const currentSettingsContext = currentParams ? JSON.stringify({
         model: currentParams.imageModel,
         aspectRatio: currentParams.aspectRatio,
@@ -792,11 +766,9 @@ export const streamChatResponse = async (
 
   const contextInjection = currentContextSummary ? `\n[LONG-TERM MEMORY]\n${currentContextSummary}` : "";
   const isAutoMode = currentParams?.isAutoMode ?? true;
-  
-  // Determine if using reasoning model (Thinking)
-  const isReasoning = model === ChatModel.GEMINI_3_PRO_REASONING;
+  const modelStr = String(model);
+  const isReasoning = modelStr.includes('reasoning') || model === ChatModel.GEMINI_3_PRO_REASONING;
 
-  // UI Protocol
   const uiProtocolInstruction = `
     [IMPORTANT UI PROTOCOL]
     When you call the 'generate_image' tool, you MUST preface your response with this EXACT string on a new line:
@@ -827,170 +799,10 @@ export const streamChatResponse = async (
     ${isReasoning ? reasoningProtocol : uiProtocolInstruction}
   `;
 
-  // === STRATEGY SELECTION ===
-
-  // STRATEGY A: NATIVE SDK (For Reasoning/Thinking Models)
-  // This bypasses Vercel SDK to correctly handle 'thought_signature' in the session state.
+  // 3. Strict Dispatch
   if (isReasoning) {
-      const ai = getClient();
-      
-      // Calculate effective history length to slice
-      // We want to initialize the chat with history EXCLUDING the latest user message
-      // because we send the latest message via sendMessageStream to trigger generation.
-      const rawHistory = history.slice(0, Math.max(0, history.length - 1)).slice(-50);
-      const effectiveHistory = convertHistoryToNativeFormat(rawHistory);
-      
-      const freshChat = ai.chats.create({
-          model: 'gemini-3-pro-preview',
-          history: effectiveHistory,
-          config: {
-              systemInstruction: systemInstruction,
-              tools: [{ functionDeclarations: [NATIVE_IMAGE_TOOL] }]
-          }
-      });
-
-      // Prepare new message content
-      // IMPORTANT: We must reconstruct the latest message from the history object (last element)
-      // because the 'newMessage' argument string does NOT contain image data if the user uploaded images.
-      const lastMsg = history[history.length - 1];
-      let msgPartsToSend: Part[] = [];
-      
-      if (lastMsg) {
-          if (lastMsg.images && lastMsg.images.length > 0) {
-              lastMsg.images.forEach(img => {
-                  const matches = img.match(/^data:(.+);base64,(.+)$/);
-                  if (matches) {
-                      msgPartsToSend.push({ inlineData: { mimeType: matches[1], data: matches[2] } });
-                  }
-              });
-          } else if (lastMsg.image) {
-              const matches = lastMsg.image.match(/^data:(.+);base64,(.+)$/);
-              if (matches) {
-                  msgPartsToSend.push({ inlineData: { mimeType: matches[1], data: matches[2] } });
-              }
-          }
-          
-          if (lastMsg.content) {
-              msgPartsToSend.push({ text: lastMsg.content });
-          }
-      }
-
-      // Fallback if somehow empty
-      if (msgPartsToSend.length === 0) {
-           msgPartsToSend.push({ text: newMessage || ' ' });
-      }
-
-      // Send Message Stream
-      let fullText = "";
-      
-      const sendAndProcess = async (msgContent: string | Part[] | any) => {
-          const result = await freshChat.sendMessageStream(msgContent);
-          
-          for await (const chunk of result) {
-               // Check for Text
-               const chunkText = chunk.text;
-               if (chunkText) {
-                   fullText += chunkText;
-                   onChunk(fullText);
-               }
-
-               // Check for Tool Calls
-               const calls = chunk.functionCalls();
-               if (calls && calls.length > 0) {
-                   for (const call of calls) {
-                       // Notify UI we are using tool
-                       if (!fullText.includes('[Using Tool:')) {
-                           fullText += "\n[Using Tool: Image Generator]\n";
-                           onChunk(fullText);
-                       }
-                       
-                       // Execute Tool
-                       if (onToolCall) {
-                           setTimeout(() => {
-                               onToolCall({
-                                   toolName: call.name,
-                                   args: call.args,
-                                   jobId: crypto.randomUUID()
-                               });
-                           }, 0);
-                       }
-                       
-                       // Send Response back to Model to close the loop
-                       const functionResponse = {
-                           functionResponses: [{
-                               response: { result: "Image generation task queued successfully." },
-                               id: call.id,
-                               name: call.name
-                           }]
-                       };
-                       
-                       // Recursive call for the next turn
-                       await sendAndProcess(functionResponse); 
-                   }
-               }
-          }
-      };
-
-      await sendAndProcess(msgPartsToSend);
-      return fullText;
-  }
-
-  // STRATEGY B: VERCEL AI SDK (For Flash/Standard Models)
-  // Maintains compatibility with existing robust logic for non-thinking models.
-  else {
-      const vercelGoogle = getVercelGoogle();
-      const messages = convertHistoryToVercelFormat(history);
-
-      const tools: Record<string, any> = {
-          generate_image: tool({
-              description: "Generate one or more images based on a detailed text prompt.",
-              parameters: z.object({
-                  prompt: z.string().describe("A highly detailed, descriptive prompt."),
-                  numberOfImages: z.number().optional().describe("Number of images (1-4)."),
-                  aspectRatio: z.enum(["1:1", "16:9", "9:16", "4:3", "3:4"]).optional(),
-                  model: z.enum([ImageModel.FLASH, ImageModel.PRO]).optional(),
-                  style: z.string().optional(),
-                  resolution: z.enum(["1K", "2K", "4K"]).optional(),
-                  negativePrompt: z.string().optional(),
-                  seed: z.number().optional(),
-                  guidanceScale: z.number().optional(),
-                  save_as_reference: z.enum(["IDENTITY", "STYLE", "NONE"]).optional(),
-                  use_ref_context: z.boolean().optional()
-              }),
-              execute: async (args) => {
-                  if (onToolCall) {
-                      setTimeout(() => {
-                          onToolCall({
-                              toolName: 'generate_image',
-                              args: args,
-                              jobId: crypto.randomUUID()
-                          });
-                      }, 0);
-                  }
-                  return "Image generation task has been queued successfully. Tell the user you are generating it.";
-              }
-          })
-      };
-
-      try {
-          const result = await streamText({
-              model: vercelGoogle('gemini-2.5-flash'), 
-              messages,
-              system: systemInstruction,
-              maxSteps: 5, 
-              abortSignal: signal,
-              tools: tools,
-          });
-
-          let fullText = "";
-          for await (const textPart of result.textStream) {
-              fullText += textPart;
-              onChunk(fullText);
-          }
-          return fullText;
-      } catch (err: any) {
-          console.warn("Vercel SDK Stream failed", err);
-          throw err;
-      }
+      return runReasoningAgent(history, newMessage, onChunk, signal, systemInstruction, onToolCall);
+  } else {
+      return runStandardAgent(history, onChunk, signal, systemInstruction, onToolCall, model);
   }
 };
