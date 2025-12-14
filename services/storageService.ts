@@ -219,6 +219,7 @@ export const saveAsset = async (asset: AssetItem): Promise<void> => {
 
   try {
     // 1. Optimize Image Storage: Convert Base64 Data URL to Blob
+    // CRITICAL FIX: Ensure we don't save corrupted "data:..." strings as the URL if they are huge
     if (asset.type === 'IMAGE' && asset.url.startsWith('data:')) {
        try {
            const response = await fetch(asset.url);
@@ -227,12 +228,12 @@ export const saveAsset = async (asset: AssetItem): Promise<void> => {
            storageRecord.url = 'blob'; // Placeholder, indicates data is in .blob field
        } catch (conversionError) {
            console.warn("Blob conversion failed for image, falling back to string storage", conversionError);
-           // Fallback: Do not set .blob, keep .url as the base64 string
+           // Fallback: If blob conversion fails, it might be due to memory.
+           // We might still try to save the string, but if it's huge, IndexedDB might reject it.
        }
     }
     
     // 2. Handle Video Blobs (existing logic)
-    // blob: URLs are temporary. We must fetch the blob data and store it.
     else if (asset.type === 'VIDEO' && asset.url.startsWith('blob:')) {
       try {
           const response = await fetch(asset.url);
@@ -241,18 +242,21 @@ export const saveAsset = async (asset: AssetItem): Promise<void> => {
           storageRecord.url = 'blob'; // Placeholder
       } catch (conversionError) {
           console.error("Blob fetch failed for video, cannot save persistence", conversionError);
-          // For video, if we can't get the blob from the blob:url, we likely can't save it at all 
-          // unless it was base64. But we proceed to try saving metadata at least.
       }
     }
   } catch (e) {
     console.error("Failed to prepare asset blob for storage", e);
-    // Continue attempting to save what we have (metadata) if blob fails
   }
 
   const transaction = await getTransaction(STORE_ASSETS, 'readwrite');
   return new Promise((resolve, reject) => {
     const store = transaction.objectStore(STORE_ASSETS);
+    // SAFTEY CHECK: Don't save if it's missing vital data
+    if (!storageRecord.url && !storageRecord.blob && storageRecord.status === 'COMPLETED') {
+        reject(new Error("Cannot save asset: Missing URL and Blob data"));
+        return;
+    }
+    
     const request = store.put(storageRecord);
 
     request.onsuccess = () => resolve();
@@ -284,7 +288,6 @@ export const updateAsset = async (id: string, updates: Partial<AssetItem>): Prom
           processedUpdates.url = 'blob'; // Placeholder used by loadAssets
       } catch (e) {
           console.error("Failed to persist blob in updateAsset", e);
-          // Fallback: don't modify, try to save URL as is (will likely fail on reload but better than crash)
       }
   }
 
@@ -298,11 +301,16 @@ export const updateAsset = async (id: string, updates: Partial<AssetItem>): Prom
       if (data) {
         // Merge existing data with processed updates
         const updatedData = { ...data, ...processedUpdates };
+        
+        // Ensure we don't lose the blob if it existed and wasn't overwritten
+        if (data.blob && !processedUpdates.blob && processedUpdates.url === 'blob') {
+             updatedData.blob = data.blob;
+        }
+
         const putRequest = store.put(updatedData);
         putRequest.onsuccess = () => resolve();
         putRequest.onerror = () => reject(putRequest.error);
       } else {
-        // Only reject if we really need to. Sometimes updates race conditions happen.
         console.warn(`Asset ${id} not found for update.`);
         resolve(); // resolve anyway to prevent app crash
       }
@@ -329,7 +337,6 @@ const cleanupBlobUrls = () => {
 
 export const loadAssets = async (projectId?: string): Promise<AssetItem[]> => {
   // STEP 1: Perform cleanup before loading new assets
-  // This ensures we release memory from the previous view before allocating new memory
   cleanupBlobUrls();
 
   const transaction = await getTransaction(STORE_ASSETS, 'readonly');
@@ -359,6 +366,12 @@ export const loadAssets = async (projectId?: string): Promise<AssetItem[]> => {
            // We do not modify the record in DB, just the returned object for the app
            return { ...record, url: newUrl, blob: undefined }; 
         }
+        
+        // FALLBACK: If URL is 'blob' but blob data is missing (corruption check)
+        if (record.url === 'blob' && !record.blob) {
+            return { ...record, status: 'FAILED', url: '', metadata: { ...record.metadata, error: 'Storage Corruption: Data missing' } };
+        }
+
         return record;
       });
       // Sort by newest first

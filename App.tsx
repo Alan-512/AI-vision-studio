@@ -1,3 +1,4 @@
+// ... (imports remain the same)
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Image as ImageIcon, Video, LayoutGrid, Folder, Sparkles, Settings, Star, CheckSquare, MoveHorizontal, Brush, X, Languages, Trash2, Recycle, Download } from 'lucide-react';
 import { AppMode, AspectRatio, GenerationParams, AssetItem, ImageResolution, VideoResolution, ImageModel, VideoModel, ImageStyle, Project, ChatMessage, BackgroundTask, SmartAsset } from './types';
@@ -5,7 +6,7 @@ import { GenerationForm } from './components/GenerationForm';
 import { AssetCard } from './components/AssetCard';
 import { ProjectSidebar } from './components/ProjectSidebar';
 import { SettingsDialog } from './components/SettingsDialog';
-import { CanvasView } from './components/CanvasView'; // NEW
+import { CanvasView } from './components/CanvasView'; 
 import { TaskCenter } from './components/TaskCenter';
 import { ComparisonView } from './components/ComparisonView';
 import { CanvasEditor } from './components/CanvasEditor';
@@ -15,6 +16,9 @@ import { generateImage, generateVideo, resumeVideoGeneration, promptForVeoKey, c
 import { initDB, loadProjects, loadAssets, saveProject, saveAsset, updateAsset, deleteProjectFromDB, permanentlyDeleteAssetFromDB, softDeleteAssetInDB, restoreAssetInDB, recoverOrphanedProjects } from './services/storageService';
 import { useLanguage } from './contexts/LanguageContext';
 
+// ... (Rest of file unchanged until handleAgentToolCall)
+
+// ... (DEFAULT_PARAMS, sanitization, sounds remain unchanged)
 const DEFAULT_PARAMS: GenerationParams = {
   prompt: '',
   aspectRatio: AspectRatio.SQUARE,
@@ -48,6 +52,7 @@ const sanitizeImageModel = (model: any): ImageModel => {
   return ImageModel.FLASH;
 };
 
+// ... (Audio functions remain the same)
 const playSuccessSound = () => {
   try {
     const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
@@ -104,6 +109,7 @@ const playErrorSound = () => {
 };
 
 export function App() {
+  // ... (State declarations remain identical)
   const { t, language, setLanguage } = useLanguage();
 
   const [isLoaded, setIsLoaded] = useState(false);
@@ -137,8 +143,7 @@ export function App() {
   const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
   const [chatSelectedImages, setChatSelectedImages] = useState<string[]>([]); 
   
-  // NEW: AGENT CONTEXT ASSETS (Separated from Manual Studio Params)
-  // This stores the assets the Agent has decided to use as reference (Anchor-First workflow)
+  // NEW: AGENT CONTEXT ASSETS
   const [agentContextAssets, setAgentContextAssets] = useState<SmartAsset[]>([]);
 
   const [assets, setAssets] = useState<AssetItem[]>([]);
@@ -163,6 +168,7 @@ export function App() {
 
   useEffect(() => { activeProjectIdRef.current = activeProjectId; }, [activeProjectId]);
 
+  // ... (useEffect for init, assets, saving - Unchanged)
   useEffect(() => {
     const initialize = async () => {
       try {
@@ -177,7 +183,6 @@ export function App() {
           
           if (lastActive.savedParams) {
               const safeParams = { ...lastActive.savedParams };
-              // FORCE SANITIZATION ON LOAD
               safeParams.imageModel = sanitizeImageModel(safeParams.imageModel);
               setParams(safeParams);
           } else {
@@ -266,7 +271,6 @@ export function App() {
           }
       };
       fetchAssets();
-      // Reset Agent Context when switching projects to avoid cross-contamination
       setAgentContextAssets([]); 
   }, [activeProjectId]);
 
@@ -297,237 +301,50 @@ export function App() {
     return () => clearTimeout(handler);
   }, [params, mode, activeProjectId, isLoaded, chatHistory, contextSummary, summaryCursor]); 
 
-  const addToast = (type: 'success' | 'error' | 'info', title: string, message: string) => {
-    setToasts(prev => [...prev, { id: crypto.randomUUID(), type, title, message }]);
-  };
+  // ... (Helper functions like addToast, removeToast, handleModeSwitch, etc. - unchanged)
+  const addToast = (type: 'success' | 'error' | 'info', title: string, message: string) => { setToasts(prev => [...prev, { id: crypto.randomUUID(), type, title, message }]); };
   const removeToast = (id: string) => setToasts(prev => prev.filter(t => t.id !== id));
-
   const handleModeSwitch = (targetMode: AppMode) => {
-    setRightPanelMode('GALLERY'); 
-    setIsSelectionMode(false); // Reset selection
-    setSelectedAssetIds(new Set());
-    
+    setRightPanelMode('GALLERY'); setIsSelectionMode(false); setSelectedAssetIds(new Set());
     if (mode === targetMode) return;
     promptCache.current[mode] = params.prompt;
-    setProjects(prev => prev.map(p => p.id === activeProjectId ? {
-       ...p, chatHistory: mode === AppMode.IMAGE ? chatHistory : p.chatHistory, videoChatHistory: mode === AppMode.VIDEO ? chatHistory : p.videoChatHistory
-      } : p));
+    setProjects(prev => prev.map(p => p.id === activeProjectId ? { ...p, chatHistory: mode === AppMode.IMAGE ? chatHistory : p.chatHistory, videoChatHistory: mode === AppMode.VIDEO ? chatHistory : p.videoChatHistory } : p));
     const nextPrompt = promptCache.current[targetMode] ?? '';
     const currentProject = projects.find(p => p.id === activeProjectId);
     const nextHistory = (currentProject && targetMode === AppMode.VIDEO ? currentProject.videoChatHistory : currentProject?.chatHistory) || [];
-    setMode(targetMode);
-    setParams(prev => ({ ...prev, prompt: nextPrompt }));
-    setChatHistory(nextHistory);
+    setMode(targetMode); setParams(prev => ({ ...prev, prompt: nextPrompt })); setChatHistory(nextHistory);
   };
-
   const createNewProject = (isInit = false) => {
-    const newProject: Project = {
-      id: crypto.randomUUID(), name: t('nav.new_project'), createdAt: Date.now(), updatedAt: Date.now(),
-      savedParams: DEFAULT_PARAMS, savedMode: AppMode.IMAGE, chatHistory: [], videoChatHistory: [],
-      contextSummary: '', summaryCursor: 0
-    };
-    if (isInit) {
-      setProjects([newProject]); setActiveProjectId(newProject.id); saveProject(newProject);
-      promptCache.current = { [AppMode.IMAGE]: '' };
-    } else {
-      setProjects(prev => [newProject, ...prev]); saveProject(newProject); switchProject(newProject.id, newProject); setShowProjects(true);
-    }
-    setContextSummary('');
-    setSummaryCursor(0);
-    setRightPanelMode('GALLERY');
+    const newProject: Project = { id: crypto.randomUUID(), name: t('nav.new_project'), createdAt: Date.now(), updatedAt: Date.now(), savedParams: DEFAULT_PARAMS, savedMode: AppMode.IMAGE, chatHistory: [], videoChatHistory: [], contextSummary: '', summaryCursor: 0 };
+    if (isInit) { setProjects([newProject]); setActiveProjectId(newProject.id); saveProject(newProject); promptCache.current = { [AppMode.IMAGE]: '' }; } else { setProjects(prev => [newProject, ...prev]); saveProject(newProject); switchProject(newProject.id, newProject); setShowProjects(true); }
+    setContextSummary(''); setSummaryCursor(0); setRightPanelMode('GALLERY');
   };
-
   const switchProject = (projectId: string, targetProjectOverride?: Project) => {
     const targetProject = targetProjectOverride || projects.find(p => p.id === projectId);
     if (!targetProject) return;
     setActiveProjectId(projectId);
-    
-    // Load Params safely
     let loadedParams = targetProject.savedParams || DEFAULT_PARAMS;
-    
-    // FORCE SANITIZATION ON SWITCH
-    loadedParams = {
-        ...loadedParams,
-        imageModel: sanitizeImageModel(loadedParams.imageModel)
-    };
-    
+    loadedParams = { ...loadedParams, imageModel: sanitizeImageModel(loadedParams.imageModel) };
     setParams(loadedParams);
-
     setMode(targetProject.savedMode || AppMode.IMAGE);
     setChatHistory((targetProject.savedMode === AppMode.VIDEO ? targetProject.videoChatHistory : targetProject.chatHistory) || []);
     setContextSummary(targetProject.contextSummary || '');
     setSummaryCursor(targetProject.summaryCursor || 0);
     setChatSelectedImages([]);
     promptCache.current = { [targetProject.savedMode || AppMode.IMAGE]: targetProject.savedParams?.prompt || '' };
-    setSelectedAssetIds(new Set());
-    setIsSelectionMode(false);
-    setRightPanelMode('GALLERY');
+    setSelectedAssetIds(new Set()); setIsSelectionMode(false); setRightPanelMode('GALLERY');
   };
+  const handleAuthVerify = async () => { const userKey = getUserApiKey(); if (userKey) { setVeoVerified(true); return; } try { await promptForVeoKey(); setVeoVerified(true); } catch { setShowSettings(true); } };
+  const toggleAssetSelection = (asset: AssetItem) => { if (selectedAssetIds.has(asset.id)) { setSelectedAssetIds(prev => { const next = new Set(prev); next.delete(asset.id); return next; }); } else { setSelectedAssetIds(prev => { const next = new Set(prev); next.add(asset.id); return next; }); } };
+  const handleCompare = () => { const selected = assets.filter(a => selectedAssetIds.has(a.id)); if (selected.length !== 2) { addToast('info', 'Comparison', 'Please select exactly 2 items to compare.'); return; } setComparisonAssets([selected[0], selected[1]]); };
+  const handleBulkDownload = () => { const selected = assets.filter(a => selectedAssetIds.has(a.id)); let delay = 0; selected.forEach(asset => { setTimeout(() => { const link = document.createElement('a'); link.href = asset.url; link.download = `lumina-${asset.type.toLowerCase()}-${asset.id}.${asset.type === 'IMAGE' ? 'png' : 'mp4'}`; document.body.appendChild(link); link.click(); document.body.removeChild(link); }, delay); delay += 500; }); addToast('success', 'Download Started', `Downloading ${selected.length} items...`); };
+  const handleBulkDelete = () => { setConfirmDialog({ isOpen: true, title: t('confirm.delete_bulk.title'), message: `Are you sure you want to delete ${selectedAssetIds.size} items?`, confirmLabel: t('btn.delete'), cancelLabel: t('btn.cancel'), isDestructive: true, action: async () => { const ids = Array.from(selectedAssetIds) as string[]; if (rightPanelMode === 'TRASH') { await Promise.all(ids.map(id => permanentlyDeleteAssetFromDB(id))); setAssets(prev => prev.filter(a => !selectedAssetIds.has(a.id))); } else { const selectedAssets = assets.filter(a => selectedAssetIds.has(a.id)); await Promise.all(selectedAssets.map(a => softDeleteAssetInDB(a))); setAssets(prev => prev.map(a => selectedAssetIds.has(a.id) ? { ...a, deletedAt: Date.now() } : a)); } setSelectedAssetIds(new Set()); setIsSelectionMode(false); setConfirmDialog(prev => ({ ...prev, isOpen: false })); } }); };
+  const handleCanvasSave = async (dataUrl: string) => { let originalImage = ''; let originalMime = ''; if (editorAsset) { if (editorAsset.url.startsWith('data:')) { const matches = editorAsset.url.match(/^data:(.+);base64,(.+)$/); if (matches) { originalMime = matches[1]; originalImage = matches[2]; } } else { try { const resp = await fetch(editorAsset.url); const blob = await resp.blob(); const reader = new FileReader(); await new Promise<void>((resolve) => { reader.onload = () => { const res = reader.result; if (typeof res === 'string') { const matches = res.match(/^data:(.+);base64,(.+)$/); if (matches) { originalMime = matches[1]; originalImage = matches[2]; } } resolve(); }; reader.readAsDataURL(blob); }); } catch (e) { console.warn("Failed to fetch original image for dual-reference", e); } } } handleUseAsReference({ ...editorAsset!, url: dataUrl }, true); setParams(prev => ({ ...prev, prompt: `Edit the area marked in red: [Describe change here]`, isAnnotatedReference: true, originalReferenceImage: originalImage || undefined, originalReferenceImageMimeType: originalMime || undefined })); setEditorAsset(null); };
+  const handleUseAsReference = (asset: AssetItem, isAnnotated = false) => { if (asset.type !== 'IMAGE') return; if (mode !== AppMode.IMAGE) handleModeSwitch(AppMode.IMAGE); const matches = asset.url.match(/^data:(.+);base64,(.+)$/); if (matches) { setActiveTab('studio'); setParams(prev => ({ ...prev, referenceImageMimeType: matches[1], referenceImage: matches[2], prompt: isAnnotated ? prev.prompt : asset.prompt, isAnnotatedReference: isAnnotated })); if (!isAnnotated) promptCache.current[AppMode.IMAGE] = asset.prompt; } };
+  const handleRemix = async (asset: AssetItem) => { if (asset.type !== 'IMAGE') return; try { const response = await fetch(asset.url); const blob = await response.blob(); const reader = new FileReader(); reader.onloadend = () => { const base64data = reader.result as string; const matches = base64data.match(/^data:(.+);base64,(.+)$/); if (matches) { const mimeType = matches[1]; const data = matches[2]; if (mode !== AppMode.IMAGE) handleModeSwitch(AppMode.IMAGE); setActiveTab('studio'); const remixAsset: SmartAsset = { id: crypto.randomUUID(), data: data, mimeType: mimeType, type: 'STRUCTURE', label: 'Remix Source' }; setParams(prev => ({ ...prev, prompt: asset.prompt, seed: asset.metadata?.seed, aspectRatio: (asset.metadata?.aspectRatio as AspectRatio) || prev.aspectRatio, imageModel: sanitizeImageModel(asset.metadata?.model), imageStyle: (asset.metadata?.style as ImageStyle) || ImageStyle.NONE, imageResolution: (asset.metadata?.resolution as ImageResolution) || prev.imageResolution, smartAssets: [remixAsset], referenceImage: undefined, referenceImageMimeType: undefined, isAnnotatedReference: false, originalReferenceImage: undefined, subjectReferences: [], styleReferences: [] })); addToast('success', 'Remix Ready', 'Parameters and seed loaded for fine-tuning.'); } }; reader.readAsDataURL(blob); } catch (e: any) { console.error("Remix failed", e); addToast('error', 'Remix Failed', 'Could not load image data.'); } };
+  const handleVideoContinue = async (videoData: string, mimeType: string) => { if (mode !== AppMode.VIDEO) handleModeSwitch(AppMode.VIDEO); setActiveTab('studio'); setParams(prev => ({ ...prev, inputVideoData: videoData, inputVideoMimeType: mimeType, videoStartImage: undefined, videoEndImage: undefined, videoStyleReferences: [], prompt: `${prev.prompt || 'Continue the video'}. Next scene: ` })); addToast('info', 'Video Extension Mode', 'Video loaded. Describe what happens next.'); };
 
-  const handleAuthVerify = async () => {
-    const userKey = getUserApiKey();
-    if (userKey) { setVeoVerified(true); return; }
-    try { await promptForVeoKey(); setVeoVerified(true); } catch { setShowSettings(true); }
-  };
-
-  const toggleAssetSelection = (asset: AssetItem) => {
-     if (selectedAssetIds.has(asset.id)) {
-        setSelectedAssetIds(prev => { const next = new Set(prev); next.delete(asset.id); return next; });
-     } else {
-        setSelectedAssetIds(prev => { const next = new Set(prev); next.add(asset.id); return next; });
-     }
-  };
-
-  const handleCompare = () => {
-     const selected = assets.filter(a => selectedAssetIds.has(a.id));
-     if (selected.length !== 2) { addToast('info', 'Comparison', 'Please select exactly 2 items to compare.'); return; }
-     setComparisonAssets([selected[0], selected[1]]);
-  };
-
-  const handleBulkDownload = () => {
-      const selected = assets.filter(a => selectedAssetIds.has(a.id));
-      let delay = 0;
-      selected.forEach(asset => {
-          setTimeout(() => {
-              const link = document.createElement('a');
-              link.href = asset.url;
-              link.download = `lumina-${asset.type.toLowerCase()}-${asset.id}.${asset.type === 'IMAGE' ? 'png' : 'mp4'}`;
-              document.body.appendChild(link);
-              link.click();
-              document.body.removeChild(link);
-          }, delay);
-          delay += 500; // Stagger downloads slightly
-      });
-      addToast('success', 'Download Started', `Downloading ${selected.length} items...`);
-  };
-
-  const handleBulkDelete = () => {
-      setConfirmDialog({
-          isOpen: true,
-          title: t('confirm.delete_bulk.title'),
-          message: `Are you sure you want to delete ${selectedAssetIds.size} items?`,
-          confirmLabel: t('btn.delete'),
-          cancelLabel: t('btn.cancel'),
-          isDestructive: true,
-          action: async () => {
-              const ids = Array.from(selectedAssetIds) as string[];
-              // Check mode for delete type
-              if (rightPanelMode === 'TRASH') {
-                   // Permanent Delete
-                   await Promise.all(ids.map(id => permanentlyDeleteAssetFromDB(id)));
-                   setAssets(prev => prev.filter(a => !selectedAssetIds.has(a.id)));
-              } else {
-                   // Soft Delete
-                   const selectedAssets = assets.filter(a => selectedAssetIds.has(a.id));
-                   await Promise.all(selectedAssets.map(a => softDeleteAssetInDB(a)));
-                   setAssets(prev => prev.map(a => selectedAssetIds.has(a.id) ? { ...a, deletedAt: Date.now() } : a));
-              }
-              setSelectedAssetIds(new Set());
-              setIsSelectionMode(false);
-              setConfirmDialog(prev => ({ ...prev, isOpen: false }));
-          }
-      });
-  };
-
-  const handleCanvasSave = async (dataUrl: string) => {
-     let originalImage = '';
-     let originalMime = '';
-
-     if (editorAsset) {
-        if (editorAsset.url.startsWith('data:')) {
-            const matches = editorAsset.url.match(/^data:(.+);base64,(.+)$/);
-            if (matches) { originalMime = matches[1]; originalImage = matches[2]; }
-        } else {
-            try {
-               const resp = await fetch(editorAsset.url);
-               const blob = await resp.blob();
-               const reader = new FileReader();
-               await new Promise<void>((resolve) => {
-                  reader.onload = () => {
-                     const res = reader.result;
-                     if (typeof res === 'string') {
-                         const matches = res.match(/^data:(.+);base64,(.+)$/);
-                         if (matches) { originalMime = matches[1]; originalImage = matches[2]; }
-                     }
-                     resolve();
-                  };
-                  reader.readAsDataURL(blob);
-               });
-            } catch (e) { console.warn("Failed to fetch original image for dual-reference", e); }
-        }
-     }
-
-     handleUseAsReference({ ...editorAsset!, url: dataUrl }, true); 
-     setParams(prev => ({ 
-        ...prev, 
-        prompt: `Edit the area marked in red: [Describe change here]`, 
-        isAnnotatedReference: true,
-        originalReferenceImage: originalImage || undefined,
-        originalReferenceImageMimeType: originalMime || undefined
-     }));
-     setEditorAsset(null);
-  };
-
-  const handleUseAsReference = (asset: AssetItem, isAnnotated = false) => {
-    if (asset.type !== 'IMAGE') return;
-    if (mode !== AppMode.IMAGE) handleModeSwitch(AppMode.IMAGE);
-    const matches = asset.url.match(/^data:(.+);base64,(.+)$/);
-    if (matches) {
-      setActiveTab('studio');
-      setParams(prev => ({
-        ...prev, referenceImageMimeType: matches[1], referenceImage: matches[2],
-        prompt: isAnnotated ? prev.prompt : asset.prompt, isAnnotatedReference: isAnnotated
-      }));
-      if (!isAnnotated) promptCache.current[AppMode.IMAGE] = asset.prompt;
-    }
-  };
-
-  const handleRemix = async (asset: AssetItem) => {
-    if (asset.type !== 'IMAGE') return;
-    try {
-      const response = await fetch(asset.url);
-      const blob = await response.blob();
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        const base64data = reader.result as string;
-        const matches = base64data.match(/^data:(.+);base64,(.+)$/);
-        if (matches) {
-           const mimeType = matches[1];
-           const data = matches[2];
-           if (mode !== AppMode.IMAGE) handleModeSwitch(AppMode.IMAGE);
-           setActiveTab('studio');
-           const remixAsset: SmartAsset = { id: crypto.randomUUID(), data: data, mimeType: mimeType, type: 'STRUCTURE', label: 'Remix Source' };
-           setParams(prev => ({
-             ...prev, prompt: asset.prompt, seed: asset.metadata?.seed,
-             aspectRatio: (asset.metadata?.aspectRatio as AspectRatio) || prev.aspectRatio,
-             imageModel: sanitizeImageModel(asset.metadata?.model), // SANITIZE HERE TOO
-             imageStyle: (asset.metadata?.style as ImageStyle) || ImageStyle.NONE,
-             imageResolution: (asset.metadata?.resolution as ImageResolution) || prev.imageResolution,
-             smartAssets: [remixAsset],
-             referenceImage: undefined, referenceImageMimeType: undefined, isAnnotatedReference: false, originalReferenceImage: undefined, subjectReferences: [], styleReferences: []
-           }));
-           addToast('success', 'Remix Ready', 'Parameters and seed loaded for fine-tuning.');
-        }
-      };
-      reader.readAsDataURL(blob);
-    } catch (e: any) {
-      console.error("Remix failed", e);
-      addToast('error', 'Remix Failed', 'Could not load image data.');
-    }
-  };
-
-  const handleVideoContinue = async (videoData: string, mimeType: string) => {
-      if (mode !== AppMode.VIDEO) handleModeSwitch(AppMode.VIDEO);
-      setActiveTab('studio');
-      setParams(prev => ({ 
-          ...prev, inputVideoData: videoData, inputVideoMimeType: mimeType,
-          videoStartImage: undefined, videoEndImage: undefined, videoStyleReferences: [],
-          prompt: `${prev.prompt || 'Continue the video'}. Next scene: ` 
-      }));
-      addToast('info', 'Video Extension Mode', 'Video loaded. Describe what happens next.');
-  };
-
-  // --- AGENT TOOL EXECUTION HANDLER ---
+  // --- AGENT TOOL EXECUTION HANDLER (UPDATED) ---
   const handleAgentToolCall = async (action: AgentAction) => {
       if (action.toolName === 'generate_image') {
           const { 
@@ -541,13 +358,37 @@ export function App() {
               guidanceScale,
               save_as_reference,
               use_ref_context,
-              numberOfImages // NEW: Support Batch Argument
+              numberOfImages,
+              useGrounding // NEW: Extract Search Grounding Toggle
           } = action.args;
           
           setRightPanelMode('GALLERY');
           
           if (mode !== AppMode.IMAGE) handleModeSwitch(AppMode.IMAGE);
           
+          const isGroundingRequested = useGrounding === true || useGrounding === 'true';
+          
+          // INTELLIGENT MODEL SELECTION LOGIC
+          let requestedModelRaw = model ?? params.imageModel; 
+          let effectiveModel = sanitizeImageModel(requestedModelRaw);
+
+          // 3. ENFORCE TECHNICAL CONSTRAINT: Grounding -> MUST be Pro
+          // Even if the Agent foolishly requested Flash, we override it here.
+          if (isGroundingRequested) {
+              if (effectiveModel !== ImageModel.PRO) {
+                  effectiveModel = ImageModel.PRO;
+                  addToast('info', 'Model Upgraded', 'Switched to Gemini 3 Pro for Search capabilities.');
+              }
+          } 
+          // 4. If Agent explicitly requested Flash (and no grounding), honor it
+          else if (effectiveModel !== params.imageModel) {
+              if (effectiveModel === ImageModel.PRO) {
+                  addToast('info', 'Agent Optimization', 'Using Pro model for high complexity.');
+              } else {
+                  addToast('info', 'Agent Optimization', 'Using Flash model for speed.');
+              }
+          }
+
           const executionParams: Partial<GenerationParams> = {
               prompt: (prompt as string) || params.prompt,
               // SAFEGUARD: Validate Aspect Ratio (Fallback to current if invalid/missing)
@@ -555,8 +396,8 @@ export function App() {
                   ? (aspectRatio as AspectRatio) 
                   : params.aspectRatio,
               
-              // SAFEGUARD: Validate Model
-              imageModel: sanitizeImageModel((model as any) ?? params.imageModel), 
+              // SAFEGUARD: Use our calculated effective model
+              imageModel: effectiveModel,
               
               // SAFEGUARD: Validate Style
               imageStyle: Object.values(ImageStyle).includes(style as ImageStyle) 
@@ -572,7 +413,10 @@ export function App() {
               // ROBUST CASTING: Ensure numbers are actually numbers
               seed: seed !== undefined ? Number(seed) : params.seed,
               guidanceScale: guidanceScale !== undefined ? Number(guidanceScale) : params.guidanceScale,
-              numberOfImages: numberOfImages !== undefined ? Number(numberOfImages) : 1 
+              numberOfImages: numberOfImages !== undefined ? Number(numberOfImages) : 1,
+              
+              // ENABLE SEARCH GROUNDING IF AGENT REQUESTS IT
+              useGrounding: isGroundingRequested
           };
           
           // INJECT AGENT CONTEXT (ANCHOR-FIRST LOGIC)
@@ -630,6 +474,7 @@ export function App() {
     let activeParams = { ...params, ...overrideParams };
     activeParams.imageModel = sanitizeImageModel(activeParams.imageModel);
 
+    // ... (Rest of handleGenerate logic - unchanged)
     const currentProjectId = activeProjectId;
     const currentMode = modeOverride || mode;
 
@@ -669,7 +514,8 @@ export function App() {
                  resolution: currentMode === AppMode.IMAGE ? activeParams.imageResolution : activeParams.videoResolution,
                  duration: currentMode === AppMode.VIDEO ? activeParams.videoDuration : undefined,
                  seed: taskSeed,
-                 guidanceScale: activeParams.guidanceScale
+                 guidanceScale: activeParams.guidanceScale,
+                 usedGrounding: activeParams.useGrounding // Track in metadata
              }
          };
          
