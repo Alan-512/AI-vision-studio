@@ -1,8 +1,9 @@
+
 import React, { useRef, useState, useEffect } from 'react';
-import { AppMode, AspectRatio, GenerationParams, ImageResolution, VideoResolution, ImageModel, VideoModel, ImageStyle, VideoStyle, VideoDuration, ChatMessage, AssetItem, SmartAsset } from '../types';
+import { AppMode, AspectRatio, GenerationParams, ImageResolution, VideoResolution, ImageModel, VideoModel, ImageStyle, VideoStyle, VideoDuration, ChatMessage, AssetItem, SmartAsset, APP_LIMITS, AgentAction } from '../types';
 import { Settings2, Sparkles, Image as ImageIcon, Video as VideoIcon, Upload, X, Camera, Palette, Film, RefreshCw, MessageSquare, Layers, ChevronDown, ChevronUp, SlidersHorizontal, Monitor, Eye, Lock, Dice5, Type, User, ScanFace, Frame, ArrowRight, Loader2, Clock, BookTemplate, Clapperboard, XCircle, Search, AlertTriangle, Briefcase, Layout, Brush } from 'lucide-react';
 import { ChatInterface } from './ChatInterface';
-import { extractPromptFromHistory, optimizePrompt, describeImage, AgentAction } from '../services/geminiService';
+import { extractPromptFromHistory, optimizePrompt, describeImage } from '../services/geminiService';
 import { PromptBuilder } from './PromptBuilder';
 import { useLanguage } from '../contexts/LanguageContext';
 
@@ -121,15 +122,44 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
     }
   }, [mode, projectId]);
 
-  // Enforce valid Aspect Ratio for Video (Auto-correction)
+  // VEO API RESTRAINT LOGIC (DOCUMENTATION SYNC)
   useEffect(() => {
     if (mode === AppMode.VIDEO) {
-       const validRatios = [AspectRatio.LANDSCAPE, AspectRatio.PORTRAIT];
-       if (!validRatios.includes(params.aspectRatio)) {
-           setParams(prev => ({ ...prev, aspectRatio: AspectRatio.LANDSCAPE }));
-       }
+       const isVideoExtension = !!params.inputVideoData;
+       const hasRefImages = (params.videoStyleReferences?.length || 0) > 0;
+       
+       setParams(prev => {
+          let updates: Partial<GenerationParams> = {};
+          
+          // 1. Extension Rules: 720p + 8s
+          if (isVideoExtension) {
+              if (prev.videoResolution !== VideoResolution.RES_720P) updates.videoResolution = VideoResolution.RES_720P;
+              if (prev.videoDuration !== VideoDuration.LONG) updates.videoDuration = VideoDuration.LONG;
+          }
+          
+          // 2. Ref Images Rules: 16:9 + 8s + 720p
+          else if (hasRefImages) {
+              if (prev.aspectRatio !== AspectRatio.LANDSCAPE) updates.aspectRatio = AspectRatio.LANDSCAPE;
+              if (prev.videoDuration !== VideoDuration.LONG) updates.videoDuration = VideoDuration.LONG;
+              if (prev.videoResolution !== VideoResolution.RES_720P) updates.videoResolution = VideoResolution.RES_720P;
+          }
+          
+          // 3. 1080p Rules: Only supported with 8s duration
+          else if (prev.videoResolution === VideoResolution.RES_1080P && prev.videoDuration !== VideoDuration.LONG) {
+              updates.videoDuration = VideoDuration.LONG;
+          }
+
+          // 4. Default Aspect Ratio correction (9:16 or 16:9 only)
+          const validRatios = [AspectRatio.LANDSCAPE, AspectRatio.PORTRAIT];
+          if (!validRatios.includes(prev.aspectRatio)) {
+              updates.aspectRatio = AspectRatio.LANDSCAPE;
+          }
+
+          if (Object.keys(updates).length > 0) return { ...prev, ...updates };
+          return prev;
+       });
     }
-  }, [mode, params.aspectRatio, setParams]);
+  }, [mode, params.inputVideoData, params.videoStyleReferences, params.videoResolution, params.videoDuration, params.aspectRatio]);
 
   // Enforce valid Resolution for Image Flash Model
   useEffect(() => {
@@ -144,7 +174,7 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
       setParams(prev => {
           const nextState = !prev.useGrounding;
           if (nextState && prev.imageModel !== ImageModel.PRO) {
-              return { ...prev, useGrounding: true, imageModel: ImageModel.PRO };
+              return { ...prev, useGrounding: true, imageModel: ImageModel.PRO, imageResolution: ImageResolution.RES_2K };
           }
           return { ...prev, useGrounding: nextState };
       });
@@ -153,6 +183,9 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
   const handleModelChange = (newModel: ImageModel) => {
       setParams(prev => {
           const updates: Partial<GenerationParams> = { imageModel: newModel };
+          if (newModel === ImageModel.PRO && prev.imageResolution === ImageResolution.RES_1K) {
+              updates.imageResolution = ImageResolution.RES_2K;
+          }
           if (newModel === ImageModel.FLASH && prev.useGrounding) {
               updates.useGrounding = false;
           }
@@ -233,17 +266,28 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
   
   const handleAppendTag = (tag: string) => { setParams(prev => { const current = prev.prompt.trim(); if (current.includes(tag)) return prev; return { ...prev, prompt: current ? `${current}, ${tag}` : tag }; }); };
   const applyTemplate = (text: string) => { setParams(prev => ({ ...prev, prompt: text })); setShowTemplates(false); };
-  const handleRandomizeSeed = () => setParams(prev => ({ ...prev, seed: undefined }));
-  const handleLockSeed = () => { if (params.seed === undefined) { setParams(prev => ({ ...prev, seed: Math.floor(Math.random() * 10000000) })); } else { setParams(prev => ({ ...prev, seed: undefined })); } };
   const isValidImage = (file: File) => { const validTypes = ['image/jpeg', 'image/png', 'image/webp']; if (!validTypes.includes(file.type)) { console.warn(`Blocked invalid file type: ${file.type}`); return false; } return true; };
 
   const handleUpload = (e: React.ChangeEvent<HTMLInputElement>, field: 'smart' | 'start' | 'end' | 'videoStyle') => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
+    
+    if (field === 'smart') {
+        const currentCount = params.smartAssets?.length || 0;
+        if (currentCount + files.length > APP_LIMITS.MAX_IMAGE_COUNT) {
+            alert(t('msg.upload_limit_count'));
+            return;
+        }
+    }
+
     const processFile = (file: File) => new Promise<{data: string, mimeType: string}>((resolve, reject) => {
         if (!isValidImage(file)) { alert(`File ${file.name} is not a supported image type.`); reject('Invalid type'); return; }
-        const MAX_SIZE = 20 * 1024 * 1024;
-        if (file.size > MAX_SIZE) { alert(`File ${file.name} too large.`); reject('Too large'); return; }
+        if (file.size > APP_LIMITS.MAX_FILE_SIZE_BYTES) {
+            alert(`${file.name}: ${t('msg.upload_limit_size')}`);
+            reject('Too large');
+            return;
+        }
+
         const reader = new FileReader();
         reader.onload = (event) => {
             const result = event.target?.result as string;
@@ -252,6 +296,7 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
         };
         reader.readAsDataURL(file);
     });
+
     if (field === 'smart') {
         const validFiles = Array.from(files).filter(isValidImage);
         Promise.all(validFiles.map(processFile)).then(results => {
@@ -284,7 +329,7 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
   const removeVideoStyleRef = (index: number) => setParams(prev => ({...prev, videoStyleReferences: prev.videoStyleReferences?.filter((_, i) => i !== index)}));
   const updateSmartAsset = (id: string, updates: Partial<SmartAsset>) => { setParams(prev => ({ ...prev, smartAssets: prev.smartAssets?.map(a => a.id === id ? { ...a, ...updates } : a) })); };
   const toggleSmartAssetTag = (id: string, tag: string) => { setParams(prev => ({ ...prev, smartAssets: prev.smartAssets?.map(a => { if (a.id === id) { const currentTags = a.selectedTags || []; const newTags = currentTags.includes(tag) ? currentTags.filter(t => t !== tag) : [...currentTags, tag]; return { ...a, selectedTags: newTags }; } return a; }) })); };
-  const removeSmartAsset = (id: string) => { setParams(prev => ({ ...prev, smartAssets: prev.smartAssets?.filter(a => a.id !== id), seed: undefined })); };
+  const removeSmartAsset = (id: string) => { setParams(prev => ({ ...prev, smartAssets: prev.smartAssets?.filter(a => a.id !== id) })); };
 
   const handleGenerateClick = async () => { if (activeTab === 'chat') { setIsAnalyzing(true); try { const chatPrompt = await extractPromptFromHistory(chatHistory, mode); if (chatPrompt) onGenerate({ prompt: chatPrompt }); else { const lastUserMsg = [...chatHistory].reverse().find(m => m.role === 'user'); if (lastUserMsg && lastUserMsg.content) onGenerate({ prompt: lastUserMsg.content }); } } catch (e) { console.error("Failed to extract prompt", e); } finally { setIsAnalyzing(false); } } else { onGenerate(); } };
   const handleDragOver = (e: React.DragEvent, target: 'smart' | 'videoStart' | 'videoEnd' | 'videoStyle') => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; setDragTarget(target); };
@@ -300,16 +345,37 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
           else { const resp = await fetch(asset.url); const blob = await resp.blob(); const reader = new FileReader(); await new Promise<void>((resolve) => { reader.onload = () => { const res = reader.result as string; const matches = res.match(/^data:(.+);base64,(.+)$/); if (matches) { mimeType = matches[1]; data = matches[2]; } resolve(); }; reader.readAsDataURL(blob); }); }
           if (data && mimeType) {
              const newItem = { data, mimeType };
-             if (target === 'smart') setParams(prev => ({ ...prev, smartAssets: [...(prev.smartAssets || []), { id: crypto.randomUUID(), data, mimeType, type: 'STRUCTURE' }] }));
+             if (target === 'smart') {
+                 if ((params.smartAssets?.length || 0) >= APP_LIMITS.MAX_IMAGE_COUNT) {
+                     alert(t('msg.upload_limit_count'));
+                     return;
+                 }
+                 setParams(prev => ({ ...prev, smartAssets: [...(prev.smartAssets || []), { id: crypto.randomUUID(), data, mimeType, type: 'STRUCTURE' }] }));
+             }
              else if (target === 'videoStyle') setParams(prev => ({ ...prev, videoStyleReferences: [...(prev.videoStyleReferences || []), newItem].slice(0, 3) }));
              else if (target === 'videoStart') setParams(prev => ({ ...prev, videoStartImage: data, videoStartImageMimeType: mimeType }));
              else if (target === 'videoEnd') setParams(prev => ({ ...prev, videoEndImage: data, videoEndImageMimeType: mimeType }));
           }
        } else {
           const files = Array.from(e.dataTransfer.files) as File[];
+          if (target === 'smart') {
+              if ((params.smartAssets?.length || 0) + files.length > APP_LIMITS.MAX_IMAGE_COUNT) {
+                  alert(t('msg.upload_limit_count'));
+                  return;
+              }
+          }
           const validFiles = files.filter(isValidImage);
           if (validFiles.length > 0) {
-             const processFile = (file: File) => new Promise<{data: string, mimeType: string}>((resolve, reject) => { const reader = new FileReader(); reader.onload = (ev) => { const res = ev.target?.result as string; const matches = res.match(/^data:(.+);base64,(.+)$/); if (matches) resolve({ mimeType: matches[1], data: matches[2] }); else reject(); }; reader.readAsDataURL(file); });
+             const processFile = (file: File) => new Promise<{data: string, mimeType: string}>((resolve, reject) => { 
+                 if (file.size > APP_LIMITS.MAX_FILE_SIZE_BYTES) {
+                     alert(`${file.name}: ${t('msg.upload_limit_size')}`);
+                     reject();
+                     return;
+                 }
+                 const reader = new FileReader(); 
+                 reader.onload = (ev) => { const res = ev.target?.result as string; const matches = res.match(/^data:(.+);base64,(.+)$/); if (matches) resolve({ mimeType: matches[1], data: matches[2] }); else reject(); }; 
+                 reader.readAsDataURL(file); 
+             });
              const results = await Promise.all(validFiles.map(processFile));
              if (target === 'smart') setParams(prev => ({ ...prev, smartAssets: [...(prev.smartAssets || []), ...results.map(r => ({ id: crypto.randomUUID(), data: r.data, mimeType: r.mimeType, type: 'STRUCTURE' as const }))] }));
              else if (target === 'videoStyle') setParams(prev => ({ ...prev, videoStyleReferences: [...(prev.videoStyleReferences || []), ...results].slice(0, 3) }));
@@ -319,6 +385,7 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
        }
     } catch (error) { console.error("Drop failed", error); }
   };
+
   const renderRatioVisual = (ratio: AspectRatio) => {
     let width = 16, height = 16;
     const enumKey = Object.keys(AspectRatio).find(k => AspectRatio[k as keyof typeof AspectRatio] === ratio) as string;
@@ -332,12 +399,15 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
       </button>
     );
   };
+  
   const isVideoGenerating = mode === AppMode.VIDEO && isGenerating;
   const isCoolingDown = cooldownRemaining > 0;
   const isBtnDisabled = (activeTab === 'studio' ? !params.prompt.trim() : (chatHistory.length === 0 || isAnalyzing)) || isVideoGenerating || isCoolingDown;
   const displayedRatios = mode === AppMode.VIDEO ? [AspectRatio.LANDSCAPE, AspectRatio.PORTRAIT] : Object.values(AspectRatio);
   const isVeoHQ = params.videoModel === VideoModel.VEO_HQ;
   const isVideoExtension = !!params.inputVideoData;
+  const hasRefImages = (params.videoStyleReferences?.length || 0) > 0;
+
   const handleVideoTabSwitch = (tab: 'keyframes' | 'style') => { setActiveVideoTab(tab); if (tab === 'keyframes') { setParams(prev => ({ ...prev, videoStyleReferences: [] })); } else { setParams(prev => ({ ...prev, videoStartImage: undefined, videoStartImageMimeType: undefined, videoEndImage: undefined, videoEndImageMimeType: undefined })); } };
   const cancelVideoExtension = () => { setParams(prev => ({ ...prev, inputVideoData: undefined, inputVideoMimeType: undefined })); };
   const getAssetTypeIcon = (type: string) => { switch(type) { case 'IDENTITY': return <ScanFace size={12} className="text-brand-400"/>; case 'STRUCTURE': return <Layout size={12} className="text-blue-400"/>; case 'STYLE': return <Palette size={12} className="text-purple-400"/>; default: return <Briefcase size={12}/>; } };
@@ -402,8 +472,7 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
               <Settings2 className="absolute right-3 top-3.5 text-gray-500 pointer-events-none" size={16} />
             </div>
             
-            {/* Search Grounding Toggle */}
-            {mode === AppMode.IMAGE && (
+            {mode === AppMode.IMAGE && params.imageModel === ImageModel.PRO && (
                <div className={`flex flex-col gap-2 p-3 bg-dark-surface border border-dark-border rounded-xl animate-in fade-in slide-in-from-top-2 transition-colors ${params.useGrounding ? 'border-brand-500/30 bg-brand-500/5' : ''}`}>
                   <div className="flex items-center justify-between gap-3">
                       <div className="flex flex-col flex-1 min-w-0">
@@ -420,33 +489,6 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
                            <div className={`w-3.5 h-3.5 bg-white rounded-full shadow-sm transition-all absolute ${params.useGrounding ? 'translate-x-[18px]' : 'translate-x-[2px]'}`} />
                       </button>
                   </div>
-                  
-                  {params.useGrounding && (
-                      <div className="mt-1 border-t border-dark-border pt-2">
-                          {/* Info Toast if upgrading model */}
-                          {params.imageModel === ImageModel.PRO && (
-                              <p className="text-[10px] text-brand-400 mb-1 flex items-center gap-1">
-                                  <Lock size={10} /> Model locked to Pro for Search
-                              </p>
-                          )}
-                          <button 
-                            onClick={() => setIsWarningExpanded(!isWarningExpanded)}
-                            className="flex items-center gap-1.5 w-full text-left group"
-                          >
-                              <AlertTriangle size={10} className="text-yellow-500 shrink-0" />
-                              <span className="text-[10px] font-medium text-yellow-500/90 group-hover:text-yellow-500 transition-colors flex-1">
-                                  {t('warn.cost_title')}
-                              </span>
-                              {isWarningExpanded ? <ChevronUp size={10} className="text-gray-500"/> : <ChevronDown size={10} className="text-gray-500"/>}
-                          </button>
-                          
-                          {isWarningExpanded && (
-                              <p className="text-[10px] text-gray-400 leading-relaxed mt-1.5 pl-4 animate-in slide-in-from-top-1 fade-in">
-                                  {t('warn.search_cost')}
-                              </p>
-                          )}
-                      </div>
-                  )}
                </div>
             )}
           </div>
@@ -489,7 +531,6 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
             <textarea value={params.prompt} onChange={(e) => setParams(prev => ({...prev, prompt: e.target.value}))} placeholder={mode === AppMode.IMAGE ? t('ph.prompt.image') : t('ph.prompt.video')} className="w-full h-32 bg-dark-surface border border-dark-border rounded-xl p-4 text-sm text-white placeholder-gray-600 focus:border-brand-500 focus:outline-none resize-none transition-colors" />
           </div>
 
-          {/* ADVANCED SETTINGS */}
           <div className="border border-dark-border rounded-xl overflow-hidden bg-dark-surface/30">
             <button onClick={() => setIsAdvancedOpen(!isAdvancedOpen)} className="w-full flex items-center justify-between p-3 text-xs font-bold text-gray-400 uppercase tracking-wider hover:bg-white/5 transition-colors">
                 <div className="flex items-center gap-2"><SlidersHorizontal size={14} />{t('lbl.advanced')}</div>
@@ -501,21 +542,6 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
                        <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">{t('lbl.negative_prompt')}</label>
                        <textarea value={params.negativePrompt || ''} onChange={(e) => setParams(prev => ({...prev, negativePrompt: e.target.value}))} placeholder={t('ph.negative')} className="w-full h-20 bg-dark-surface border border-dark-border rounded-lg p-3 text-xs text-white placeholder-gray-600 focus:border-brand-500 focus:outline-none resize-none"/>
                     </div>
-                    {mode === AppMode.IMAGE && (
-                        <div className="space-y-2">
-                           <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">{t('lbl.seed')}</label>
-                           <div className="flex gap-2">
-                              <div className="relative flex-1">
-                                 <input type="number" value={params.seed !== undefined ? params.seed : ''} onChange={(e) => setParams(prev => ({...prev, seed: e.target.value ? parseInt(e.target.value) : undefined}))} placeholder={t('ph.seed_random')} className="w-full bg-dark-surface border border-dark-border rounded-lg pl-3 pr-10 py-2 text-xs text-white placeholder-gray-600 focus:border-brand-500 focus:outline-none font-mono [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"/>
-                                 {params.seed !== undefined && (<button onClick={handleRandomizeSeed} className="absolute right-2 top-2 text-gray-500 hover:text-white"><X size={14} /></button>)}
-                              </div>
-                              <button onClick={handleLockSeed} className={`p-2 rounded-lg border transition-colors ${params.seed !== undefined ? 'bg-brand-500/20 border-brand-500 text-brand-400' : 'bg-dark-surface border-dark-border text-gray-400 hover:text-white'}`} title="Randomize / Lock Seed">
-                                 {params.seed !== undefined ? <Lock size={18} /> : <Dice5 size={18} />}
-                              </button>
-                           </div>
-                           <p className="text-[10px] text-gray-500">{t('help.seed_desc')}</p>
-                        </div>
-                    )}
                 </div>
             )}
           </div>
@@ -577,18 +603,21 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
           {mode === AppMode.VIDEO && (
              <div className="space-y-4 animate-in fade-in slide-in-from-bottom-5">
                 <div className="flex items-center gap-2 mb-2"><div className="h-px bg-white/10 flex-1" /><span className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">{t('lbl.video_controls')}</span><div className="h-px bg-white/10 flex-1" /></div>
-                {isVideoExtension ? (
+                
+                {isVideoExtension && (
                    <div className="bg-purple-500/10 border border-purple-500/30 rounded-lg p-4 relative overflow-hidden">
                        <div className="flex items-start gap-3">
                            <div className="p-2 bg-purple-500/20 rounded-lg shrink-0"><Clapperboard size={20} className="text-purple-400" /></div>
                            <div className="flex-1 min-w-0">
                                <h4 className="text-xs font-bold text-purple-200 uppercase mb-1">{t('lbl.video_extend')}</h4>
-                               <p className="text-[10px] text-gray-400 leading-relaxed mb-2">You are extending an existing video. The model will generate the next 5-7 seconds based on your prompt.</p>
+                               <p className="text-[10px] text-gray-400 leading-relaxed mb-2">You are extending an existing video. Locked to 720p and 8s for stability.</p>
                                <button onClick={cancelVideoExtension} className="flex items-center gap-1.5 px-3 py-1.5 bg-white/5 hover:bg-white/10 rounded border border-white/10 text-[10px] text-gray-300 transition-colors"><XCircle size={12} /> Cancel Extension</button>
                            </div>
                        </div>
                    </div>
-                ) : (
+                )}
+
+                {!isVideoExtension && (
                     <>
                         {isVeoHQ && (
                             <div className="flex bg-dark-bg p-1 rounded-lg border border-dark-border mb-3">
@@ -633,7 +662,7 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
                                      )}
                                   </div>
                                   <input ref={videoStyleRefsInputRef} type="file" multiple accept="image/png, image/jpeg, image/webp" className="hidden" onChange={(e) => handleUpload(e, 'videoStyle')} />
-                                  <div className="p-2 bg-yellow-500/10 border border-yellow-500/20 rounded text-[10px] text-yellow-500">{t('note.video_ref_limit')}</div>
+                                  <div className="p-2 bg-yellow-500/10 border border-yellow-500/20 rounded text-[10px] text-yellow-500">Note: Using references locks to 16:9, 720p, and 8s duration.</div>
                              </div>
                         )}
                     </>
@@ -641,16 +670,35 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
              </div>
           )}
 
-          {/* PRIMARY SETTINGS - Bottom */}
           <div className="space-y-4 pt-4 border-t border-dark-border/30">
+            {/* Duration Selector */}
+            {mode === AppMode.VIDEO && (
+              <div className="space-y-3">
+                <div className="flex justify-between">
+                   <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">{t('lbl.duration')}</label>
+                   {(isVideoExtension || hasRefImages) && <span className="text-[10px] text-purple-400 flex items-center gap-1"><Lock size={8}/> Locked (8s)</span>}
+                </div>
+                <div className={`grid grid-cols-3 gap-2 ${isVideoExtension || hasRefImages ? 'opacity-50 pointer-events-none' : ''}`}>
+                   {[VideoDuration.SHORT, VideoDuration.MEDIUM, VideoDuration.LONG].map(dur => (
+                      <button 
+                        key={dur} 
+                        onClick={() => setParams(prev => ({...prev, videoDuration: dur}))}
+                        className={`py-2 rounded-lg border text-xs font-medium transition-all ${params.videoDuration === dur ? 'border-brand-500 bg-brand-500/20 text-brand-400' : 'border-dark-border bg-dark-surface text-gray-500 hover:border-gray-500'}`}
+                      >
+                         {dur}s
+                      </button>
+                   ))}
+                </div>
+              </div>
+            )}
+
             {/* Aspect Ratio */}
             <div className="space-y-3">
                <div className="flex justify-between">
                    <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">{t('lbl.aspect_ratio')}</label>
-                   {(isVeoHQ && params.videoStyleReferences && params.videoStyleReferences.length > 0) && <span className="text-[10px] text-purple-400 flex items-center gap-1"><Lock size={8}/> {t('lbl.locked_subject')}</span>}
-                   {isVideoExtension && <span className="text-[10px] text-purple-400 flex items-center gap-1"><Lock size={8}/> Locked (Extension)</span>}
+                   {(hasRefImages || isVideoExtension) && <span className="text-[10px] text-purple-400 flex items-center gap-1"><Lock size={8}/> Locked</span>}
                </div>
-               <div className={`grid gap-2 ${mode === AppMode.VIDEO ? 'grid-cols-2' : 'grid-cols-5'} ${((isVeoHQ && params.videoStyleReferences?.length) || isVideoExtension) ? 'opacity-50 pointer-events-none' : ''}`}>
+               <div className={`grid gap-2 ${mode === AppMode.VIDEO ? 'grid-cols-2' : 'grid-cols-5'} ${(hasRefImages || isVideoExtension) ? 'opacity-50 pointer-events-none' : ''}`}>
                   {displayedRatios.map(renderRatioVisual)}
                </div>
             </div>
@@ -669,10 +717,18 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
             {/* Resolution & Count */}
             <div className={`grid gap-4 ${mode === AppMode.IMAGE ? 'grid-cols-2' : 'grid-cols-1'}`}>
                <div className="space-y-2">
-                  <div className="flex justify-between"><label className="text-xs font-bold text-gray-400 uppercase tracking-wider">{t('lbl.resolution')}</label>{(isVeoHQ && params.videoStyleReferences && params.videoStyleReferences.length > 0) && <span className="text-[10px] text-purple-400 flex items-center gap-1"><Lock size={8}/> Locked to 720p</span>}</div>
-                  <div className={`relative ${((isVeoHQ && params.videoStyleReferences?.length) || isVideoExtension) ? 'opacity-50 pointer-events-none' : ''}`}>
+                  <div className="flex justify-between">
+                     <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">{t('lbl.resolution')}</label>
+                     {(hasRefImages || isVideoExtension) && <span className="text-[10px] text-purple-400 flex items-center gap-1"><Lock size={8}/> Locked to 720p</span>}
+                  </div>
+                  <div className={`relative ${(hasRefImages || isVideoExtension) ? 'opacity-50 pointer-events-none' : ''}`}>
                      <select value={mode === AppMode.IMAGE ? params.imageResolution : params.videoResolution} onChange={(e) => setParams(prev => mode === AppMode.IMAGE ? ({...prev, imageResolution: e.target.value as ImageResolution}) : ({...prev, videoResolution: e.target.value as VideoResolution}))} className="w-full bg-dark-surface border border-dark-border rounded-lg px-3 py-2 text-xs text-white appearance-none focus:border-brand-500 focus:outline-none">
-                        {mode === AppMode.IMAGE ? (<><option value={ImageResolution.RES_1K}>1K (Standard)</option><option value={ImageResolution.RES_2K} disabled={params.imageModel === ImageModel.FLASH}>2K (Pro Only)</option><option value={ImageResolution.RES_4K} disabled={params.imageModel === ImageModel.FLASH}>4K (Pro Only)</option></>) : (<><option value={VideoResolution.RES_720P}>720p HD</option><option value={VideoResolution.RES_1080P}>1080p FHD</option></>)}
+                        {mode === AppMode.IMAGE ? (<><option value={ImageResolution.RES_1K}>1K (Standard)</option><option value={ImageResolution.RES_2K} disabled={params.imageModel === ImageModel.FLASH}>2K (Pro Only)</option><option value={ImageResolution.RES_4K} disabled={params.imageModel === ImageModel.FLASH}>4K (Pro Only)</option></>) : (
+                           <>
+                             <option value={VideoResolution.RES_720P}>720p HD</option>
+                             <option value={VideoResolution.RES_1080P} disabled={params.videoDuration !== VideoDuration.LONG}>1080p FHD (Requires 8s)</option>
+                           </>
+                        )}
                      </select>
                      <Monitor size={14} className="absolute right-3 top-2.5 text-gray-500 pointer-events-none" />
                   </div>

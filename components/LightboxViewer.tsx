@@ -1,7 +1,7 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { X, ZoomIn, ZoomOut, RotateCcw, Download, RefreshCcw, MessageSquarePlus, Brush, Trash2, ArrowRight, Video, Wand2 } from 'lucide-react';
-import { AssetItem } from '../types';
+import { AssetItem, ImageModel, VideoModel } from '../types';
 import { useLanguage } from '../contexts/LanguageContext';
 
 interface LightboxViewerProps {
@@ -33,6 +33,15 @@ export const LightboxViewer: React.FC<LightboxViewerProps> = ({ asset, onClose, 
     setScale(1);
     setPosition({ x: 0, y: 0 });
   }, [asset.id]);
+
+  const getModelLabel = (modelId: string | undefined) => {
+    if (!modelId) return '';
+    if (modelId === ImageModel.FLASH) return t('model.flash');
+    if (modelId === ImageModel.PRO) return t('model.pro');
+    if (modelId === VideoModel.VEO_FAST) return t('model.veo_fast');
+    if (modelId === VideoModel.VEO_HQ) return t('model.veo_hq');
+    return modelId;
+  };
 
   const handleZoomIn = () => setScale(prev => Math.min(prev + 0.5, 5));
   const handleZoomOut = () => {
@@ -251,10 +260,10 @@ export const LightboxViewer: React.FC<LightboxViewerProps> = ({ asset, onClose, 
               </p>
            </div>
            
-           <div className="flex flex-row md:flex-col gap-2 md:gap-1 text-right text-xs text-gray-500 shrink-0 border-t md:border-t-0 md:border-l border-dark-border pt-3 md:pt-0 md:pl-6 w-full md:w-auto justify-between md:justify-start">
+           <div className="flex flex-col gap-2 md:gap-1 text-right text-xs text-gray-500 shrink-0 border-t md:border-t-0 md:border-l border-dark-border pt-3 md:pt-0 md:pl-6 w-full md:w-auto">
               <div className="flex flex-col gap-1">
                 <span>{new Date(asset.createdAt).toLocaleDateString()}</span>
-                <span>{asset.metadata?.model}</span>
+                <span className="text-gray-300 font-bold">{getModelLabel(asset.metadata?.model)}</span>
                 <span className="font-medium text-gray-400">
                   {[
                     asset.metadata?.resolution, 

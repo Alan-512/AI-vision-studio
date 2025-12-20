@@ -5,6 +5,12 @@ export enum AppMode {
   GALLERY = 'GALLERY'
 }
 
+export const APP_LIMITS = {
+  MAX_FILE_SIZE_BYTES: 20 * 1024 * 1024, // 20MB
+  MAX_IMAGE_COUNT: 10,
+  MAX_VIDEO_STYLE_REFS: 3
+};
+
 export enum AspectRatio {
   SQUARE = '1:1',
   LANDSCAPE = '16:9',
@@ -66,8 +72,9 @@ export enum VideoStyle {
 }
 
 export enum VideoDuration {
-  SHORT = '5 Seconds',
-  LONG = '10 Seconds' // Note: Actual duration depends on model capabilities
+  SHORT = '4',
+  MEDIUM = '6',
+  LONG = '8'
 }
 
 // NEW: Smart Asset Interface
@@ -83,6 +90,10 @@ export interface SmartAsset {
 
 export interface GenerationParams {
   prompt: string;
+  // --- New: Isolated Prompts Storage ---
+  savedImagePrompt?: string; 
+  savedVideoPrompt?: string;
+
   negativePrompt?: string; // Not directly supported by all Gemini models but good for UI
   aspectRatio: AspectRatio;
   continuousMode?: boolean; // New: Auto-use result as reference for next turn
@@ -94,7 +105,6 @@ export interface GenerationParams {
   imageStyle?: ImageStyle;
   numberOfImages?: number; // New: Number of images to generate (1-4)
   useGrounding?: boolean; // New: Use Google Search Grounding (Pro model only)
-  guidanceScale?: number; // New: CFG Scale (0-10 or higher)
   
   // --- NEW: UNIFIED VISUAL CONTROL ---
   smartAssets?: SmartAsset[];
@@ -102,10 +112,16 @@ export interface GenerationParams {
   // --- LEGACY FIELDS (Kept for compatibility with existing saved projects/Inpainting flow) ---
   subjectReferences?: { data: string; mimeType: string }[];
   subjectType?: 'PERSON' | 'ANIMAL' | 'OBJECT';
-  referenceImage?: string; // Base64 string of the ANNOTATED/MASKED image
+  
+  referenceImage?: string; // Base64 string of the ANNOTATED/MASKED image (Composite)
   referenceImageMimeType?: string;
+  
   originalReferenceImage?: string; // Base64 string of the CLEAN ORIGINAL image
   originalReferenceImageMimeType?: string;
+  
+  maskImage?: string; // NEW: Base64 string of the B&W MASK
+  maskImageMimeType?: string;
+
   isAnnotatedReference?: boolean; // New: Flag to indicate if reference has user annotations (red boxes)
   styleReferences?: { data: string; mimeType: string }[]; // Array of style reference images
 
@@ -117,7 +133,6 @@ export interface GenerationParams {
   videoResolution?: VideoResolution;
   videoStyle?: VideoStyle;
   videoDuration?: VideoDuration;
-  seed?: number;
   
   // Video Keyframes (Mutually exclusive with videoStyleReferences)
   videoStartImage?: string;
@@ -176,6 +191,7 @@ export interface ChatMessage {
   image?: string; // Legacy
   images?: string[]; 
   isThinking?: boolean; 
+  isSystem?: boolean; // New: Indicates a system-injected message (e.g. tool output)
   
   // Link to the Job System
   relatedJobId?: string; // If this message triggered a job
@@ -233,10 +249,11 @@ export interface AssetItem {
     style?: string;
     duration?: string;
     resolution?: string;
-    seed?: number; // Added seed
-    guidanceScale?: number; // Added CFG
     usedGrounding?: boolean; // New: Metadata to track if grounding was used
+    error?: string; // Error message
+    maskUrl?: string; // New: Link to mask image if this was an edit
   };
+  blob?: Blob; // For IndexedDB storage
 }
 
 export type TaskStatus = 'QUEUED' | 'GENERATING' | 'COMPLETED' | 'FAILED';
@@ -254,6 +271,12 @@ export interface BackgroundTask {
   
   // Link to Job System
   jobId?: string;
+}
+
+export interface AgentAction {
+    toolName: string;
+    args: any;
+    thought?: string;
 }
 
 // Window augmentation for Veo Key selection

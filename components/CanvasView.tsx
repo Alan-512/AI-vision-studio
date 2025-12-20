@@ -1,7 +1,7 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { X, ZoomIn, ZoomOut, RotateCcw, Download, MessageSquarePlus, Brush, Trash2, Video, Wand2 } from 'lucide-react';
-import { AssetItem } from '../types';
+import { AssetItem, ImageModel, VideoModel } from '../types';
 import { useLanguage } from '../contexts/LanguageContext';
 
 interface CanvasViewProps {
@@ -28,6 +28,15 @@ export const CanvasView: React.FC<CanvasViewProps> = ({ asset, onClose, onDelete
     setScale(1);
     setPosition({ x: 0, y: 0 });
   }, [asset.id]);
+
+  const getModelLabel = (modelId: string | undefined) => {
+    if (!modelId) return '';
+    if (modelId === ImageModel.FLASH) return t('model.flash');
+    if (modelId === ImageModel.PRO) return t('model.pro');
+    if (modelId === VideoModel.VEO_FAST) return t('model.veo_fast');
+    if (modelId === VideoModel.VEO_HQ) return t('model.veo_hq');
+    return modelId;
+  };
 
   const handleZoomIn = () => setScale(prev => Math.min(prev + 0.5, 5));
   const handleZoomOut = () => {
@@ -189,7 +198,7 @@ export const CanvasView: React.FC<CanvasViewProps> = ({ asset, onClose, onDelete
          <div className="flex flex-col items-end justify-between gap-4 shrink-0">
             <div className="text-right text-xs text-gray-500 space-y-0.5">
                <div>{new Date(asset.createdAt).toLocaleDateString()}</div>
-               <div>{asset.metadata?.model}</div>
+               <div className="text-gray-300 font-bold">{getModelLabel(asset.metadata?.model)}</div>
                <div className="font-mono text-gray-400">
                   {[asset.metadata?.resolution, asset.metadata?.aspectRatio].filter(Boolean).join(' • ')}
                   {asset.metadata?.seed !== undefined && ` • Seed: ${asset.metadata.seed}`}

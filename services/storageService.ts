@@ -1,7 +1,8 @@
+
 import { Project, AssetItem, AppMode } from '../types';
 
 const DB_NAME = 'LuminaDB';
-const DB_VERSION = 1;
+const DB_VERSION = 2; // Bumped version to ensure schema upgrade runs
 const STORE_PROJECTS = 'projects';
 const STORE_ASSETS = 'assets';
 
@@ -65,13 +66,22 @@ const getDB = (): Promise<IDBDatabase> => {
 
     request.onupgradeneeded = (event) => {
       const db = (event.target as IDBOpenDBRequest).result;
+      const transaction = (event.target as IDBOpenDBRequest).transaction;
       
       if (!db.objectStoreNames.contains(STORE_PROJECTS)) {
         db.createObjectStore(STORE_PROJECTS, { keyPath: 'id' });
       }
       
+      let assetStore;
       if (!db.objectStoreNames.contains(STORE_ASSETS)) {
-        const assetStore = db.createObjectStore(STORE_ASSETS, { keyPath: 'id' });
+        assetStore = db.createObjectStore(STORE_ASSETS, { keyPath: 'id' });
+      } else {
+        // CRITICAL FIX: If store exists but we are upgrading, get reference to it
+        assetStore = transaction!.objectStore(STORE_ASSETS);
+      }
+
+      // CRITICAL FIX: Check if index exists before creating, regardless of store creation time
+      if (!assetStore.indexNames.contains('projectId')) {
         assetStore.createIndex('projectId', 'projectId', { unique: false });
       }
     };
@@ -196,15 +206,30 @@ export const deleteProjectFromDB = async (projectId: string): Promise<void> => {
 
     // Delete associated assets (Hard delete)
     const assetStore = transaction.objectStore(STORE_ASSETS);
-    const index = assetStore.index('projectId');
-    const request = index.getAllKeys(projectId);
+    // Safe check for index existence before using it
+    if (assetStore.indexNames.contains('projectId')) {
+        const index = assetStore.index('projectId');
+        const request = index.getAllKeys(projectId);
 
-    request.onsuccess = () => {
-      const keys = request.result;
-      if (Array.isArray(keys)) {
-        keys.forEach(key => assetStore.delete(key));
-      }
-    };
+        request.onsuccess = () => {
+          const keys = request.result;
+          if (Array.isArray(keys)) {
+            keys.forEach(key => assetStore.delete(key));
+          }
+        };
+    } else {
+        // Fallback: iterate cursor (slower but safe) if index missing
+        const request = assetStore.openCursor();
+        request.onsuccess = (e: any) => {
+            const cursor = e.target.result;
+            if (cursor) {
+                if (cursor.value.projectId === projectId) {
+                    cursor.delete();
+                }
+                cursor.continue();
+            }
+        };
+    }
 
     transaction.oncomplete = () => resolve();
     transaction.onerror = () => reject(transaction.error);
@@ -217,42 +242,49 @@ export const saveAsset = async (asset: AssetItem): Promise<void> => {
   // Clone asset to avoid mutating the in-memory state
   const storageRecord: any = { ...asset };
 
+  // STRICT VALIDATION: Ensure we never save a broken record for COMPLETED assets
   try {
-    // 1. Optimize Image Storage: Convert Base64 Data URL to Blob
-    // CRITICAL FIX: Ensure we don't save corrupted "data:..." strings as the URL if they are huge
+    // 1. Image Optimization & Persistence
     if (asset.type === 'IMAGE' && asset.url.startsWith('data:')) {
        try {
            const response = await fetch(asset.url);
            const blob = await response.blob();
            storageRecord.blob = blob;
-           storageRecord.url = 'blob'; // Placeholder, indicates data is in .blob field
+           storageRecord.url = 'blob'; 
        } catch (conversionError) {
-           console.warn("Blob conversion failed for image, falling back to string storage", conversionError);
-           // Fallback: If blob conversion fails, it might be due to memory.
-           // We might still try to save the string, but if it's huge, IndexedDB might reject it.
+           console.warn("Blob conversion failed for image", conversionError);
+           // Fallback: Try saving string if small enough, otherwise this might fail Quota later
        }
     }
     
-    // 2. Handle Video Blobs (existing logic)
+    // 2. Video Persistence (CRITICAL)
+    // Videos are usually 'blob:http...' URLs. We MUST convert these to stored Blobs.
     else if (asset.type === 'VIDEO' && asset.url.startsWith('blob:')) {
       try {
           const response = await fetch(asset.url);
           const blob = await response.blob();
-          storageRecord.blob = blob; // Store the binary data
+          if (!blob || blob.size === 0) throw new Error("Empty blob received");
+          
+          storageRecord.blob = blob; 
           storageRecord.url = 'blob'; // Placeholder
-      } catch (conversionError) {
-          console.error("Blob fetch failed for video, cannot save persistence", conversionError);
+      } catch (conversionError: any) {
+          console.error("Critical: Failed to persist video blob", conversionError);
+          // ABORT SAVE: If we can't save the video data, we shouldn't save the record at all.
+          // Otherwise, the user sees a broken video on reload.
+          throw new Error("DATA_INTEGRITY_FAIL: Could not persist video data. " + conversionError.message);
       }
     }
   } catch (e) {
-    console.error("Failed to prepare asset blob for storage", e);
+    // Re-throw to be caught by UI
+    throw e;
   }
 
   const transaction = await getTransaction(STORE_ASSETS, 'readwrite');
   return new Promise((resolve, reject) => {
     const store = transaction.objectStore(STORE_ASSETS);
-    // SAFTEY CHECK: Don't save if it's missing vital data
-    if (!storageRecord.url && !storageRecord.blob && storageRecord.status === 'COMPLETED') {
+    
+    // SAFETY CHECK: Don't save if it's missing vital data for a completed asset
+    if (storageRecord.status === 'COMPLETED' && !storageRecord.blob && (!storageRecord.url || storageRecord.url === 'blob')) {
         reject(new Error("Cannot save asset: Missing URL and Blob data"));
         return;
     }
@@ -279,15 +311,22 @@ export const updateAsset = async (id: string, updates: Partial<AssetItem>): Prom
   const processedUpdates: any = { ...updates };
   
   // If we are updating a URL to a blob (common for Video generation completion), 
-  // we must persist the actual Blob data, not just the temporary browser URL.
+  // we must persist the actual Blob data.
   if (typeof updates.url === 'string' && updates.url.startsWith('blob:')) {
       try {
           const response = await fetch(updates.url);
           const blob = await response.blob();
+          if (!blob || blob.size === 0) throw new Error("Empty blob from update");
+          
           processedUpdates.blob = blob;
-          processedUpdates.url = 'blob'; // Placeholder used by loadAssets
+          processedUpdates.url = 'blob'; 
       } catch (e) {
           console.error("Failed to persist blob in updateAsset", e);
+          // For updates, we might be updating status to FAILED, so we shouldn't crash here.
+          // But if we are setting it to COMPLETED, this is bad.
+          if (updates.status === 'COMPLETED') {
+              throw new Error("Failed to save video data during update.");
+          }
       }
   }
 
@@ -345,15 +384,22 @@ export const loadAssets = async (projectId?: string): Promise<AssetItem[]> => {
     let request;
 
     // Filter by Project ID if provided (Performance & Memory Optimization)
-    if (projectId) {
+    if (projectId && store.indexNames.contains('projectId')) {
         const index = store.index('projectId');
         request = index.getAll(projectId);
     } else {
+        // Fallback: Get all (and filter in JS if needed) if index missing or no projectId
         request = store.getAll();
     }
 
     request.onsuccess = () => {
-      const rawAssets = request.result || [];
+      let rawAssets = request.result || [];
+      
+      // Manual filter fallback if we couldn't use index
+      if (projectId && !store.indexNames.contains('projectId')) {
+         rawAssets = rawAssets.filter((a: any) => a.projectId === projectId);
+      }
+
       // Rehydrate Blobs to URLs
       const assets = rawAssets.map((record: any) => {
         // Generic Blob Rehydration (Works for both IMAGE and VIDEO now)
@@ -395,14 +441,97 @@ export const permanentlyDeleteAssetFromDB = async (assetId: string): Promise<voi
 
 // New: Soft Delete (Move to Recycle Bin)
 export const softDeleteAssetInDB = async (asset: AssetItem): Promise<void> => {
-    const updatedAsset = { ...asset, deletedAt: Date.now() };
-    // Reuse saveAsset to update the record with deletedAt
-    return saveAsset(updatedAsset);
+    // Optimization: Just update the specific field without re-saving Blobs
+    const transaction = await getTransaction(STORE_ASSETS, 'readwrite');
+    return new Promise((resolve, reject) => {
+        const store = transaction.objectStore(STORE_ASSETS);
+        const getRequest = store.get(asset.id);
+        
+        getRequest.onsuccess = () => {
+            const data = getRequest.result;
+            if (data) {
+                data.deletedAt = Date.now();
+                store.put(data); // Commit update
+            }
+            resolve();
+        };
+        getRequest.onerror = () => reject(getRequest.error);
+    });
 };
 
 // New: Restore from Recycle Bin
 export const restoreAssetInDB = async (asset: AssetItem): Promise<void> => {
-    const updatedAsset = { ...asset, deletedAt: undefined };
-    delete updatedAsset.deletedAt; // Remove key
-    return saveAsset(updatedAsset);
+    const transaction = await getTransaction(STORE_ASSETS, 'readwrite');
+    return new Promise((resolve, reject) => {
+        const store = transaction.objectStore(STORE_ASSETS);
+        const getRequest = store.get(asset.id);
+        
+        getRequest.onsuccess = () => {
+            const data = getRequest.result;
+            if (data) {
+                delete data.deletedAt;
+                store.put(data); // Commit update
+            }
+            resolve();
+        };
+        getRequest.onerror = () => reject(getRequest.error);
+    });
+};
+
+// --- BULK OPERATIONS (PERFORMANCE OPTIMIZATION) ---
+
+/**
+ * Efficiently deletes multiple assets in a SINGLE transaction to avoid blocking the main thread.
+ */
+export const bulkPermanentlyDeleteAssets = async (assetIds: string[]): Promise<void> => {
+    if (assetIds.length === 0) return;
+    const transaction = await getTransaction(STORE_ASSETS, 'readwrite');
+    const store = transaction.objectStore(STORE_ASSETS);
+    
+    // We don't await individual requests, we await the transaction completion
+    assetIds.forEach(id => {
+        store.delete(id);
+    });
+
+    return new Promise((resolve, reject) => {
+        transaction.oncomplete = () => resolve();
+        transaction.onerror = () => reject(transaction.error);
+    });
+};
+
+/**
+ * Efficiently soft-deletes multiple assets in a SINGLE transaction.
+ * Updates 'deletedAt' timestamp without re-processing image blobs.
+ */
+export const bulkSoftDeleteAssets = async (assets: AssetItem[]): Promise<void> => {
+    if (assets.length === 0) return;
+    const transaction = await getTransaction(STORE_ASSETS, 'readwrite');
+    const store = transaction.objectStore(STORE_ASSETS);
+    
+    // We need to fetch, modify, and put for each asset
+    // Since we are inside a transaction, we can just iterate.
+    // NOTE: For 100+ items, fetch-modify-put might still be slow inside one tx.
+    // A faster way is to assume we have the latest asset data, but we need to be careful about Blobs.
+    // 'asset' passed from UI might contain a blob URL, but DB expects a Blob object if it was stored as one.
+    // To be safe and fast, we use a Cursor to iterate and update.
+    
+    return new Promise((resolve, reject) => {
+        const assetIds = new Set(assets.map(a => a.id));
+        const cursorRequest = store.openCursor();
+        
+        cursorRequest.onsuccess = (e: any) => {
+            const cursor = e.target.result;
+            if (cursor) {
+                if (assetIds.has(cursor.value.id)) {
+                    const record = cursor.value;
+                    record.deletedAt = Date.now();
+                    cursor.update(record);
+                }
+                cursor.continue();
+            } 
+        };
+
+        transaction.oncomplete = () => resolve();
+        transaction.onerror = () => reject(transaction.error);
+    });
 };

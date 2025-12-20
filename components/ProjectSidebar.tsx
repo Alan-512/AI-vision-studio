@@ -1,5 +1,5 @@
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { Project } from '../types';
 import { Plus, MessageSquare, Trash2, Clock, X, Loader2, Pencil } from 'lucide-react';
 import { useLanguage } from '../contexts/LanguageContext';
@@ -31,6 +31,12 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
   const editInputRef = useRef<HTMLInputElement>(null);
+
+  // Fix: Memoize the sorted projects to prevent mutation of props and ensure stable rendering.
+  // Sorts by Recently Updated (Newest First)
+  const sortedProjects = useMemo(() => {
+    return [...projects].sort((a, b) => b.updatedAt - a.updatedAt);
+  }, [projects]);
 
   useEffect(() => {
     if (editingId && editInputRef.current) {
@@ -98,12 +104,12 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
         </div>
 
         <div className="flex-1 overflow-y-auto p-2 space-y-1">
-          {projects.length === 0 ? (
+          {sortedProjects.length === 0 ? (
             <div className="p-4 text-center text-xs text-gray-500">
               {t('msg.no_assets')}
             </div>
           ) : (
-            projects.sort((a,b) => b.updatedAt - a.updatedAt).map(project => {
+            sortedProjects.map(project => {
               const isGenerating = generatingStates ? !!generatingStates[project.id] : false;
               const isEditing = editingId === project.id;
 

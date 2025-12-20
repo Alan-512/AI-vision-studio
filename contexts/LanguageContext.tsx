@@ -1,10 +1,10 @@
+
 import React, { createContext, useContext, useState, useEffect } from 'react';
 
 type Language = 'en' | 'zh';
 
 const translations = {
   en: {
-    // Nav & Sidebar
     'nav.projects': 'Projects',
     'nav.image': 'Image',
     'nav.video': 'Video',
@@ -14,8 +14,6 @@ const translations = {
     'nav.generating': 'Generating...',
     'nav.delete_confirm': 'Are you sure you want to delete this project?',
     'nav.delete_error': 'Cannot delete a project while it is generating.',
-    
-    // Headers
     'header.compare': 'Compare',
     'header.favorites': 'Favorites',
     'header.assets': 'Assets',
@@ -23,12 +21,8 @@ const translations = {
     'header.select_mode': 'Select',
     'header.trash': 'Recycle Bin',
     'header.trash_count': 'Items',
-    
-    // Form - Tabs
     'tab.parameters': 'Parameters',
     'tab.assistant': 'Assistant',
-    
-    // Form - Inputs
     'lbl.model': 'Model',
     'lbl.prompt': 'Prompt Text',
     'lbl.negative_prompt': 'Negative Prompt',
@@ -41,8 +35,6 @@ const translations = {
     'lbl.advanced': 'Advanced Settings',
     'lbl.video_controls': 'Video Controls',
     'lbl.use_search': 'Use Google Search',
-    
-    // Smart Assets (New)
     'lbl.smart_assets': 'Smart Reference Assets',
     'lbl.asset_type': 'Type',
     'lbl.asset_label': 'Label (Optional)',
@@ -54,7 +46,6 @@ const translations = {
     'desc.identity': 'Decides "Who/What". Maintains facial features, product details, or character identity.',
     'desc.structure': 'Decides "Where/How". Maintains composition, pose, depth, and structure.',
     'desc.style': 'Decides "Art Style/Vibe". Extracts colors, lighting, texture, and brushstrokes.',
-    
     'tag.person': 'Person',
     'tag.face': 'Face',
     'tag.product': 'Product',
@@ -68,16 +59,12 @@ const translations = {
     'tag.lighting': 'Lighting',
     'tag.texture': 'Texture',
     'tag.artstyle': 'Art Style',
-    
-    // Legacy Visual Control (For Video)
     'lbl.video_keyframes': 'Keyframes',
     'lbl.video_subject_ref': 'Subject / Character Ref',
     'lbl.video_extend': 'Extend Video',
     'lbl.continuous_mode': 'Continuous Mode',
     'lbl.text_render': 'Text to Render',
     'lbl.locked_subject': 'Locked (Subject Ref)',
-    
-    // Form - Placeholders & Help
     'ph.prompt.image': 'Describe the image you want to generate...',
     'ph.prompt.video': 'Describe the video you want to generate...',
     'ph.negative': 'e.g. blurry, low quality, text...',
@@ -90,12 +77,9 @@ const translations = {
     'help.search_desc': 'Uses Google Search to find real-time information for more accurate details.',
     'warn.cost_title': 'Extra Cost Info',
     'warn.search_cost': 'Enabling search incurs additional search query fees. Please refer to Google API pricing.',
-    
     'help.video_subject_desc': 'Upload images (max 3) to preserve the identity of a person, character, or object in the video.',
     'note.video_ref_limit': 'Note: Subject references lock resolution to 720p.',
     'help.video_frames': 'Define the start or end of your video (optional).',
-    
-    // Actions
     'btn.generate': 'Generate',
     'btn.queue': 'Add to Queue',
     'btn.analyzing': 'Analyzing Chat...',
@@ -115,8 +99,6 @@ const translations = {
     'btn.delete_forever': 'Delete Forever',
     'btn.empty_trash': 'Empty Trash',
     'btn.extend': 'Extend',
-    
-    // Confirmation
     'confirm.delete.title': 'Move to Recycle Bin?',
     'confirm.delete.desc': 'This item will be moved to the Recycle Bin. You can restore it later.',
     'confirm.delete_bulk.title': 'Delete Selected Items?',
@@ -126,22 +108,24 @@ const translations = {
     'confirm.delete_forever.desc': 'This action cannot be undone.',
     'btn.cancel': 'Cancel',
     'btn.confirm': 'Confirm',
-    
-    // Models
     'model.flash': 'Nano Banana',
     'model.pro': 'Nano Banana Pro',
-    'model.veo_fast': 'Veo Fast (Preview)',
-    'model.veo_hq': 'Veo High Quality (Pro)',
-    
-    // Messages
+    'model.veo_fast': 'Veo-3.1-Fast',
+    'model.veo_hq': 'veo-3.1 High Quality',
     'msg.no_assets': 'No assets yet',
     'msg.no_trash': 'Recycle Bin is empty',
     'msg.generate_something': 'Generate something amazing!',
     'msg.cost_warning': 'Generations cost tokens. Check Google AI Studio for pricing.',
     'msg.connection_success': 'Connection Successful!',
     'msg.connection_failed': 'Connection Failed',
-
-    // Settings
+    'msg.upload_limit_count': 'Upload limit: Max 10 images.',
+    'msg.upload_limit_size': 'File too large: Limit is 20MB.',
+    'err.quota': 'Quota Exceeded. Please try later or use your own API Key.',
+    'err.safety': 'Content blocked by safety filters. Please try a different prompt.',
+    'err.network': 'Network error. Please check your connection.',
+    'err.storage': 'Browser storage full. Please delete old projects.',
+    'err.api_key': 'Invalid API Key. Please update in Settings.',
+    'err.unknown': 'An unexpected error occurred during generation.',
     'settings.title': 'Settings',
     'settings.key_label': 'Google AI Studio API Key',
     'settings.key_desc': 'Your API key is stored locally in your browser and used directly for requests. This allows you to bypass the shared quota and use your own billing account for Pro/Veo models.',
@@ -152,8 +136,6 @@ const translations = {
     'settings.calculating': 'Calculating usage...',
     'settings.used': 'Cache Used',
     'settings.free': 'Free',
-    
-    // Chat
     'chat.placeholder': 'Ask assistant...',
     'chat.welcome_video': 'Video Assistant',
     'chat.welcome_image': 'Creative Assistant',
@@ -167,8 +149,6 @@ const translations = {
     'chat.upload': 'Upload Image',
     'chat.search_on': 'Search On',
     'chat.search_off': 'Search Off',
-    
-    // Canvas
     'editor.title': 'Editor & Inpainting',
     'editor.desc': 'Draw masks or boxes to guide the AI',
     'editor.brush': 'Brush',
@@ -179,23 +159,17 @@ const translations = {
     'editor.reset': 'Reset All',
     'editor.undo': 'Undo',
     'editor.cancel': 'Cancel',
-    
-    // Comparison
     'compare.title': 'Comparison View',
     'compare.vs': 'vs',
-    
-    // Task Center
     'task.center': 'Task Center',
     'task.active': 'Active Tasks',
     'task.complete': 'Tasks Complete',
     'task.failed': 'Generation Failed',
-    'task.processing': 'Processing...',
+    'task.processing': 'Creating...',
     'task.queued': 'Queued',
     'task.clear': 'Clear List',
     'task.waiting': 'Waiting for slot...',
     'task.running': 'Running',
-    
-    // Styles
     'style.NONE': 'None',
     'style.MODERN_VECTOR': 'Modern Flat Vector',
     'style.PHOTOREALISTIC': 'Photorealistic',
@@ -213,15 +187,11 @@ const translations = {
     'style.DRONE': 'Drone Footage',
     'style.GLITCH': 'Glitch Art',
     'style.THREE_D': '3D Animation',
-    
-    // Ratios
     'ratio.SQUARE': 'Square (1:1)',
     'ratio.LANDSCAPE': 'Landscape (16:9)',
     'ratio.PORTRAIT': 'Portrait (9:16)',
     'ratio.FOUR_THIRDS': 'Landscape (4:3)',
     'ratio.THREE_FOURTHS': 'Portrait (3:4)',
-    
-    // Builder Categories
     'builder.lighting': 'Lighting',
     'builder.camera': 'Camera',
     'builder.material': 'Material',
@@ -231,8 +201,6 @@ const translations = {
     'builder.motion': 'Motion',
     'builder.atmosphere': 'Atmosphere',
     'builder.lens': 'Lens/Focus',
-    
-    // Builder Tags (Image)
     'bt.cinematic_lighting': 'Cinematic Lighting',
     'bt.volumetric_fog': 'Volumetric Fog',
     'bt.golden_hour': 'Golden Hour',
@@ -243,7 +211,6 @@ const translations = {
     'bt.dark_moody': 'Dark Moody',
     'bt.god_rays': 'God Rays',
     'bt.rim_lighting': 'Rim Lighting',
-    
     'bt.wide_angle': 'Wide Angle',
     'bt.macro_lens': 'Macro Lens',
     'bt.drone_view': 'Drone View',
@@ -254,7 +221,6 @@ const translations = {
     'bt.low_angle': 'Low Angle Shot',
     'bt.telephoto': 'Telephoto',
     'bt.motion_blur': 'Motion Blur',
-
     'bt.metallic': 'Metallic',
     'bt.translucent': 'Translucent',
     'bt.matte': 'Matte Finish',
@@ -265,7 +231,6 @@ const translations = {
     'bt.holographic': 'Holographic',
     'bt.iridescent': 'Iridescent',
     'bt.liquid_chrome': 'Liquid Chrome',
-
     'bt.minimalist': 'Minimalist',
     'bt.abstract': 'Abstract',
     'bt.surrealism': 'Surrealism',
@@ -276,7 +241,6 @@ const translations = {
     'bt.pop_art': 'Pop Art',
     'bt.ukiyo_e': 'Ukiyo-e',
     'bt.noir': 'Noir',
-
     'bt.chaos': 'Chaos',
     'bt.ethereal': 'Ethereal',
     'bt.gritty': 'Gritty',
@@ -286,8 +250,6 @@ const translations = {
     'bt.melancholic': 'Melancholic',
     'bt.serene': 'Serene',
     'bt.action_packed': 'Action Packed',
-
-    // Builder Tags (Video)
     'bt.drone_shot': 'Drone Shot / Aerial',
     'bt.pan_left': 'Pan Left',
     'bt.pan_right': 'Pan Right',
@@ -299,7 +261,6 @@ const translations = {
     'bt.handheld': 'Handheld Shake',
     'bt.fpv': 'FPV View',
     'bt.worms_eye': 'Low Angle / Worms Eye',
-
     'bt.slow_motion': 'Slow Motion',
     'bt.time_lapse': 'Time-lapse',
     'bt.hyper_lapse': 'Hyper-lapse',
@@ -309,7 +270,6 @@ const translations = {
     'bt.loop': 'Loop',
     'bt.fluid_motion': 'Fluid Motion',
     'bt.explosive': 'Explosive Action',
-
     'bt.vintage_film': 'Vintage Film Grain',
     'bt.foggy': 'Foggy / Hazy',
     'bt.rainy': 'Rainy / Stormy',
@@ -319,7 +279,6 @@ const translations = {
     'bt.dusty': 'Dusty / Sandy',
     'bt.scifi_clean': 'Sci-Fi Clean',
     'bt.horror': 'Horror / Dark',
-
     'bt.shallow_dof': 'Shallow Depth of Field',
     'bt.deep_focus': 'Deep Focus',
     'bt.rack_focus': 'Rack Focus',
@@ -328,12 +287,9 @@ const translations = {
     'bt.telephoto_lens': 'Telephoto Lens',
     'bt.fisheye_lens': 'Fish-Eye Lens',
     'bt.anamorphic': 'Anamorphic Lens',
-
-    // Templates
     'tmpl.select': 'Select Template',
   },
   zh: {
-    // Nav & Sidebar
     'nav.projects': '项目列表',
     'nav.image': '图像生成',
     'nav.video': '视频生成',
@@ -343,8 +299,6 @@ const translations = {
     'nav.generating': '生成中...',
     'nav.delete_confirm': '确定要删除此项目吗？',
     'nav.delete_error': '无法删除正在生成的项目。',
-    
-    // Headers
     'header.compare': '对比',
     'header.favorites': '收藏',
     'header.assets': '个资源',
@@ -352,12 +306,8 @@ const translations = {
     'header.select_mode': '批量选择',
     'header.trash': '回收站',
     'header.trash_count': '项',
-    
-    // Form - Tabs
     'tab.parameters': '参数配置',
     'tab.assistant': 'AI 助手',
-    
-    // Form - Inputs
     'lbl.model': '模型选择',
     'lbl.prompt': '提示词 (Prompt)',
     'lbl.negative_prompt': '反向提示词 (Negative)',
@@ -370,8 +320,6 @@ const translations = {
     'lbl.advanced': '高级设置',
     'lbl.video_controls': '视频控制',
     'lbl.use_search': '使用 Google 搜索增强',
-    
-    // Smart Assets (New)
     'lbl.smart_assets': '智能参考素材',
     'lbl.asset_type': '类型',
     'lbl.asset_label': '标签 (可选)',
@@ -383,7 +331,6 @@ const translations = {
     'desc.identity': '决定“是谁/画什么”。保持面部特征、产品细节或角色身份的一致性。',
     'desc.structure': '决定“在哪/怎么摆”。保持画面的构图、姿势、深度和结构。',
     'desc.style': '决定“画风/色调”。提取图片的色彩、光影、纹理和笔触。',
-
     'tag.person': '人物',
     'tag.face': '脸部',
     'tag.product': '产品',
@@ -397,16 +344,12 @@ const translations = {
     'tag.lighting': '光影',
     'tag.texture': '纹理',
     'tag.artstyle': '画风',
-    
-    // Legacy Visual Control
     'lbl.video_keyframes': '关键帧控制',
     'lbl.video_subject_ref': '主体 / 角色参考',
     'lbl.video_extend': '视频续写 (Extension)',
     'lbl.continuous_mode': '连续模式',
     'lbl.text_render': '画面文字 (Text)',
     'lbl.locked_subject': '已锁定 (角色参考)',
-    
-    // Form - Placeholders & Help
     'ph.prompt.image': '描述你想生成的画面...',
     'ph.prompt.video': '描述你想生成的视频内容...',
     'ph.negative': '例如：模糊、低质量、水印...',
@@ -419,12 +362,9 @@ const translations = {
     'help.search_desc': '使用 Google 搜索获取实时信息，以生成更准确的细节。',
     'warn.cost_title': '额外费用提示',
     'warn.search_cost': '开启搜索会产生额外的搜索请求费用，具体请参考 Google API 收费说明。',
-    
     'help.video_subject_desc': '上传图片 (最多3张) 以在视频中保持人物、角色或物体的一致性。',
     'note.video_ref_limit': '注意：使用角色参考会将分辨率锁定为 720p。',
     'help.video_frames': '定义视频的起始或结束画面（可选）。',
-    
-    // Actions
     'btn.generate': '开始生成',
     'btn.queue': '加入队列',
     'btn.analyzing': '分析对话中...',
@@ -444,8 +384,6 @@ const translations = {
     'btn.delete_forever': '彻底删除',
     'btn.empty_trash': '清空回收站',
     'btn.extend': '续写视频',
-    
-    // Confirmation
     'confirm.delete.title': '移入回收站?',
     'confirm.delete.desc': '该资源将被移入回收站，你可以随时恢复它。',
     'confirm.delete_bulk.title': '删除选中项?',
@@ -455,22 +393,24 @@ const translations = {
     'confirm.delete_forever.desc': '此操作无法撤销。',
     'btn.cancel': '取消',
     'btn.confirm': '确认',
-    
-    // Models
     'model.flash': 'Nano Banana',
     'model.pro': 'Nano Banana Pro',
-    'model.veo_fast': 'Veo Fast (快速预览)',
-    'model.veo_hq': 'Veo High Quality (高质量)',
-    
-    // Messages
+    'model.veo_fast': 'Veo-3.1-Fast',
+    'model.veo_hq': 'veo-3.1 High Quality',
     'msg.no_assets': '暂无资源',
     'msg.no_trash': '回收站为空',
     'msg.generate_something': '开始创造惊艳的作品吧！',
     'msg.cost_warning': '生成消耗 Token，具体定价请查看 Google AI Studio。',
     'msg.connection_success': '连接成功！网络畅通。',
     'msg.connection_failed': '连接失败',
-
-    // Settings
+    'msg.upload_limit_count': '上传受限：最多允许上传 10 张图片。',
+    'msg.upload_limit_size': '文件过大：单张图片限制 20MB 以内。',
+    'err.quota': '调用配额已耗尽。请稍后再试，或在设置中配置个人 API 密钥。',
+    'err.safety': '内容由于安全过滤器被拦截。请尝试修改提示词，避开敏感描述。',
+    'err.network': '网络连接错误，无法连接至服务器。请检查代理或网络环境。',
+    'err.storage': '浏览器存储空间已满。请清空回收站或删除旧项目。',
+    'err.api_key': 'API 密钥无效或已过期。请在设置中更新。',
+    'err.unknown': '生成过程中发生意外创意故障，请重试。',
     'settings.title': '设置',
     'settings.key_label': 'Google AI Studio API Key',
     'settings.key_desc': '您的 API 密钥存储在本地浏览器中，直接用于请求。这允许您绕过共享配额，使用自己的计费账户来调用 Pro/Veo 模型。',
@@ -481,8 +421,6 @@ const translations = {
     'settings.calculating': '正在计算缓存...',
     'settings.used': '已用缓存',
     'settings.free': '剩余',
-    
-    // Chat
     'chat.placeholder': '询问 AI 助手...',
     'chat.welcome_video': '视频创意助手',
     'chat.welcome_image': '创意设计助手',
@@ -496,8 +434,6 @@ const translations = {
     'chat.upload': '上传图片',
     'chat.search_on': 'Google 搜索已开启',
     'chat.search_off': 'Google 搜索已关闭',
-    
-    // Canvas
     'editor.title': '编辑与重绘',
     'editor.desc': '绘制遮罩或框选以引导 AI',
     'editor.brush': '画笔',
@@ -508,23 +444,17 @@ const translations = {
     'editor.reset': '重置',
     'editor.undo': '撤销',
     'editor.cancel': '取消',
-    
-    // Comparison
     'compare.title': '对比视图',
     'compare.vs': '对比',
-    
-    // Task Center
     'task.center': '任务中心',
     'task.active': '个进行中任务',
     'task.complete': '任务已完成',
     'task.failed': '生成失败',
-    'task.processing': '处理中...',
+    'task.processing': '生成中...',
     'task.queued': '排队中',
     'task.clear': '清空记录',
     'task.waiting': '等待队列...',
-    'task.running': '运行中',
-    
-    // Styles (Enum Keys)
+    'task.running': '进行中',
     'style.NONE': '无',
     'style.MODERN_VECTOR': '现代扁平矢量',
     'style.PHOTOREALISTIC': '写实摄影',
@@ -542,15 +472,11 @@ const translations = {
     'style.DRONE': '无人机航拍',
     'style.GLITCH': '故障艺术',
     'style.THREE_D': '3D 动画',
-    
-    // Ratios (Enum Keys)
     'ratio.SQUARE': '正方形 (1:1)',
     'ratio.LANDSCAPE': '横屏 (16:9)',
     'ratio.PORTRAIT': '竖屏 (9:16)',
     'ratio.FOUR_THIRDS': '横屏 (4:3)',
     'ratio.THREE_FOURTHS': '竖屏 (3:4)',
-    
-    // Builder Categories
     'builder.lighting': '光影',
     'builder.camera': '运镜/视角',
     'builder.material': '材质',
@@ -560,8 +486,6 @@ const translations = {
     'builder.motion': '动态',
     'builder.atmosphere': '环境',
     'builder.lens': '镜头/焦距',
-    
-    // Builder Tags (Image)
     'bt.cinematic_lighting': '电影级布光',
     'bt.volumetric_fog': '体积雾',
     'bt.golden_hour': '黄金时刻',
@@ -572,7 +496,6 @@ const translations = {
     'bt.dark_moody': '暗黑情绪',
     'bt.god_rays': '丁达尔光 (神光)',
     'bt.rim_lighting': '边缘光 (轮廓光)',
-    
     'bt.wide_angle': '广角镜头',
     'bt.macro_lens': '微距镜头',
     'bt.drone_view': '无人机俯瞰',
@@ -583,7 +506,6 @@ const translations = {
     'bt.low_angle': '低角度仰拍',
     'bt.telephoto': '长焦镜头',
     'bt.motion_blur': '动态模糊',
-
     'bt.metallic': '金属质感',
     'bt.translucent': '半透明',
     'bt.matte': '哑光表面',
@@ -594,7 +516,6 @@ const translations = {
     'bt.holographic': '全息效果',
     'bt.iridescent': '彩虹光泽',
     'bt.liquid_chrome': '液态铬',
-
     'bt.minimalist': '极简主义',
     'bt.abstract': '抽象艺术',
     'bt.surrealism': '超现实主义',
@@ -605,7 +526,6 @@ const translations = {
     'bt.pop_art': '波普艺术',
     'bt.ukiyo_e': '浮世绘',
     'bt.noir': '黑色电影',
-
     'bt.chaos': '混乱/狂暴',
     'bt.ethereal': '空灵/飘渺',
     'bt.gritty': '粗犷/砂砾感',
@@ -615,8 +535,6 @@ const translations = {
     'bt.melancholic': '忧郁',
     'bt.serene': '宁静祥和',
     'bt.action_packed': '动作感强烈',
-
-    // Builder Tags (Video)
     'bt.drone_shot': '无人机航拍',
     'bt.pan_left': '左摇 (Pan Left)',
     'bt.pan_right': '右摇 (Pan Right)',
@@ -627,8 +545,7 @@ const translations = {
     'bt.tracking_shot': '跟拍 (Tracking)',
     'bt.handheld': '手持晃动感',
     'bt.fpv': '第一人称视角 (FPV)',
-    'bt.worms_eye': '虫视/低角度',
-
+    'bt.worms_eye': '低角度/虫视',
     'bt.slow_motion': '慢动作',
     'bt.time_lapse': '延时摄影',
     'bt.hyper_lapse': '大范围延时',
@@ -638,7 +555,6 @@ const translations = {
     'bt.loop': '循环',
     'bt.fluid_motion': '流畅运动',
     'bt.explosive': '爆炸性动作',
-
     'bt.vintage_film': '复古胶片颗粒',
     'bt.foggy': '雾气/朦胧',
     'bt.rainy': '雨天/暴风雨',
@@ -648,7 +564,6 @@ const translations = {
     'bt.dusty': '尘土飞扬',
     'bt.scifi_clean': '科幻洁净感',
     'bt.horror': '恐怖/阴暗',
-
     'bt.shallow_dof': '浅景深',
     'bt.deep_focus': '深焦 (全清晰)',
     'bt.rack_focus': '变焦 (Rack Focus)',
@@ -657,9 +572,7 @@ const translations = {
     'bt.telephoto_lens': '长焦镜头',
     'bt.fisheye_lens': '鱼眼镜头',
     'bt.anamorphic': '变形宽银幕镜头',
-
-    // Templates
-    'tmpl.select': 'Select Template',
+    'tmpl.select': '选择模板',
   }
 };
 
@@ -670,7 +583,7 @@ interface LanguageContextType {
 }
 
 export const LanguageContext = createContext<LanguageContextType>({
-  language: 'en',
+  language: 'zh',
   setLanguage: () => {},
   t: (key) => key,
 });
@@ -678,7 +591,7 @@ export const LanguageContext = createContext<LanguageContextType>({
 export const useLanguage = () => useContext(LanguageContext);
 
 export const LanguageProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [language, setLanguage] = useState<Language>('en');
+  const [language, setLanguage] = useState<Language>('zh');
 
   useEffect(() => {
     const savedLang = localStorage.getItem('app_language') as Language;
