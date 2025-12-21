@@ -192,6 +192,11 @@ const translations = {
     'ratio.PORTRAIT': 'Portrait (9:16)',
     'ratio.FOUR_THIRDS': 'Landscape (4:3)',
     'ratio.THREE_FOURTHS': 'Portrait (3:4)',
+    'ratio.TWO_THIRDS': 'Vertical (2:3)',
+    'ratio.THREE_TWOS': '35mm Film (3:2)',
+    'ratio.FOUR_FIFTHS': 'Instagram (4:5)',
+    'ratio.FIVE_FOURTHS': 'Large Format (5:4)',
+    'ratio.ULTRAWIDE': 'Ultrawide (21:9)',
     'builder.lighting': 'Lighting',
     'builder.camera': 'Camera',
     'builder.material': 'Material',
@@ -477,6 +482,11 @@ const translations = {
     'ratio.PORTRAIT': '竖屏 (9:16)',
     'ratio.FOUR_THIRDS': '横屏 (4:3)',
     'ratio.THREE_FOURTHS': '竖屏 (3:4)',
+    'ratio.TWO_THIRDS': '竖向 (2:3)',
+    'ratio.THREE_TWOS': '电影胶片 (3:2)',
+    'ratio.FOUR_FIFTHS': 'Instagram (4:5)',
+    'ratio.FIVE_FOURTHS': '大画幅 (5:4)',
+    'ratio.ULTRAWIDE': '超宽屏 (21:9)',
     'builder.lighting': '光影',
     'builder.camera': '运镜/视角',
     'builder.material': '材质',
@@ -584,7 +594,7 @@ interface LanguageContextType {
 
 export const LanguageContext = createContext<LanguageContextType>({
   language: 'zh',
-  setLanguage: () => {},
+  setLanguage: () => { },
   t: (key) => key,
 });
 

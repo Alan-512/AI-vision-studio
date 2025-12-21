@@ -16,7 +16,13 @@ export enum AspectRatio {
   LANDSCAPE = '16:9',
   PORTRAIT = '9:16',
   FOUR_THIRDS = '4:3',
-  THREE_FOURTHS = '3:4'
+  THREE_FOURTHS = '3:4',
+  // Additional ratios supported by Gemini API
+  TWO_THIRDS = '2:3',      // Vertical photo ratio
+  THREE_TWOS = '3:2',      // 35mm film ratio
+  FOUR_FIFTHS = '4:5',     // Instagram portrait
+  FIVE_FOURTHS = '5:4',    // Large format camera
+  ULTRAWIDE = '21:9'       // Cinematic ultrawide
 }
 
 export enum ImageResolution {
@@ -91,34 +97,34 @@ export interface SmartAsset {
 export interface GenerationParams {
   prompt: string;
   // --- New: Isolated Prompts Storage ---
-  savedImagePrompt?: string; 
+  savedImagePrompt?: string;
   savedVideoPrompt?: string;
 
   negativePrompt?: string; // Not directly supported by all Gemini models but good for UI
   aspectRatio: AspectRatio;
   continuousMode?: boolean; // New: Auto-use result as reference for next turn
   isAutoMode?: boolean; // New: Agent Autonomous Mode
-  
+
   // Image specific
   imageModel: ImageModel;
   imageResolution?: ImageResolution;
   imageStyle?: ImageStyle;
   numberOfImages?: number; // New: Number of images to generate (1-4)
   useGrounding?: boolean; // New: Use Google Search Grounding (Pro model only)
-  
+
   // --- NEW: UNIFIED VISUAL CONTROL ---
   smartAssets?: SmartAsset[];
 
   // --- LEGACY FIELDS (Kept for compatibility with existing saved projects/Inpainting flow) ---
   subjectReferences?: { data: string; mimeType: string }[];
   subjectType?: 'PERSON' | 'ANIMAL' | 'OBJECT';
-  
+
   referenceImage?: string; // Base64 string of the ANNOTATED/MASKED image (Composite)
   referenceImageMimeType?: string;
-  
+
   originalReferenceImage?: string; // Base64 string of the CLEAN ORIGINAL image
   originalReferenceImageMimeType?: string;
-  
+
   maskImage?: string; // NEW: Base64 string of the B&W MASK
   maskImageMimeType?: string;
 
@@ -133,7 +139,7 @@ export interface GenerationParams {
   videoResolution?: VideoResolution;
   videoStyle?: VideoStyle;
   videoDuration?: VideoDuration;
-  
+
   // Video Keyframes (Mutually exclusive with videoStyleReferences)
   videoStartImage?: string;
   videoStartImageMimeType?: string;
@@ -142,10 +148,10 @@ export interface GenerationParams {
 
   // Video Style References (Veo HQ only, Mutually exclusive with Keyframes)
   videoStyleReferences?: { data: string; mimeType: string }[];
-  
+
   // New: Video Extension
   inputVideoData?: string; // Base64 of video to extend
-  inputVideoMimeType?: string; 
+  inputVideoMimeType?: string;
 }
 
 // --- ARCHITECTURE UPGRADE: JOB MODEL & EVENT STREAM ---
@@ -189,10 +195,17 @@ export interface ChatMessage {
   content: string;
   timestamp: number;
   image?: string; // Legacy
-  images?: string[]; 
-  isThinking?: boolean; 
+  images?: string[];
+  isThinking?: boolean;
   isSystem?: boolean; // New: Indicates a system-injected message (e.g. tool output)
-  
+
+  // Gemini 3 Pro Thinking mode: Store thought signatures for multi-turn stability
+  // These must be passed back to the model in the next turn
+  thoughtSignatures?: Array<{
+    partIndex: number;  // Which part this signature belongs to
+    signature: string;  // The actual signature string
+  }>;
+
   // Link to the Job System
   relatedJobId?: string; // If this message triggered a job
   toolCalls?: ToolCallRecord[]; // Record of tools called in this turn
@@ -213,15 +226,15 @@ export interface Project {
   createdAt: number;
   updatedAt: number;
   savedParams?: GenerationParams;
-  savedMode?: AppMode; 
-  chatHistory?: ChatMessage[]; 
+  savedMode?: AppMode;
+  chatHistory?: ChatMessage[];
   videoChatHistory?: ChatMessage[];
-  
+
   // Active Jobs (New)
   activeJobs?: AgentJob[];
-  
-  contextSummary?: string; 
-  summaryCursor?: number; 
+
+  contextSummary?: string;
+  summaryCursor?: number;
 }
 
 // --- EXISTING TYPES ---
@@ -239,10 +252,10 @@ export interface AssetItem {
   isNew?: boolean; // New: Indicator for newly generated assets
   deletedAt?: number; // New: Timestamp when moved to trash
   operationName?: string; // New: Store the Google API Operation ID for long-running tasks
-  
+
   // Link to Job System
   jobId?: string; // Which job created this asset
-  
+
   metadata?: {
     aspectRatio: string;
     model: string;
@@ -268,15 +281,15 @@ export interface BackgroundTask {
   executionStartTime?: number; // When it actually started running (left queue)
   prompt: string;
   error?: string;
-  
+
   // Link to Job System
   jobId?: string;
 }
 
 export interface AgentAction {
-    toolName: string;
-    args: any;
-    thought?: string;
+  toolName: string;
+  args: any;
+  thought?: string;
 }
 
 // Window augmentation for Veo Key selection
