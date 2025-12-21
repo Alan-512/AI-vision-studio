@@ -46,9 +46,12 @@ export enum VideoModel {
   VEO_HQ = 'veo-3.1-generate-preview'
 }
 
-export enum ChatModel {
-  GEMINI_3_PRO_FAST = 'gemini-3-pro-fast',
-  GEMINI_3_PRO_REASONING = 'gemini-3-pro-reasoning'
+// ChatModel is now merged into TextModel - use TextModel.FLASH and TextModel.PRO
+
+// Text models for general tasks (prompts, descriptions, etc.)
+export enum TextModel {
+  FLASH = 'gemini-3-flash-preview',      // Fast, general purpose
+  PRO = 'gemini-3-pro-preview'           // More capable, slower
 }
 
 export enum ImageStyle {
@@ -83,15 +86,11 @@ export enum VideoDuration {
   LONG = '8'
 }
 
-// NEW: Smart Asset Interface
+// Reference Image (simplified - user describes usage in prompt)
 export interface SmartAsset {
   id: string;
   data: string; // Base64
   mimeType: string;
-  type: 'IDENTITY' | 'STRUCTURE' | 'STYLE';
-  label?: string; // Custom user label text
-  selectedTags?: string[]; // Array of selected preset tag keys (e.g. 'tag.person')
-  isAnnotated?: boolean; // For Inpainting masks
 }
 
 export interface GenerationParams {
@@ -130,9 +129,6 @@ export interface GenerationParams {
 
   isAnnotatedReference?: boolean; // New: Flag to indicate if reference has user annotations (red boxes)
   styleReferences?: { data: string; mimeType: string }[]; // Array of style reference images
-
-  // New: Advanced Creativity
-  textToRender?: string; // Specific text to render in the image
 
   // Video specific
   videoModel: VideoModel;
@@ -197,6 +193,7 @@ export interface ChatMessage {
   image?: string; // Legacy
   images?: string[];
   isThinking?: boolean;
+  thinkingContent?: string; // Native Gemini thinking summaries (persists after completion)
   isSystem?: boolean; // New: Indicates a system-injected message (e.g. tool output)
 
   // Gemini 3 Pro Thinking mode: Store thought signatures for multi-turn stability

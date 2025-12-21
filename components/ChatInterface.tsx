@@ -1,8 +1,9 @@
 
-import React, { useState, useRef, useEffect } from 'react';
-import { Send, User, Sparkles, ChevronDown, BrainCircuit, Zap, X, Box, Copy, Check, Plus, MonitorPlay, Palette, Film, Bot, Square, Crop, CheckCircle2, Globe, Brain, CircuitBoard, Wrench, Image as ImageIcon, CircleDashed, Terminal, Clapperboard, AudioWaveform, Move3d } from 'lucide-react';
-import { ChatMessage, ChatModel, GenerationParams, ImageStyle, ImageResolution, AppMode, ImageModel, VideoResolution, VideoModel, VideoStyle, AspectRatio, SmartAsset, APP_LIMITS, AgentAction } from '../types';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
+import { Send, User, Sparkles, ChevronDown, BrainCircuit, Zap, X, Box, Copy, Check, Plus, MonitorPlay, Palette, Film, Bot, Square, Crop, CheckCircle2, Globe, Brain, CircuitBoard, Wrench, Image as ImageIcon, CircleDashed, Terminal, Clapperboard, AudioWaveform, Move3d, Download, RefreshCw, AlertCircle } from 'lucide-react';
+import { ChatMessage, GenerationParams, ImageStyle, ImageResolution, AppMode, ImageModel, VideoResolution, VideoModel, VideoStyle, AspectRatio, SmartAsset, APP_LIMITS, AgentAction, TextModel } from '../types';
 import { streamChatResponse } from '../services/geminiService';
+import { AgentStateMachine, AgentState, createInitialAgentState, PendingAction, createGenerateAction } from '../services/agentService';
 import { useLanguage } from '../contexts/LanguageContext';
 import ReactMarkdown from 'react-markdown';
 
@@ -21,7 +22,11 @@ interface ChatInterfaceProps {
   onUpdateProjectContext?: (summary: string, cursor: number) => void;
   onToolCall?: (action: AgentAction) => void;
   agentContextAssets?: SmartAsset[];
+  // Draft images from generateImage (构思图)
+  thoughtImages?: Array<{ id: string; data: string; mimeType: string; isFinal: boolean; timestamp: number }>;
+  setThoughtImages?: React.Dispatch<React.SetStateAction<Array<{ id: string; data: string; mimeType: string; isFinal: boolean; timestamp: number }>>>;
 }
+
 
 // Improved Parser for Streaming Thoughts and Tools
 interface AgentStep { type: 'ORCHESTRATOR' | 'PLANNER' | 'TOOL' | 'PROTOCOL' | 'SYSTEM' | 'THOUGHT'; title: string; content: string; isComplete: boolean; timestamp: number; }
@@ -209,12 +214,14 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   projectSummaryCursor,
   onUpdateProjectContext,
   onToolCall,
-  agentContextAssets
+  agentContextAssets,
+  thoughtImages = [],
+  setThoughtImages
 }) => {
   const { t, language } = useLanguage();
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [selectedModel, setSelectedModel] = useState<ChatModel>(ChatModel.GEMINI_3_PRO_FAST);
+  const [selectedModel, setSelectedModel] = useState<TextModel>(TextModel.FLASH);
   const [useSearch, setUseSearch] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showModelSelector, setShowModelSelector] = useState(false);
@@ -223,6 +230,81 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const projectIdRef = useRef(projectId);
   const abortControllerRef = useRef<AbortController | null>(null);
+
+  // NEW: Track LLM thinking process text
+  const [thinkingText, setThinkingText] = useState<string>('');
+  const thinkingTextRef = useRef<string>(''); // Ref to hold latest value for finally block
+
+  // NEW: Agent state machine for workflow management and retry
+  const [agentState, setAgentState] = useState<AgentState>(createInitialAgentState());
+
+  // Create stable agent machine instance with callbacks
+  const agentMachine = useMemo(() => new AgentStateMachine(
+    createInitialAgentState(),
+    {
+      onStateChange: (newState) => setAgentState(newState),
+      onExecuteAction: async (action: PendingAction) => {
+        console.log('[Agent] onExecuteAction called:', action.type, 'hasOnToolCall:', !!onToolCall);
+        // Execute the action via onToolCall
+        if (onToolCall && action.type === 'GENERATE_IMAGE') {
+          console.log('[Agent] Calling onToolCall with params:', action.params);
+          return new Promise((resolve, reject) => {
+            try {
+              onToolCall({ toolName: 'generate_image', args: action.params });
+              resolve({ success: true });
+            } catch (error) {
+              reject(error);
+            }
+          });
+        }
+        console.warn('[Agent] onExecuteAction condition not met');
+        throw new Error(`Unknown action type: ${action.type}`);
+      }
+    }
+  ), [onToolCall]);
+
+  // Tool call handler with retry support
+  const handleToolCallWithRetry = async (action: AgentAction) => {
+    // Merge AI args with user's manual settings based on Auto Mode
+    const isAutoMode = params.isAutoMode ?? true;
+
+    let finalArgs = action.args;
+    if (!isAutoMode) {
+      // Manual mode: user's selections override AI's choices
+      finalArgs = {
+        ...action.args,
+        model: params.imageModel,
+        aspectRatio: params.aspectRatio,
+        resolution: params.imageResolution,
+        negativePrompt: params.negativePrompt || action.args.negativePrompt,
+        numberOfImages: params.numberOfImages || action.args.numberOfImages || 1,
+        useGrounding: params.useGrounding ?? action.args.useGrounding ?? false,
+      };
+    } else {
+      // Auto mode: use AI's choices but ensure valid model value
+      const validModels = Object.values(ImageModel);
+      if (!validModels.includes(finalArgs.model)) {
+        finalArgs = { ...finalArgs, model: ImageModel.FLASH };
+      }
+    }
+
+    const pendingAction = createGenerateAction(
+      finalArgs,
+      `Generate: ${action.args.prompt?.slice(0, 50)}...`,
+      false // Don't require UI confirmation, use conversation-based HITL
+    );
+
+    // Set the action and let state machine handle execution with retry
+    // Since requiresConfirmation=false, setPendingAction will auto-execute
+    try {
+      console.log('[Agent] Setting pending action (will auto-execute)');
+      await agentMachine.setPendingAction(pendingAction);
+      console.log('[Agent] Action execution completed');
+    } catch (error) {
+      console.error('[Agent] Action failed after retries:', error);
+      // State machine will have transitioned to ERROR state
+    }
+  };
 
   const isAutoMode = params.isAutoMode ?? true;
   const getRatioLabel = (r: AspectRatio) => { const enumKey = Object.keys(AspectRatio).find(k => AspectRatio[k as keyof typeof AspectRatio] === r); return t(`ratio.${enumKey}` as any) || r; };
@@ -242,8 +324,114 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => { const files = e.target.files; if (!files || files.length === 0) return; await processFiles(Array.from(files)); if (fileInputRef.current) fileInputRef.current.value = ''; };
   const handlePaste = async (e: React.ClipboardEvent) => { const items = e.clipboardData.items; const files: File[] = []; for (let i = 0; i < items.length; i++) { if (items[i].type.indexOf('image') !== -1) { const file = items[i].getAsFile(); if (file) files.push(file); } } if (files.length > 0) { e.preventDefault(); await processFiles(files); } };
   const removeSelectedImage = (index: number) => { setSelectedImages(prev => prev.filter((_, i) => i !== index)); };
-  const handleStop = () => { if (abortControllerRef.current) { abortControllerRef.current.abort(); abortControllerRef.current = null; } setIsLoading(false); setHistory(prev => { const updated = [...prev]; const last = updated[updated.length - 1]; if (last.role === 'model' && last.isThinking) { updated[updated.length - 1] = { ...last, isThinking: false }; } return updated; }); };
-  const handleSend = async (customText?: string) => { const textToSend = customText || input.trim(); if ((!textToSend && selectedImages.length === 0) || isLoading) return; const sendingProjectId = projectId; const userMsg: ChatMessage = { role: 'user', content: textToSend, timestamp: Date.now(), images: selectedImages.length > 0 ? [...selectedImages] : undefined }; const newHistory = [...history, userMsg]; setHistory(newHistory); setInput(''); if (inputRef.current) inputRef.current.style.height = 'auto'; setSelectedImages([]); setIsLoading(true); const abortController = new AbortController(); abortControllerRef.current = abortController; let collectedSignatures: Array<{ partIndex: number; signature: string }> = []; try { const tempAiMsg: ChatMessage = { role: 'model', content: '', timestamp: Date.now(), isThinking: true }; setHistory(prev => [...prev, tempAiMsg]); await streamChatResponse(newHistory, userMsg.content, (chunkText) => { if (projectIdRef.current !== sendingProjectId) return; setHistory(prev => { const updated = [...prev]; updated[updated.length - 1] = { ...updated[updated.length - 1], content: chunkText }; return updated; }); }, selectedModel, mode, abortController.signal, projectContextSummary, projectSummaryCursor, onUpdateProjectContext, onToolCall, useSearch, params, agentContextAssets, (signatures) => { collectedSignatures = signatures; }); } catch (error: any) { if (error.message === 'Cancelled' || error.name === 'AbortError') { console.log('Chat generation stopped by user'); } else { console.error("Chat Error:", error); if (projectIdRef.current === sendingProjectId) { setHistory(prev => { const updated = [...prev]; const lastIdx = updated.length - 1; if (lastIdx >= 0 && updated[lastIdx].role === 'model') { const currentContent = updated[lastIdx].content; const errorMsg = `\n\n*[System Error: ${error.message || "Connection timed out"}]*`; updated[lastIdx] = { ...updated[lastIdx], content: currentContent ? currentContent + errorMsg : errorMsg, isThinking: false }; } return updated; }); } } } finally { if (projectIdRef.current === sendingProjectId) { setIsLoading(false); abortControllerRef.current = null; setHistory(prev => { const updated = [...prev]; const last = updated[updated.length - 1]; if (last.role === 'model') { updated[updated.length - 1] = { ...last, isThinking: false, thoughtSignatures: collectedSignatures.length > 0 ? collectedSignatures : undefined }; } return updated; }); } } };
+  const handleStop = () => {
+    if (abortControllerRef.current) { abortControllerRef.current.abort(); abortControllerRef.current = null; }
+    setIsLoading(false);
+    setHistory(prev => { const updated = [...prev]; const last = updated[updated.length - 1]; if (last.role === 'model' && last.isThinking) { updated[updated.length - 1] = { ...last, isThinking: false }; } return updated; });
+  };
+
+  const handleSend = async (customText?: string) => {
+    const textToSend = customText || input.trim();
+    console.log('[Chat] handleSend called, isLoading:', isLoading, 'text:', textToSend?.slice(0, 30));
+    if ((!textToSend && selectedImages.length === 0) || isLoading) {
+      console.log('[Chat] Message blocked - early return');
+      return;
+    }
+
+    const sendingProjectId = projectId;
+    const userMsg: ChatMessage = { role: 'user', content: textToSend, timestamp: Date.now(), images: selectedImages.length > 0 ? [...selectedImages] : undefined };
+    const newHistory = [...history, userMsg];
+    setHistory(newHistory);
+    setInput('');
+    if (inputRef.current) inputRef.current.style.height = 'auto';
+    setSelectedImages([]);
+    setThoughtImages?.([]); // Clear previous thought images
+    setIsLoading(true);
+
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
+    let collectedSignatures: Array<{ partIndex: number; signature: string }> = [];
+
+    try {
+      const tempAiMsg: ChatMessage = { role: 'model', content: '', timestamp: Date.now(), isThinking: true };
+      setThinkingText(''); // Clear previous thinking text
+      thinkingTextRef.current = ''; // Clear ref too
+      setHistory(prev => [...prev, tempAiMsg]);
+
+      await streamChatResponse(
+        newHistory,
+        userMsg.content,
+        (chunkText) => {
+          if (projectIdRef.current !== sendingProjectId) return;
+          setHistory(prev => { const updated = [...prev]; updated[updated.length - 1] = { ...updated[updated.length - 1], content: chunkText }; return updated; });
+        },
+        selectedModel,
+        mode,
+        abortController.signal,
+        projectContextSummary,
+        projectSummaryCursor,
+        onUpdateProjectContext,
+        handleToolCallWithRetry, // Use Agent state machine with retry logic
+        useSearch,
+        params,
+        agentContextAssets,
+        (signatures) => { collectedSignatures = signatures; },
+        // Callback for thought images (构思图)
+        setThoughtImages ? (imageData) => {
+          if (projectIdRef.current !== sendingProjectId) return;
+          setThoughtImages(prev => [...prev, {
+            id: crypto.randomUUID(),
+            ...imageData,
+            timestamp: Date.now()
+          }]);
+        } : undefined,
+        // NEW: Callback for thinking process text (思考过程)
+        (text) => {
+          if (projectIdRef.current !== sendingProjectId) return;
+          thinkingTextRef.current += text; // Update ref for finally block
+          setThinkingText(prev => prev + text);
+        }
+      );
+    } catch (error: any) {
+      if (error.message === 'Cancelled' || error.name === 'AbortError') {
+        console.log('Chat generation stopped by user');
+      } else {
+        console.error("Chat Error:", error);
+        if (projectIdRef.current === sendingProjectId) {
+          setHistory(prev => {
+            const updated = [...prev];
+            const lastIdx = updated.length - 1;
+            if (lastIdx >= 0 && updated[lastIdx].role === 'model') {
+              const currentContent = updated[lastIdx].content;
+              const errorMsg = `\n\n*[System Error: ${error.message || "Connection timed out"}]*`;
+              updated[lastIdx] = { ...updated[lastIdx], content: currentContent ? currentContent + errorMsg : errorMsg, isThinking: false };
+            }
+            return updated;
+          });
+        }
+      }
+    } finally {
+      if (projectIdRef.current === sendingProjectId) {
+        setIsLoading(false);
+        abortControllerRef.current = null;
+        // Store thinkingText in the message for persistence after completion
+        const finalThinkingContent = thinkingTextRef.current; // Use ref to get latest value
+        setHistory(prev => {
+          const updated = [...prev];
+          const last = updated[updated.length - 1];
+          if (last.role === 'model') {
+            updated[updated.length - 1] = {
+              ...last,
+              isThinking: false,
+              thinkingContent: finalThinkingContent || undefined, // Persist thinking content
+              thoughtSignatures: collectedSignatures.length > 0 ? collectedSignatures : undefined
+            };
+          }
+          return updated;
+        });
+      }
+    }
+  };
   const handleKeyDown = (e: React.KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); } };
 
   const VEO_TIPS = [
@@ -288,8 +476,120 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
           </div>
         ) : (
           history.map((msg, idx) => (
-            <ChatBubble key={idx} message={msg} />
+            <ChatBubble
+              key={idx}
+              message={msg}
+              nativeThinkingText={idx === history.length - 1 && msg.isThinking ? thinkingText : undefined}
+            />
           ))
+        )}
+
+        {/* Agent Status Indicator - 重试/错误状态 */}
+        {(agentState.phase === 'RETRYING' || agentState.phase === 'ERROR') && (
+          <div className={`mt-4 p-3 rounded-lg border animate-in fade-in ${agentState.phase === 'ERROR'
+            ? 'bg-red-500/10 border-red-500/30'
+            : 'bg-amber-500/10 border-amber-500/30'
+            }`}>
+            <div className="flex items-center gap-2">
+              {agentState.phase === 'RETRYING' ? (
+                <>
+                  <RefreshCw size={14} className="text-amber-400 animate-spin" />
+                  <span className="text-xs text-amber-300">
+                    {language === 'zh'
+                      ? `重试中 (${agentState.retryCount}/${agentState.maxRetries})...`
+                      : `Retrying (${agentState.retryCount}/${agentState.maxRetries})...`}
+                  </span>
+                </>
+              ) : (
+                <>
+                  <AlertCircle size={14} className="text-red-400" />
+                  <span className="text-xs text-red-300">
+                    {agentState.error || (language === 'zh' ? '操作失败' : 'Action failed')}
+                  </span>
+                </>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Thought Images Panel - 构思图展示区 */}
+        {thoughtImages.length > 0 && (
+          <div className="mt-4 p-4 bg-gradient-to-r from-indigo-500/10 to-purple-500/10 border border-indigo-500/30 rounded-xl animate-in fade-in slide-in-from-bottom-2">
+            <div className="flex items-center gap-2 mb-3">
+              <BrainCircuit size={16} className="text-indigo-400" />
+              <span className="text-xs font-bold text-indigo-300">
+                {language === 'zh' ? '构思草图' : 'Draft Sketches'}
+              </span>
+              <span className="text-[10px] text-gray-500">
+                ({thoughtImages.filter(img => !img.isFinal).length} {language === 'zh' ? '张思考草图' : 'thinking'}, {thoughtImages.filter(img => img.isFinal).length} {language === 'zh' ? '张最终图' : 'final'})
+              </span>
+            </div>
+            <div className="flex gap-3 overflow-x-auto pb-2">
+              {thoughtImages.map((img, idx) => (
+                <div key={img.id} className="relative shrink-0 group">
+                  <div className={`relative rounded-lg overflow-hidden border-2 ${img.isFinal ? 'border-green-500/50' : 'border-indigo-500/30'}`}>
+                    <img
+                      src={`data:${img.mimeType};base64,${img.data}`}
+                      alt={`Draft ${idx + 1}`}
+                      className="w-32 h-32 object-cover"
+                    />
+                    {/* Badge */}
+                    <div className={`absolute top-1 left-1 px-1.5 py-0.5 rounded text-[9px] font-bold ${img.isFinal ? 'bg-green-500 text-white' : 'bg-indigo-500/80 text-white'}`}>
+                      {img.isFinal ? (language === 'zh' ? '最终' : 'FINAL') : `#${idx + 1}`}
+                    </div>
+
+                    {/* Action buttons on hover */}
+                    <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
+                      <button
+                        onClick={() => {
+                          const link = document.createElement('a');
+                          link.href = `data:${img.mimeType};base64,${img.data}`;
+                          link.download = `draft_${idx + 1}_${Date.now()}.png`;
+                          link.click();
+                        }}
+                        className="p-2 bg-white/20 hover:bg-white/30 rounded-full transition-colors"
+                        title={language === 'zh' ? '下载' : 'Download'}
+                      >
+                        <Download size={14} className="text-white" />
+                      </button>
+                      <button
+                        onClick={() => {
+                          // Create a blob URL and trigger onToolCall to save as asset
+                          const byteCharacters = atob(img.data);
+                          const byteNumbers = new Array(byteCharacters.length);
+                          for (let i = 0; i < byteCharacters.length; i++) {
+                            byteNumbers[i] = byteCharacters.charCodeAt(i);
+                          }
+                          const byteArray = new Uint8Array(byteNumbers);
+                          const blob = new Blob([byteArray], { type: img.mimeType });
+                          const url = URL.createObjectURL(blob);
+
+                          // Use setParams to pass the image as reference for next generation
+                          if (setParams) {
+                            const newSmartAsset = {
+                              id: crypto.randomUUID(),
+                              data: img.data,
+                              mimeType: img.mimeType
+                            };
+                            setParams(prev => ({
+                              ...prev,
+                              smartAssets: [...(prev.smartAssets || []), newSmartAsset]
+                            }));
+                          }
+                          URL.revokeObjectURL(url);
+                          alert(language === 'zh' ? '已添加为参考素材' : 'Added as reference');
+                        }}
+                        className="p-2 bg-white/20 hover:bg-white/30 rounded-full transition-colors"
+                        title={language === 'zh' ? '保存为参考' : 'Save as Reference'}
+                      >
+                        <Plus size={14} className="text-white" />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
         )}
       </div>
 
@@ -352,11 +652,11 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
 
               <div className="flex items-center gap-3">
                 <div className="relative">
-                  <button className="model-trigger flex items-center gap-1 text-xs font-medium text-gray-400 hover:text-white px-2 py-1.5 rounded-lg hover:bg-white/10 transition-colors" onClick={() => setShowModelSelector(!showModelSelector)}>{selectedModel === ChatModel.GEMINI_3_PRO_FAST ? 'Flash' : 'Thinking'}<ChevronDown size={14} /></button>
+                  <button className="model-trigger flex items-center gap-1 text-xs font-medium text-gray-400 hover:text-white px-2 py-1.5 rounded-lg hover:bg-white/10 transition-colors" onClick={() => setShowModelSelector(!showModelSelector)}>{selectedModel === TextModel.FLASH ? 'Flash' : 'Thinking'}<ChevronDown size={14} /></button>
                   {showModelSelector && (
                     <div className="model-popover absolute bottom-12 right-0 w-56 bg-dark-surface border border-dark-border rounded-xl shadow-xl p-1 z-50 animate-in slide-in-from-bottom-2 fade-in">
-                      <button onClick={() => { setSelectedModel(ChatModel.GEMINI_3_PRO_FAST); setShowModelSelector(false); }} className={`w-full flex items-center gap-3 p-2 rounded-lg text-left transition-colors ${selectedModel === ChatModel.GEMINI_3_PRO_FAST ? 'bg-white/10 text-white' : 'text-gray-400 hover:text-gray-200 hover:bg-white/5'}`}><Zap size={16} className="text-yellow-400" /><div><div className="text-xs font-bold">Flash</div><div className="text-[10px] opacity-70">Gemini 3 Flash</div></div>{selectedModel === ChatModel.GEMINI_3_PRO_FAST && <Check size={14} className="ml-auto" />}</button>
-                      <button onClick={() => { setSelectedModel(ChatModel.GEMINI_3_PRO_REASONING); setShowModelSelector(false); }} className={`w-full flex items-center gap-3 p-2 rounded-lg text-left transition-colors ${selectedModel === ChatModel.GEMINI_3_PRO_REASONING ? 'bg-white/10 text-white' : 'text-gray-400 hover:text-gray-200 hover:bg-white/5'}`}><BrainCircuit size={16} className="text-purple-400" /><div><div className="text-xs font-bold">Thinking</div><div className="text-[10px] opacity-70">Gemini 3 Pro</div></div>{selectedModel === ChatModel.GEMINI_3_PRO_REASONING && <Check size={14} className="ml-auto" />}</button>
+                      <button onClick={() => { setSelectedModel(TextModel.FLASH); setShowModelSelector(false); }} className={`w-full flex items-center gap-3 p-2 rounded-lg text-left transition-colors ${selectedModel === TextModel.FLASH ? 'bg-white/10 text-white' : 'text-gray-400 hover:text-gray-200 hover:bg-white/5'}`}><Zap size={16} className="text-yellow-400" /><div><div className="text-xs font-bold">Flash</div><div className="text-[10px] opacity-70">Gemini 3 Flash</div></div>{selectedModel === TextModel.FLASH && <Check size={14} className="ml-auto" />}</button>
+                      <button onClick={() => { setSelectedModel(TextModel.PRO); setShowModelSelector(false); }} className={`w-full flex items-center gap-3 p-2 rounded-lg text-left transition-colors ${selectedModel === TextModel.PRO ? 'bg-white/10 text-white' : 'text-gray-400 hover:text-gray-200 hover:bg-white/5'}`}><BrainCircuit size={16} className="text-purple-400" /><div><div className="text-xs font-bold">Thinking</div><div className="text-[10px] opacity-70">Gemini 3 Pro</div></div>{selectedModel === TextModel.PRO && <Check size={14} className="ml-auto" />}</button>
                     </div>
                   )}
                 </div>
@@ -371,12 +671,27 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   );
 };
 
-const ChatBubble: React.FC<{ message: ChatMessage }> = ({ message }) => {
-  const { t } = useLanguage();
+const ChatBubble: React.FC<{ message: ChatMessage; nativeThinkingText?: string }> = ({ message, nativeThinkingText }) => {
+  const { t, language } = useLanguage();
   const isUser = message.role === 'user';
   const isSystem = message.isSystem;
   const isFeedback = message.content.startsWith('[SYSTEM_FEEDBACK]');
   const [isCopied, setIsCopied] = useState(false);
+
+  // NEW: Collapsible thinking section - expanded during thinking, auto-collapse when done
+  const [isThinkingExpanded, setIsThinkingExpanded] = useState(!!message.isThinking);
+
+  // Auto-collapse when thinking completes
+  useEffect(() => {
+    if (!message.isThinking && isThinkingExpanded) {
+      // Delay to let user see final content briefly
+      const timer = setTimeout(() => setIsThinkingExpanded(false), 500);
+      return () => clearTimeout(timer);
+    }
+    if (message.isThinking) {
+      setIsThinkingExpanded(true);
+    }
+  }, [message.isThinking]);
 
   // Parse Content
   const { steps, finalContent } = isUser ? { steps: [], finalContent: message.content } : parseAgentSteps(message.content);
@@ -440,13 +755,68 @@ const ChatBubble: React.FC<{ message: ChatMessage }> = ({ message }) => {
           </div>
         )}
 
-        {/* FINAL TEXT CONTENT - Hidden if this is just a SYSTEM FEEDBACK message with images */}
-        {(finalContent || isUser) && !isFeedback && (
+        {/* COLLAPSIBLE THINKING SECTION - For streaming AI reasoning */}
+        {!isUser && !isSystem && (message.isThinking || finalContent) && (
+          <div className="w-full max-w-md">
+            {/* Thinking toggle header - show if there's NATIVE thinking content (streaming or persisted) */}
+            {((nativeThinkingText && nativeThinkingText.length > 0) || message.thinkingContent) && (
+              <button
+                onClick={() => setIsThinkingExpanded(!isThinkingExpanded)}
+                className={`w-full flex items-center gap-2 px-3 py-2 mb-2 rounded-lg border transition-all ${isThinkingExpanded
+                  ? 'bg-gray-500/10 border-gray-500/30'
+                  : 'bg-transparent border-gray-500/20 hover:bg-gray-500/5'
+                  }`}
+              >
+                <BrainCircuit size={14} className={`${message.isThinking ? 'text-brand-400 animate-pulse' : 'text-gray-400'}`} />
+                <span className="text-xs font-medium text-gray-300 flex-1 text-left">
+                  {message.isThinking
+                    ? (language === 'zh' ? '思考中...' : 'Thinking...')
+                    : (language === 'zh' ? '查看思考过程' : 'View thinking process')
+                  }
+                </span>
+                <ChevronDown size={14} className={`text-gray-500 transition-transform duration-200 ${isThinkingExpanded ? 'rotate-180' : ''}`} />
+              </button>
+            )}
+
+            {/* Expanded thinking content - shows NATIVE thinking summaries from Gemini */}
+            {/* Uses streaming content OR persisted content from message */}
+            {isThinkingExpanded && (nativeThinkingText || message.thinkingContent) && (
+              <div className="mb-3 p-3 bg-gray-500/5 border border-gray-500/20 rounded-lg text-xs text-gray-300 font-mono max-h-60 overflow-y-auto custom-scrollbar animate-in fade-in slide-in-from-top-2">
+                <ReactMarkdown components={MarkdownComponents}>
+                  {nativeThinkingText || message.thinkingContent || ''}
+                </ReactMarkdown>
+              </div>
+            )}
+
+            {/* Final answer - Show during streaming AND after completion */}
+            {finalContent && !isFeedback && (
+              <div className={`relative px-4 py-3 rounded-2xl text-sm leading-relaxed shadow-sm bg-transparent border border-dark-border text-gray-200 rounded-tl-none`}>
+                <div className="markdown-content w-full min-w-0 break-words">
+                  <ReactMarkdown components={MarkdownComponents}>
+                    {finalContent}
+                  </ReactMarkdown>
+                  {/* Show streaming cursor when still thinking */}
+                  {message.isThinking && <span className="inline-block w-2 h-4 bg-brand-400 animate-pulse ml-1" />}
+                </div>
+
+                {!message.isThinking && finalContent && !isSystem && (
+                  <div className={`absolute -bottom-8 left-0 opacity-0 group-hover:opacity-100 transition-opacity`}>
+                    <button onClick={handleCopy} className="flex items-center gap-1.5 px-2 py-1 bg-dark-surface border border-dark-border rounded-md text-[10px] text-gray-400 hover:text-white transition-colors shadow-lg">
+                      {isCopied ? <Check size={10} className="text-green-500" /> : <Copy size={10} />}
+                      {isCopied ? t('chat.copied') : 'Copy'}
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* User and System messages - Original display */}
+        {(isUser || isSystem) && (finalContent || isUser) && !isFeedback && (
           <div className={`relative px-4 py-3 rounded-2xl text-sm leading-relaxed shadow-sm ${isSystem
             ? 'bg-amber-900/10 border border-amber-500/20 text-amber-200/90 rounded-tl-none font-mono text-xs'
-            : isUser
-              ? 'bg-dark-surface text-gray-100 rounded-tr-none'
-              : 'bg-transparent border border-dark-border text-gray-200 rounded-tl-none'
+            : 'bg-dark-surface text-gray-100 rounded-tr-none'
             }`}>
             <div className="markdown-content w-full min-w-0 break-words">
               <ReactMarkdown components={MarkdownComponents}>

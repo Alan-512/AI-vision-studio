@@ -11,7 +11,7 @@ import { ConfirmDialog } from './components/ConfirmDialog';
 import { ComparisonView } from './components/ComparisonView';
 import { CanvasEditor } from './components/CanvasEditor';
 import { CanvasView } from './components/CanvasView';
-import { generateImage, generateVideo, getUserApiKey, generateTitle } from './services/geminiService';
+import { generateImage, generateVideo, getUserApiKey, generateTitle, resetImageChat } from './services/geminiService';
 import {
     initDB, loadProjects, saveProject, saveAsset, loadAssets, updateAsset,
     deleteProjectFromDB, softDeleteAssetInDB, restoreAssetInDB,
@@ -181,6 +181,15 @@ export function App() {
     const [summaryCursor, setSummaryCursor] = useState<number>(0);
     const [agentContextAssets, setAgentContextAssets] = useState<SmartAsset[]>([]);
 
+    // NEW: Track draft images (构思图) from image generation
+    const [thoughtImages, setThoughtImages] = useState<Array<{
+        id: string;
+        data: string;
+        mimeType: string;
+        isFinal: boolean;
+        timestamp: number;
+    }>>([]);
+
     const [isSelectionMode, setIsSelectionMode] = useState(false);
     const [selectedAssetIds, setSelectedAssetIds] = useState<Set<string>>(new Set());
     const [showFavoritesOnly, setShowFavoritesOnly] = useState(false);
@@ -259,6 +268,9 @@ export function App() {
             if (project) {
                 // Mark as initializing to prevent 'Save' effect from bumping the updatedAt
                 isInitializingRef.current = true;
+
+                // Reset image chat session for new project (enables fresh multi-turn context)
+                resetImageChat();
 
                 // FIX: Cancel any pending asset load to prevent race conditions
                 if (assetLoadAbortRef.current) {
@@ -398,7 +410,7 @@ export function App() {
             }
             if (data && mimeType) {
                 const newSmartAsset: SmartAsset = {
-                    id: crypto.randomUUID(), data, mimeType, type: 'STRUCTURE', label: 'Ref from Gallery'
+                    id: crypto.randomUUID(), data, mimeType
                 };
                 setParams(prev => ({ ...prev, smartAssets: [...(prev.smartAssets || []), newSmartAsset] }));
                 if (navigateToStudio) setActiveTab('studio');
@@ -435,21 +447,27 @@ export function App() {
 
             const isGroundingRequested = useGrounding === true || useGrounding === 'true';
             const shouldUseRefContext = use_ref_context === true || use_ref_context === 'true';
-            let effectiveModel = params.imageModel;
-            if (isGroundingRequested && effectiveModel !== ImageModel.PRO) {
-                effectiveModel = ImageModel.PRO;
-                addToast('info', 'Model Upgraded', 'Switched to Gemini 3 Pro for Search capabilities.');
+
+            // AUTO MODE: Default to Flash model for speed, matching System Prompt guidance
+            // Use Pro only if explicitly specified in the tool call args
+            const requestedModel = action.args.model;
+            let effectiveModel = ImageModel.FLASH; // Default to Flash as per system prompt
+            if (requestedModel && Object.values(ImageModel).includes(requestedModel as ImageModel)) {
+                effectiveModel = requestedModel as ImageModel;
             }
+
+            // Clear previous thought images for new generation
+            setThoughtImages([]);
 
             const executionParams: Partial<GenerationParams> = {
                 prompt: (prompt as string) || params.prompt,
                 aspectRatio: Object.values(AspectRatio).includes(aspectRatio as AspectRatio) ? (aspectRatio as AspectRatio) : params.aspectRatio,
                 imageModel: effectiveModel,
                 imageStyle: Object.values(ImageStyle).includes(style as ImageStyle) ? (style as ImageStyle) : params.imageStyle,
-                // Default to 2K when agent uses Pro model if not explicitly specified
+                // Default resolution based on model: Pro=2K, Flash=1K (Flash only supports 1K)
                 imageResolution: Object.values(ImageResolution).includes(resolution as ImageResolution)
                     ? (resolution as ImageResolution)
-                    : (effectiveModel === ImageModel.PRO ? ImageResolution.RES_2K : params.imageResolution),
+                    : (effectiveModel === ImageModel.PRO ? ImageResolution.RES_2K : ImageResolution.RES_1K),
                 negativePrompt: (negativePrompt as string) || params.negativePrompt,
                 numberOfImages: numberOfImages !== undefined ? Number(numberOfImages) : 1,
                 useGrounding: isGroundingRequested,
@@ -465,7 +483,7 @@ export function App() {
                         const match = imgData.match(/^data:(.+);base64,(.+)$/);
                         if (match) {
                             const historyRefAsset: SmartAsset = {
-                                id: `history-${Date.now()}`, mimeType: match[1], data: match[2], type: 'STRUCTURE', label: 'Previous Turn Reference'
+                                id: `history-${Date.now()}`, mimeType: match[1], data: match[2]
                             };
                             const exists = executionParams.smartAssets?.some(a => a.data.slice(0, 50) === match[2].slice(0, 50));
                             if (!exists) {
@@ -487,7 +505,7 @@ export function App() {
                         const matches = compressedBase64.match(/^data:(.+);base64,(.+)$/);
                         if (matches) {
                             const newSmartAsset: SmartAsset = {
-                                id: crypto.randomUUID(), data: matches[2], mimeType: matches[1], type: save_as_reference === 'STYLE' ? 'STYLE' : 'IDENTITY', label: 'Agent Reference'
+                                id: crypto.randomUUID(), data: matches[2], mimeType: matches[1]
                             };
                             setAgentContextAssets(prev => [...prev, newSmartAsset]);
                             addToast('success', 'Context Anchored', `New ${save_as_reference} reference saved.`);
@@ -542,6 +560,10 @@ export function App() {
         const userKey = getUserApiKey();
         // FIX: Use import.meta.env for Vite, or just check userKey directly
         if (!userKey) { setShowSettings(true); return; }
+
+        // Clear previous thought images for new generation (ensures isolation)
+        setThoughtImages([]);
+
         let activeParams = { ...params, ...overrideParams };
         activeParams.imageModel = sanitizeImageModel(activeParams.imageModel);
         const currentProjectId = activeProjectId;
@@ -589,7 +611,16 @@ export function App() {
                 let asset: AssetItem;
                 const genParams = { ...activeParams };
                 if (currentMode === AppMode.IMAGE) {
-                    asset = await generateImage(genParams, currentProjectId, onStart, controller.signal, taskId);
+                    asset = await generateImage(genParams, currentProjectId, onStart, controller.signal, taskId,
+                        // onThoughtImage callback to capture draft images (构思图)
+                        (imageData) => {
+                            setThoughtImages(prev => [...prev, {
+                                id: crypto.randomUUID(),
+                                ...imageData,
+                                timestamp: Date.now()
+                            }]);
+                        }
+                    );
                     if (controller.signal.aborted) throw new Error("Cancelled");
                     asset.isNew = true;
                     await saveAsset(asset);
@@ -672,7 +703,7 @@ export function App() {
         if (matches) {
             const mimeType = matches[1]; const base64Data = matches[2];
             const smartAsset: SmartAsset = {
-                id: crypto.randomUUID(), data: base64Data, mimeType: mimeType, type: 'STRUCTURE', label: 'Edited Reference', isAnnotated: true
+                id: crypto.randomUUID(), data: base64Data, mimeType: mimeType
             };
             setParams(prev => ({
                 ...prev, smartAssets: [...(prev.smartAssets || []), smartAsset],
@@ -733,7 +764,7 @@ export function App() {
             <ProjectSidebar isOpen={showProjects} onClose={() => setShowProjects(false)} projects={projects} activeProjectId={activeProjectId} generatingStates={generatingStates} onSelectProject={(id) => switchProject(id)} onCreateProject={() => createNewProject()} onRenameProject={(id, name) => { const p = projects.find(p => p.id === id); if (p) { const updated = { ...p, name }; setProjects(prev => prev.map(prj => prj.id === id ? updated : prj)); saveProject(updated); } }} onDeleteProject={handleDeleteProject} />
 
             <div className="flex-1 flex overflow-hidden relative">
-                <GenerationForm mode={mode} params={params} setParams={setParams} isGenerating={tasks.some(t => t.projectId === activeProjectId && (t.status === 'GENERATING' || t.status === 'QUEUED'))} startTime={generatingStates[activeProjectId]} onGenerate={handleGenerate} onVerifyVeo={handleAuthVerify} veoVerified={veoVerified} chatHistory={chatHistory} setChatHistory={setChatHistory} activeTab={activeTab} onTabChange={setActiveTab} chatSelectedImages={chatSelectedImages} setChatSelectedImages={setChatSelectedImages} projectId={activeProjectId} cooldownEndTime={videoCooldownEndTime} {...({ projectContextSummary: contextSummary, projectSummaryCursor: summaryCursor, onUpdateProjectContext: (s: string, c: number) => { setContextSummary(s); setSummaryCursor(c); }, onToolCall: handleAgentToolCall, agentContextAssets: agentContextAssets } as any)} />
+                <GenerationForm mode={mode} params={params} setParams={setParams} isGenerating={tasks.some(t => t.projectId === activeProjectId && (t.status === 'GENERATING' || t.status === 'QUEUED'))} startTime={generatingStates[activeProjectId]} onGenerate={handleGenerate} onVerifyVeo={handleAuthVerify} veoVerified={veoVerified} chatHistory={chatHistory} setChatHistory={setChatHistory} activeTab={activeTab} onTabChange={setActiveTab} chatSelectedImages={chatSelectedImages} setChatSelectedImages={setChatSelectedImages} projectId={activeProjectId} cooldownEndTime={videoCooldownEndTime} thoughtImages={thoughtImages} setThoughtImages={setThoughtImages} {...({ projectContextSummary: contextSummary, projectSummaryCursor: summaryCursor, onUpdateProjectContext: (s: string, c: number) => { setContextSummary(s); setSummaryCursor(c); }, onToolCall: handleAgentToolCall, agentContextAssets: agentContextAssets } as any)} />
 
                 <div className="flex-1 bg-dark-bg flex flex-col min-w-0 relative">
                     {rightPanelMode === 'CANVAS' && activeCanvasAsset ? (

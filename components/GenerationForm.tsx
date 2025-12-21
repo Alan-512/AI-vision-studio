@@ -1,7 +1,7 @@
 
 import React, { useRef, useState, useEffect } from 'react';
 import { AppMode, AspectRatio, GenerationParams, ImageResolution, VideoResolution, ImageModel, VideoModel, ImageStyle, VideoStyle, VideoDuration, ChatMessage, AssetItem, SmartAsset, APP_LIMITS, AgentAction } from '../types';
-import { Settings2, Sparkles, Image as ImageIcon, Video as VideoIcon, X, Palette, MessageSquare, Layers, ChevronDown, ChevronUp, SlidersHorizontal, Monitor, Eye, Lock, Type, ScanFace, Frame, ArrowRight, Loader2, Clock, BookTemplate, Clapperboard, XCircle, Search, Briefcase, Layout, Brush } from 'lucide-react';
+import { Settings2, Sparkles, Image as ImageIcon, Video as VideoIcon, X, Palette, MessageSquare, Layers, ChevronDown, ChevronUp, SlidersHorizontal, Monitor, Eye, Lock, ScanFace, Frame, ArrowRight, Loader2, Clock, BookTemplate, Clapperboard, XCircle, Search, Briefcase } from 'lucide-react';
 import { ChatInterface } from './ChatInterface';
 import { extractPromptFromHistory, optimizePrompt, describeImage } from '../services/geminiService';
 import { PromptBuilder } from './PromptBuilder';
@@ -29,6 +29,9 @@ interface GenerationFormProps {
   projectSummaryCursor?: number;
   onUpdateProjectContext?: (summary: string, cursor: number) => void;
   agentContextAssets?: SmartAsset[];
+  // NEW: Draft images from image generation (构思图)
+  thoughtImages?: Array<{ id: string; data: string; mimeType: string; isFinal: boolean; timestamp: number }>;
+  setThoughtImages?: React.Dispatch<React.SetStateAction<Array<{ id: string; data: string; mimeType: string; isFinal: boolean; timestamp: number }>>>;
 }
 
 const VIDEO_TEMPLATES = [
@@ -61,14 +64,17 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
   projectContextSummary,
   projectSummaryCursor,
   onUpdateProjectContext,
-  agentContextAssets
+  agentContextAssets,
+  thoughtImages,
+  setThoughtImages
 }) => {
-  const { t } = useLanguage();
+  const { t, language } = useLanguage();
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isOptimizing, setIsOptimizing] = useState(false);
   const [isDescribing, setIsDescribing] = useState(false);
   const [showTemplates, setShowTemplates] = useState(false);
   const [isAdvancedOpen, setIsAdvancedOpen] = useState(false);
+  const [isAspectRatioOpen, setIsAspectRatioOpen] = useState(false);
   const [_isWarningExpanded, _setIsWarningExpanded] = useState(false);
 
   // Video Mode Tabs
@@ -83,6 +89,9 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
   const videoStyleRefsInputRef = useRef<HTMLInputElement>(null);
   const smartAssetInputRef = useRef<HTMLInputElement>(null);
 
+  // Model-specific reference image limit
+  const getMaxSmartAssets = () => params.imageModel === ImageModel.PRO ? 14 : 3;
+
   // Timer State
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [cooldownRemaining, setCooldownRemaining] = useState(0);
@@ -94,19 +103,17 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
         migratedAssets.push({
           id: crypto.randomUUID(),
           data: params.referenceImage,
-          mimeType: params.referenceImageMimeType,
-          type: 'STRUCTURE',
-          isAnnotated: params.isAnnotatedReference
+          mimeType: params.referenceImageMimeType
         });
       }
       if (params.subjectReferences && params.subjectReferences.length > 0) {
         params.subjectReferences.forEach(ref => {
-          migratedAssets.push({ id: crypto.randomUUID(), data: ref.data, mimeType: ref.mimeType, type: 'IDENTITY' });
+          migratedAssets.push({ id: crypto.randomUUID(), data: ref.data, mimeType: ref.mimeType });
         });
       }
       if (params.styleReferences && params.styleReferences.length > 0) {
         params.styleReferences.forEach(ref => {
-          migratedAssets.push({ id: crypto.randomUUID(), data: ref.data, mimeType: ref.mimeType, type: 'STYLE' });
+          migratedAssets.push({ id: crypto.randomUUID(), data: ref.data, mimeType: ref.mimeType });
         });
       }
       if (migratedAssets.length > 0) {
@@ -251,11 +258,11 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
   };
 
   const handleDescribeImage = async () => {
-    const structureAsset = params.smartAssets?.find(a => a.type === 'STRUCTURE');
-    if (!structureAsset) { alert("Please upload a Structure/Composition image first."); return; }
+    const firstAsset = params.smartAssets?.[0];
+    if (!firstAsset) { alert("Please upload a reference image first."); return; }
     setIsDescribing(true);
     try {
-      const desc = await describeImage(structureAsset.data, structureAsset.mimeType);
+      const desc = await describeImage(firstAsset.data, firstAsset.mimeType);
       setParams(prev => ({ ...prev, prompt: desc }));
     } catch (e) {
       console.error(e); alert("Failed to describe image.");
@@ -274,8 +281,9 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
 
     if (field === 'smart') {
       const currentCount = params.smartAssets?.length || 0;
-      if (currentCount + files.length > APP_LIMITS.MAX_IMAGE_COUNT) {
-        alert(t('msg.upload_limit_count'));
+      const maxAllowed = getMaxSmartAssets();
+      if (currentCount + files.length > maxAllowed) {
+        alert(`${params.imageModel === ImageModel.PRO ? 'Pro' : 'Flash'} 模型最多支持 ${maxAllowed} 张参考图，当前已有 ${currentCount} 张`);
         return;
       }
     }
@@ -327,8 +335,6 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
 
   const removeImage = (field: 'start' | 'end') => { setParams(prev => { if (field === 'start') return { ...prev, videoStartImage: undefined, videoStartImageMimeType: undefined }; if (field === 'end') return { ...prev, videoEndImage: undefined, videoEndImageMimeType: undefined }; return prev; }); };
   const removeVideoStyleRef = (index: number) => setParams(prev => ({ ...prev, videoStyleReferences: prev.videoStyleReferences?.filter((_, i) => i !== index) }));
-  const updateSmartAsset = (id: string, updates: Partial<SmartAsset>) => { setParams(prev => ({ ...prev, smartAssets: prev.smartAssets?.map(a => a.id === id ? { ...a, ...updates } : a) })); };
-  const toggleSmartAssetTag = (id: string, tag: string) => { setParams(prev => ({ ...prev, smartAssets: prev.smartAssets?.map(a => { if (a.id === id) { const currentTags = a.selectedTags || []; const newTags = currentTags.includes(tag) ? currentTags.filter(t => t !== tag) : [...currentTags, tag]; return { ...a, selectedTags: newTags }; } return a; }) })); };
   const removeSmartAsset = (id: string) => { setParams(prev => ({ ...prev, smartAssets: prev.smartAssets?.filter(a => a.id !== id) })); };
 
   const handleGenerateClick = async () => { if (activeTab === 'chat') { setIsAnalyzing(true); try { const chatPrompt = await extractPromptFromHistory(chatHistory, mode); if (chatPrompt) onGenerate({ prompt: chatPrompt }); else { const lastUserMsg = [...chatHistory].reverse().find(m => m.role === 'user'); if (lastUserMsg && lastUserMsg.content) onGenerate({ prompt: lastUserMsg.content }); } } catch (e) { console.error("Failed to extract prompt", e); } finally { setIsAnalyzing(false); } } else { onGenerate(); } };
@@ -346,8 +352,9 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
         if (data && mimeType) {
           const newItem = { data, mimeType };
           if (target === 'smart') {
-            if ((params.smartAssets?.length || 0) >= APP_LIMITS.MAX_IMAGE_COUNT) {
-              alert(t('msg.upload_limit_count'));
+            const maxAllowed = getMaxSmartAssets();
+            if ((params.smartAssets?.length || 0) >= maxAllowed) {
+              alert(`${params.imageModel === ImageModel.PRO ? 'Pro' : 'Flash'} 模型最多支持 ${maxAllowed} 张参考图`);
               return;
             }
             setParams(prev => ({ ...prev, smartAssets: [...(prev.smartAssets || []), { id: crypto.randomUUID(), data, mimeType, type: 'STRUCTURE' }] }));
@@ -359,8 +366,9 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
       } else {
         const files = Array.from(e.dataTransfer.files) as File[];
         if (target === 'smart') {
-          if ((params.smartAssets?.length || 0) + files.length > APP_LIMITS.MAX_IMAGE_COUNT) {
-            alert(t('msg.upload_limit_count'));
+          const maxAllowed = getMaxSmartAssets();
+          if ((params.smartAssets?.length || 0) + files.length > maxAllowed) {
+            alert(`${params.imageModel === ImageModel.PRO ? 'Pro' : 'Flash'} 模型最多支持 ${maxAllowed} 张参考图`);
             return;
           }
         }
@@ -421,9 +429,6 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
 
   const handleVideoTabSwitch = (tab: 'keyframes' | 'style') => { setActiveVideoTab(tab); if (tab === 'keyframes') { setParams(prev => ({ ...prev, videoStyleReferences: [] })); } else { setParams(prev => ({ ...prev, videoStartImage: undefined, videoStartImageMimeType: undefined, videoEndImage: undefined, videoEndImageMimeType: undefined })); } };
   const cancelVideoExtension = () => { setParams(prev => ({ ...prev, inputVideoData: undefined, inputVideoMimeType: undefined })); };
-  const getAssetTypeIcon = (type: string) => { switch (type) { case 'IDENTITY': return <ScanFace size={12} className="text-brand-400" />; case 'STRUCTURE': return <Layout size={12} className="text-blue-400" />; case 'STYLE': return <Palette size={12} className="text-purple-400" />; default: return <Briefcase size={12} />; } };
-  const getTypeDescription = (type: string) => { switch (type) { case 'IDENTITY': return t('desc.identity' as any); case 'STRUCTURE': return t('desc.structure' as any); case 'STYLE': return t('desc.style' as any); default: return ''; } };
-  const getPresetTags = (type: string) => { switch (type) { case 'IDENTITY': return ['tag.person', 'tag.face', 'tag.product', 'tag.clothing', 'tag.background']; case 'STRUCTURE': return ['tag.layout', 'tag.pose', 'tag.depth', 'tag.sketch']; case 'STYLE': return ['tag.artstyle', 'tag.color', 'tag.lighting', 'tag.texture']; default: return []; } };
 
   return (
     <div className="w-[400px] flex-shrink-0 flex flex-col border-r border-dark-border bg-dark-panel z-20 h-full">
@@ -457,6 +462,8 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
             projectSummaryCursor={projectSummaryCursor}
             onUpdateProjectContext={onUpdateProjectContext}
             agentContextAssets={agentContextAssets}
+            thoughtImages={thoughtImages}
+            setThoughtImages={setThoughtImages}
           />
         </div>
 
@@ -529,7 +536,7 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
                     )}
                   </div>
                 )}
-                {params.smartAssets?.find(a => a.type === 'STRUCTURE') && (
+                {params.smartAssets && params.smartAssets.length > 0 && (
                   <button onClick={handleDescribeImage} disabled={isDescribing} className="flex items-center gap-1.5 px-2.5 py-1.5 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 rounded-lg text-[10px] font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed border border-indigo-500/20">
                     {isDescribing ? <div className="w-3 h-3 rounded-full border-2 border-indigo-400 border-t-transparent animate-spin" /> : <Eye size={12} />} {isDescribing ? 'Analyzing...' : t('btn.describe')}
                   </button>
@@ -544,13 +551,12 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
 
           <div className="border border-dark-border rounded-xl overflow-hidden bg-dark-surface/30">
             <button onClick={() => setIsAdvancedOpen(!isAdvancedOpen)} className="w-full flex items-center justify-between p-3 text-xs font-bold text-gray-400 uppercase tracking-wider hover:bg-white/5 transition-colors">
-              <div className="flex items-center gap-2"><SlidersHorizontal size={14} />{t('lbl.advanced')}</div>
+              <div className="flex items-center gap-2"><SlidersHorizontal size={14} />{language === 'zh' ? '反向提示词 (Negative)' : 'Negative Prompt'}</div>
               {isAdvancedOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
             </button>
             {isAdvancedOpen && (
               <div className="p-3 pt-0 space-y-4 animate-in slide-in-from-top-2">
                 <div className="space-y-2">
-                  <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">{t('lbl.negative_prompt')}</label>
                   <textarea value={params.negativePrompt || ''} onChange={(e) => setParams(prev => ({ ...prev, negativePrompt: e.target.value }))} placeholder={t('ph.negative')} className="w-full h-20 bg-dark-surface border border-dark-border rounded-lg p-3 text-xs text-white placeholder-gray-600 focus:border-brand-500 focus:outline-none resize-none" />
                 </div>
               </div>
@@ -560,53 +566,42 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
           {/* SMART ASSETS */}
           {mode === AppMode.IMAGE && (
             <div className="space-y-4 animate-in fade-in slide-in-from-bottom-5">
-              <div className="flex items-center gap-2 mb-2"><div className="h-px bg-white/10 flex-1" /><span className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">{t('lbl.smart_assets')}</span><div className="h-px bg-white/10 flex-1" /></div>
+              <div className="flex items-center gap-2 mb-2">
+                <div className="h-px bg-white/10 flex-1" />
+                <span className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">{t('lbl.smart_assets')}</span>
+                <span className={`text-[9px] px-1.5 py-0.5 rounded ${(params.smartAssets?.length || 0) >= getMaxSmartAssets() ? 'bg-red-500/20 text-red-400' : 'bg-gray-500/20 text-gray-400'}`}>
+                  {params.smartAssets?.length || 0}/{getMaxSmartAssets()}
+                </span>
+                <div className="h-px bg-white/10 flex-1" />
+              </div>
               <p className="text-[10px] text-gray-500">{t('help.smart_assets')}</p>
-              <div className="space-y-2">
-                {params.smartAssets?.map((asset, _index) => (
-                  <div key={asset.id} className="bg-dark-surface border border-dark-border rounded-lg p-2 flex gap-3 items-start animate-in fade-in slide-in-from-right-2">
-                    <div className="relative w-16 h-16 shrink-0 rounded-md overflow-hidden bg-black border border-dark-border group">
-                      <img src={`data:${asset.mimeType};base64,${asset.data}`} alt="Asset" className="w-full h-full object-cover" />
-                      {asset.isAnnotated && <div className="absolute inset-0 flex items-center justify-center bg-black/40"><Brush size={12} className="text-red-500" /></div>}
+              <div className="flex flex-wrap gap-2">
+                {params.smartAssets?.map((asset, index) => (
+                  <div key={asset.id} className="relative group animate-in fade-in zoom-in">
+                    <div className="w-16 h-16 rounded-lg overflow-hidden border border-dark-border bg-black">
+                      <img src={`data:${asset.mimeType};base64,${asset.data}`} alt={`Image ${index + 1}`} className="w-full h-full object-cover" />
                     </div>
-                    <div className="flex-1 min-w-0 flex flex-col gap-2">
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="flex-1">
-                          <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-1 block">{t('lbl.asset_type')}</label>
-                          <div className="relative">
-                            <select value={asset.type} onChange={(e) => updateSmartAsset(asset.id, { type: e.target.value as any })} className="w-full bg-dark-bg border border-dark-border rounded px-2 py-1.5 text-[10px] text-white appearance-none focus:border-brand-500 outline-none">
-                              <option value="STRUCTURE">{t('type.structure')}</option>
-                              <option value="IDENTITY">{t('type.identity')}</option>
-                              <option value="STYLE">{t('type.style')}</option>
-                            </select>
-                            <div className="absolute right-2 top-1.5 pointer-events-none">{getAssetTypeIcon(asset.type)}</div>
-                          </div>
-                          <p className="text-[10px] text-gray-500 mt-1 leading-tight">{getTypeDescription(asset.type)}</p>
-                        </div>
-                        <button onClick={() => removeSmartAsset(asset.id)} className="p-1.5 text-gray-500 hover:text-red-400 hover:bg-red-500/10 rounded transition-colors self-start"><X size={14} /></button>
-                      </div>
-                      <div>
-                        <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-1 block">{t('lbl.asset_label')}</label>
-                        <div className="flex flex-wrap gap-1.5 mb-2">
-                          {getPresetTags(asset.type).map(tagKey => {
-                            const isSelected = asset.selectedTags?.includes(tagKey);
-                            return <button key={tagKey} onClick={() => toggleSmartAssetTag(asset.id, tagKey)} className={`px-2 py-0.5 rounded text-[9px] border transition-colors ${isSelected ? 'bg-brand-500 text-white border-brand-500' : 'bg-dark-bg text-gray-400 border-dark-border hover:text-white hover:border-gray-500'}`}>{t(tagKey as any)}</button>;
-                          })}
-                        </div>
-                        <input type="text" value={asset.label || ''} onChange={(e) => updateSmartAsset(asset.id, { label: e.target.value })} placeholder={t('ph.label')} className="w-full bg-dark-bg border border-dark-border rounded px-2 py-1.5 text-[10px] text-white placeholder-gray-600 focus:border-brand-500 outline-none" />
-                      </div>
+                    {/* Image number badge */}
+                    <div className="absolute -top-1.5 -left-1.5 w-5 h-5 rounded-full bg-brand-500 text-white text-[10px] font-bold flex items-center justify-center shadow-lg">
+                      {index + 1}
                     </div>
+                    {/* Delete button */}
+                    <button
+                      onClick={() => removeSmartAsset(asset.id)}
+                      className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-red-500 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity shadow-lg"
+                    >
+                      <X size={10} />
+                    </button>
                   </div>
                 ))}
               </div>
-              <div className={`w-full h-24 border-2 border-dashed rounded-xl flex flex-col items-center justify-center cursor-pointer transition-all ${dragTarget === 'smart' ? 'border-brand-500 bg-brand-500/10' : 'border-dark-border hover:border-brand-500 hover:bg-white/5'}`} onClick={() => smartAssetInputRef.current?.click()} onDragOver={(e) => handleDragOver(e, 'smart')} onDragLeave={handleDragLeave} onDrop={(e) => handleDrop(e, 'smart')}>
-                <Briefcase className="text-gray-500 mb-2" size={20} /><span className="text-xs text-gray-400 font-medium">{t('help.upload')}</span><span className="text-[10px] text-gray-600 mt-1">Multi-file supported</span>
-              </div>
+              {/* Only show upload area if not at limit */}
+              {(params.smartAssets?.length || 0) < getMaxSmartAssets() && (
+                <div className={`w-full h-24 border-2 border-dashed rounded-xl flex flex-col items-center justify-center cursor-pointer transition-all ${dragTarget === 'smart' ? 'border-brand-500 bg-brand-500/10' : 'border-dark-border hover:border-brand-500 hover:bg-white/5'}`} onClick={() => smartAssetInputRef.current?.click()} onDragOver={(e) => handleDragOver(e, 'smart')} onDragLeave={handleDragLeave} onDrop={(e) => handleDrop(e, 'smart')}>
+                  <Briefcase className="text-gray-500 mb-2" size={20} /><span className="text-xs text-gray-400 font-medium">{t('help.upload')}</span><span className="text-[10px] text-gray-600 mt-1">Multi-file supported</span>
+                </div>
+              )}
               <input ref={smartAssetInputRef} type="file" multiple accept="image/png, image/jpeg, image/webp" className="hidden" onChange={(e) => handleUpload(e, 'smart')} />
-              <div className="space-y-3 pt-2">
-                <label className="text-xs font-bold text-gray-400 uppercase tracking-wider flex items-center gap-1.5"><Type size={14} className="text-green-400" />{t('lbl.text_render')}</label>
-                <input type="text" value={params.textToRender || ''} onChange={(e) => setParams(prev => ({ ...prev, textToRender: e.target.value }))} placeholder={t('ph.text_render')} className="w-full bg-dark-surface border border-dark-border rounded-lg px-3 py-2 text-xs text-white placeholder-gray-600 focus:border-brand-500 focus:outline-none" />
-              </div>
             </div>
           )}
 
@@ -703,19 +698,46 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
               </div>
             )}
 
-            {/* Aspect Ratio */}
-            <div className="space-y-3">
-              <div className="flex justify-between">
-                <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">{t('lbl.aspect_ratio')}</label>
-                {(hasRefImages || isVideoExtension) && <span className="text-[10px] text-purple-400 flex items-center gap-1"><Lock size={8} /> Locked</span>}
+            {/* Aspect Ratio - Collapsible for IMAGE, Grid for VIDEO */}
+            {mode === AppMode.IMAGE ? (
+              <div className="border border-dark-border rounded-xl overflow-hidden bg-dark-surface/30">
+                <button
+                  onClick={() => setIsAspectRatioOpen(!isAspectRatioOpen)}
+                  disabled={hasRefImages || isVideoExtension}
+                  className={`w-full flex items-center justify-between p-3 text-xs font-bold text-gray-400 uppercase tracking-wider transition-colors ${(hasRefImages || isVideoExtension) ? 'opacity-50 cursor-not-allowed' : 'hover:bg-white/5'}`}
+                >
+                  <div className="flex items-center gap-2">
+                    <Frame size={14} />
+                    <span>{t('lbl.aspect_ratio')}</span>
+                    <span className="text-brand-400 normal-case font-normal">({params.aspectRatio})</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {(hasRefImages || isVideoExtension) && <span className="text-[10px] text-purple-400 flex items-center gap-1 font-normal normal-case"><Lock size={8} /> Locked</span>}
+                    {isAspectRatioOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                  </div>
+                </button>
+                {isAspectRatioOpen && (
+                  <div className="p-3 pt-0 animate-in slide-in-from-top-2">
+                    <div className="grid gap-2 grid-cols-5">
+                      {displayedRatios.map(renderRatioVisual)}
+                    </div>
+                  </div>
+                )}
               </div>
-              <div className={`grid gap-2 ${mode === AppMode.VIDEO ? 'grid-cols-2' : 'grid-cols-5'} ${(hasRefImages || isVideoExtension) ? 'opacity-50 pointer-events-none' : ''}`}>
-                {displayedRatios.map(renderRatioVisual)}
+            ) : (
+              <div className="space-y-2">
+                <div className="flex justify-between">
+                  <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">{t('lbl.aspect_ratio')}</label>
+                  {(hasRefImages || isVideoExtension) && <span className="text-[10px] text-purple-400 flex items-center gap-1"><Lock size={8} /> Locked</span>}
+                </div>
+                <div className={`grid gap-2 grid-cols-2 ${(hasRefImages || isVideoExtension) ? 'opacity-50 pointer-events-none' : ''}`}>
+                  {displayedRatios.map(renderRatioVisual)}
+                </div>
               </div>
-            </div>
+            )}
 
             {/* Style Selector */}
-            <div className="space-y-3">
+            <div className="space-y-2">
               <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">{t('lbl.style')}</label>
               <div className="relative">
                 <select value={mode === AppMode.IMAGE ? (params.imageStyle || ImageStyle.NONE) : (params.videoStyle || VideoStyle.NONE)} onChange={(e) => setParams(prev => mode === AppMode.IMAGE ? ({ ...prev, imageStyle: e.target.value as ImageStyle }) : ({ ...prev, videoStyle: e.target.value as VideoStyle }))} className="w-full bg-dark-surface border border-dark-border rounded-lg px-3 py-2 text-xs text-white appearance-none focus:border-brand-500 focus:outline-none transition-colors">
@@ -725,16 +747,13 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
               </div>
             </div>
 
-            {/* Resolution & Count */}
+            {/* Resolution & Count/Duration */}
             <div className={`grid gap-4 ${mode === AppMode.IMAGE ? 'grid-cols-2' : 'grid-cols-1'}`}>
               <div className="space-y-2">
-                <div className="flex justify-between">
-                  <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">{t('lbl.resolution')}</label>
-                  {(hasRefImages || isVideoExtension) && <span className="text-[10px] text-purple-400 flex items-center gap-1"><Lock size={8} /> Locked to 720p</span>}
-                </div>
+                <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">{t('lbl.resolution')}</label>
                 <div className={`relative ${(hasRefImages || isVideoExtension) ? 'opacity-50 pointer-events-none' : ''}`}>
                   <select value={mode === AppMode.IMAGE ? params.imageResolution : params.videoResolution} onChange={(e) => setParams(prev => mode === AppMode.IMAGE ? ({ ...prev, imageResolution: e.target.value as ImageResolution }) : ({ ...prev, videoResolution: e.target.value as VideoResolution }))} className="w-full bg-dark-surface border border-dark-border rounded-lg px-3 py-2 text-xs text-white appearance-none focus:border-brand-500 focus:outline-none">
-                    {mode === AppMode.IMAGE ? (<><option value={ImageResolution.RES_1K}>1K (Standard)</option><option value={ImageResolution.RES_2K} disabled={params.imageModel === ImageModel.FLASH}>2K (Pro Only)</option><option value={ImageResolution.RES_4K} disabled={params.imageModel === ImageModel.FLASH}>4K (Pro Only)</option></>) : (
+                    {mode === AppMode.IMAGE ? (<><option value={ImageResolution.RES_1K}>1K</option><option value={ImageResolution.RES_2K} disabled={params.imageModel === ImageModel.FLASH}>2K (Pro)</option><option value={ImageResolution.RES_4K} disabled={params.imageModel === ImageModel.FLASH}>4K (Pro)</option></>) : (
                       <>
                         <option value={VideoResolution.RES_720P}>720p HD</option>
                         <option value={VideoResolution.RES_1080P} disabled={params.videoDuration !== VideoDuration.LONG}>1080p FHD (Requires 8s)</option>
