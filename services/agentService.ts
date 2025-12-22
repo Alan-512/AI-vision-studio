@@ -131,9 +131,14 @@ export class AgentStateMachine {
             'AWAITING_CONFIRMATION': ['EXECUTING', 'PLANNING', 'IDLE'],
             'EXECUTING': ['COMPLETED', 'RETRYING', 'ERROR', 'AWAITING_CONFIRMATION'],
             'RETRYING': ['EXECUTING', 'ERROR'],
-            'COMPLETED': ['IDLE'],
+            'COMPLETED': ['IDLE', 'PLANNING', 'EXECUTING'], // Allow new actions after completion
             'ERROR': ['IDLE']
         };
+
+        // Allow self-transition (no-op)
+        if (this.state.phase === phase) {
+            return true;
+        }
 
         if (!validTransitions[this.state.phase]?.includes(phase)) {
             console.warn(`Invalid transition: ${this.state.phase} → ${phase}`);

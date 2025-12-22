@@ -555,9 +555,8 @@ export const generateImage = async (
     const messageConfig: any = {};
 
     if (params.aspectRatio || (isPro && params.imageResolution)) {
-        // config in sendMessage is likely GenerationConfig type (based on getImageChat usage)
-        // so we put imageGenerationConfig directly at top level
-        messageConfig.imageGenerationConfig = {
+        // Official JS SDK uses imageConfig (not imageGenerationConfig)
+        messageConfig.imageConfig = {
             ...(params.aspectRatio && { aspectRatio: params.aspectRatio }),
             ...(isPro && params.imageResolution && { imageSize: params.imageResolution })
         };
