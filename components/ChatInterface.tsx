@@ -1,6 +1,6 @@
 
 import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { Send, User, Sparkles, ChevronDown, BrainCircuit, Zap, X, Box, Copy, Check, Plus, MonitorPlay, Palette, Film, Bot, Square, Crop, CheckCircle2, Globe, Brain, CircuitBoard, Wrench, Image as ImageIcon, CircleDashed, Terminal, Clapperboard, AudioWaveform, Move3d, Download, RefreshCw, AlertCircle } from 'lucide-react';
+import { Send, User, Sparkles, ChevronDown, BrainCircuit, Zap, X, Box, Copy, Check, Plus, MonitorPlay, Palette, Film, Bot, Square, Crop, CheckCircle2, Globe, Brain, CircuitBoard, Wrench, Image as ImageIcon, CircleDashed, Terminal, Clapperboard, AudioWaveform, Move3d, RefreshCw, AlertCircle } from 'lucide-react';
 import { ChatMessage, GenerationParams, ImageStyle, ImageResolution, AppMode, ImageModel, VideoResolution, VideoModel, VideoStyle, AspectRatio, SmartAsset, APP_LIMITS, AgentAction, TextModel } from '../types';
 import { streamChatResponse } from '../services/geminiService';
 import { AgentStateMachine, AgentState, createInitialAgentState, PendingAction, createGenerateAction } from '../services/agentService';
@@ -238,19 +238,24 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   // NEW: Agent state machine for workflow management and retry
   const [agentState, setAgentState] = useState<AgentState>(createInitialAgentState());
 
-  // Create stable agent machine instance with callbacks
+  // FIX: Use ref to hold onToolCall so agentMachine doesn't recreate when prop changes
+  // This prevents resetting internal state on every parent re-render
+  const onToolCallRef = useRef(onToolCall);
+  onToolCallRef.current = onToolCall; // Always keep ref up-to-date
+
+  // Create stable agent machine instance - only created once (no dependencies)
   const agentMachine = useMemo(() => new AgentStateMachine(
     createInitialAgentState(),
     {
       onStateChange: (newState) => setAgentState(newState),
       onExecuteAction: async (action: PendingAction) => {
-        console.log('[Agent] onExecuteAction called:', action.type, 'hasOnToolCall:', !!onToolCall);
-        // Execute the action via onToolCall
-        if (onToolCall && action.type === 'GENERATE_IMAGE') {
+        console.log('[Agent] onExecuteAction called:', action.type, 'hasOnToolCall:', !!onToolCallRef.current);
+        // Execute the action via onToolCall (read from ref for latest value)
+        if (onToolCallRef.current && action.type === 'GENERATE_IMAGE') {
           console.log('[Agent] Calling onToolCall with params:', action.params);
           return new Promise((resolve, reject) => {
             try {
-              onToolCall({ toolName: 'generate_image', args: action.params });
+              onToolCallRef.current!({ toolName: 'generate_image', args: action.params });
               resolve({ success: true });
             } catch (error) {
               reject(error);
@@ -261,7 +266,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         throw new Error(`Unknown action type: ${action.type}`);
       }
     }
-  ), [onToolCall]);
+  ), []); // Empty deps - machine is stable for component lifetime
 
   // Tool call handler with retry support
   const handleToolCallWithRetry = async (action: AgentAction) => {
@@ -308,7 +313,14 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
 
   const isAutoMode = params.isAutoMode ?? true;
   const getRatioLabel = (r: AspectRatio) => { const enumKey = Object.keys(AspectRatio).find(k => AspectRatio[k as keyof typeof AspectRatio] === r); return t(`ratio.${enumKey}` as any) || r; };
-  useEffect(() => { projectIdRef.current = projectId; setIsLoading(false); setInput(''); setShowSettings(false); setShowModelSelector(false); }, [projectId]);
+  useEffect(() => {
+    projectIdRef.current = projectId;
+    setIsLoading(false);
+    setInput('');
+    setShowSettings(false);
+    setShowModelSelector(false);
+    agentMachine.reset();
+  }, [projectId, agentMachine]);
   useEffect(() => { if (scrollRef.current) { scrollRef.current.scrollTop = scrollRef.current.scrollHeight; } }, [history, isLoading, selectedImages.length]);
   useEffect(() => { if (inputRef.current) { inputRef.current.style.height = 'auto'; const maxHeight = 160; const newHeight = Math.min(inputRef.current.scrollHeight, maxHeight); inputRef.current.style.height = `${newHeight}px`; inputRef.current.style.overflowY = inputRef.current.scrollHeight > maxHeight ? 'auto' : 'hidden'; } }, [input]);
   useEffect(() => { const handleClickOutside = (event: MouseEvent) => { const target = event.target as HTMLElement; if (!target.closest('.settings-popover') && !target.closest('.settings-trigger')) { setShowSettings(false); } if (!target.closest('.model-popover') && !target.closest('.model-trigger')) { setShowModelSelector(false); } }; document.addEventListener('mousedown', handleClickOutside); return () => document.removeEventListener('mousedown', handleClickOutside); }, []);
@@ -508,86 +520,6 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                   </span>
                 </>
               )}
-            </div>
-          </div>
-        )}
-
-        {/* Thought Images Panel - 构思图展示区 */}
-        {thoughtImages.length > 0 && (
-          <div className="mt-4 p-4 bg-gradient-to-r from-indigo-500/10 to-purple-500/10 border border-indigo-500/30 rounded-xl animate-in fade-in slide-in-from-bottom-2">
-            <div className="flex items-center gap-2 mb-3">
-              <BrainCircuit size={16} className="text-indigo-400" />
-              <span className="text-xs font-bold text-indigo-300">
-                {language === 'zh' ? '构思草图' : 'Draft Sketches'}
-              </span>
-              <span className="text-[10px] text-gray-500">
-                ({thoughtImages.filter(img => !img.isFinal).length} {language === 'zh' ? '张思考草图' : 'thinking'}, {thoughtImages.filter(img => img.isFinal).length} {language === 'zh' ? '张最终图' : 'final'})
-              </span>
-            </div>
-            <div className="flex gap-3 overflow-x-auto pb-2">
-              {thoughtImages.map((img, idx) => (
-                <div key={img.id} className="relative shrink-0 group">
-                  <div className={`relative rounded-lg overflow-hidden border-2 ${img.isFinal ? 'border-green-500/50' : 'border-indigo-500/30'}`}>
-                    <img
-                      src={`data:${img.mimeType};base64,${img.data}`}
-                      alt={`Draft ${idx + 1}`}
-                      className="w-32 h-32 object-cover"
-                    />
-                    {/* Badge */}
-                    <div className={`absolute top-1 left-1 px-1.5 py-0.5 rounded text-[9px] font-bold ${img.isFinal ? 'bg-green-500 text-white' : 'bg-indigo-500/80 text-white'}`}>
-                      {img.isFinal ? (language === 'zh' ? '最终' : 'FINAL') : `#${idx + 1}`}
-                    </div>
-
-                    {/* Action buttons on hover */}
-                    <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
-                      <button
-                        onClick={() => {
-                          const link = document.createElement('a');
-                          link.href = `data:${img.mimeType};base64,${img.data}`;
-                          link.download = `draft_${idx + 1}_${Date.now()}.png`;
-                          link.click();
-                        }}
-                        className="p-2 bg-white/20 hover:bg-white/30 rounded-full transition-colors"
-                        title={language === 'zh' ? '下载' : 'Download'}
-                      >
-                        <Download size={14} className="text-white" />
-                      </button>
-                      <button
-                        onClick={() => {
-                          // Create a blob URL and trigger onToolCall to save as asset
-                          const byteCharacters = atob(img.data);
-                          const byteNumbers = new Array(byteCharacters.length);
-                          for (let i = 0; i < byteCharacters.length; i++) {
-                            byteNumbers[i] = byteCharacters.charCodeAt(i);
-                          }
-                          const byteArray = new Uint8Array(byteNumbers);
-                          const blob = new Blob([byteArray], { type: img.mimeType });
-                          const url = URL.createObjectURL(blob);
-
-                          // Use setParams to pass the image as reference for next generation
-                          if (setParams) {
-                            const newSmartAsset = {
-                              id: crypto.randomUUID(),
-                              data: img.data,
-                              mimeType: img.mimeType
-                            };
-                            setParams(prev => ({
-                              ...prev,
-                              smartAssets: [...(prev.smartAssets || []), newSmartAsset]
-                            }));
-                          }
-                          URL.revokeObjectURL(url);
-                          alert(language === 'zh' ? '已添加为参考素材' : 'Added as reference');
-                        }}
-                        className="p-2 bg-white/20 hover:bg-white/30 rounded-full transition-colors"
-                        title={language === 'zh' ? '保存为参考' : 'Save as Reference'}
-                      >
-                        <Plus size={14} className="text-white" />
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              ))}
             </div>
           </div>
         )}

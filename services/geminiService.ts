@@ -1,6 +1,7 @@
 
 import { GoogleGenAI, Part, Content, FunctionDeclaration, Type, Chat } from "@google/genai";
 import { ChatMessage, AppMode, SmartAsset, GenerationParams, ImageModel, AgentAction, AssetItem, AspectRatio, ImageResolution, TextModel } from "../types";
+import { createTrackedBlobUrl } from "./storageService";
 
 // Key management
 export const saveUserApiKey = (key: string) => localStorage.setItem('user_gemini_api_key', key);
@@ -17,16 +18,24 @@ const getAIClient = (userKey?: string) => {
 // Manages a persistent chat session for image generation with automatic context
 let imageChat: Chat | null = null;
 let imageChatProjectId: string | null = null;
+let imageChatModel: ImageModel | null = null;
+let imageChatGrounding: boolean = false;
 
 /**
  * Get or create an image generation chat session.
  * The session remembers all generated images and enables multi-turn editing.
+ * Session is rebuilt when project, model, or grounding setting changes.
  */
 export const getImageChat = (projectId: string, model: ImageModel, useGrounding = false): Chat => {
     const ai = getAIClient();
 
-    // Reset if project changed or no session exists
-    if (!imageChat || imageChatProjectId !== projectId) {
+    // Reset if project, model, or grounding changed - or no session exists
+    const needsRebuild = !imageChat ||
+        imageChatProjectId !== projectId ||
+        imageChatModel !== model ||
+        imageChatGrounding !== useGrounding;
+
+    if (needsRebuild) {
         const config: any = {
             responseModalities: ['TEXT', 'IMAGE'],
         };
@@ -37,14 +46,19 @@ export const getImageChat = (projectId: string, model: ImageModel, useGrounding 
         }
 
         imageChat = ai.chats.create({
-            model: model, // Use the enum value directly (e.g. 'gemini-2.5-flash-image' or 'gemini-3-pro-image-preview')
+            model: model,
             config
         });
+
+        // Track current session params
         imageChatProjectId = projectId;
-        console.log(`[ImageChat] Created new session for project: ${projectId}`);
+        imageChatModel = model;
+        imageChatGrounding = useGrounding;
+
+        console.log(`[ImageChat] Created new session - project: ${projectId}, model: ${model}, grounding: ${useGrounding}`);
     }
 
-    return imageChat;
+    return imageChat!;
 };
 
 /**
@@ -53,6 +67,8 @@ export const getImageChat = (projectId: string, model: ImageModel, useGrounding 
 export const resetImageChat = () => {
     imageChat = null;
     imageChatProjectId = null;
+    imageChatModel = null;
+    imageChatGrounding = false;
     console.log('[ImageChat] Session reset');
 };
 
@@ -65,38 +81,49 @@ const generateImageTool: FunctionDeclaration = {
         properties: {
             prompt: {
                 type: Type.STRING,
-                description: `The detailed visual prompt for image generation. MUST FOLLOW THESE GUIDELINES:
+                description: `The COMPLETE visual prompt synthesized from the ENTIRE conversation.
 
-1. USE NARRATIVE DESCRIPTIONS - Write flowing sentences describing the scene, NOT keyword lists.
-   ❌ Bad: "cyberpunk, city, night, neon, rain"
-   ✅ Good: "A rain-soaked cyberpunk cityscape at night, towering neon-lit skyscrapers reflecting off wet streets, flying vehicles in the distance..."
+=== REQUIRED (always include) ===
+1. CONVERSATION SYNTHESIS:
+   - The user's ORIGINAL intent and core subject
+   - ALL refinements and agreements from the discussion
+   - The FINAL consensus - integrate the FULL conversation, not just latest message
 
-2. FOR REALISTIC/PHOTOGRAPHIC - Include photography terminology:
-   - Shot type: close-up portrait, wide-angle shot, macro, aerial view
-   - Lighting: golden hour sunlight, soft diffused studio lighting, dramatic rim lighting
-   - Camera/lens: "Captured with an 85mm portrait lens with soft bokeh background"
-   - Template: "A photorealistic [shot type] of [subject], [action/expression], in [environment]. Illuminated by [lighting]. Captured with [camera details]."
+2. NARRATIVE STYLE:
+   - Write flowing sentences describing the scene, NOT keyword lists
+   ❌ "cyberpunk, city, night, neon" → ✅ "A rain-soaked cyberpunk cityscape at night..."
 
-3. FOR ARTISTIC/ILLUSTRATED - Specify style and medium:
-   - Art style: oil painting, watercolor, digital illustration, anime, 3D render
-   - Artist/studio reference: "in the style of Studio Ghibli", "reminiscent of Monet"
-   - Details: brush strokes, color palette, texture, mood
+3. SPECIFICITY:
+   - Replace vague terms with precise descriptions
+   ❌ "fantasy armor" → ✅ "Ornate elven plate armor with silver leaf etchings"
 
-4. BE EXTREMELY SPECIFIC - Replace vague terms with precise descriptions:
-   ❌ "fantasy armor" → ✅ "Ornate elven plate armor with silver leaf etchings, high collar, falcon-wing shaped pauldrons"
-
-5. INTEGRATE ALL CONVERSATION POINTS - Your prompt MUST include:
-   - ALL details user mentioned (colors, poses, backgrounds, objects)
-   - Style elements from any reference images user provided
-   - Any corrections or refinements from the conversation
-   - The FINAL agreed-upon vision, not just the latest message`
+=== OPTIONAL (add only when relevant to the scene) ===
+If the image involves these aspects, include them. Otherwise, omit:
+- Shot type: close-up, wide-angle, aerial view, macro (for photos/realistic)
+- Lighting: golden hour, soft diffused, dramatic rim (when lighting matters)
+- Camera/lens: "85mm portrait lens with bokeh" (for photorealistic only)
+- Mood/atmosphere: serene, dramatic, warm (when setting a tone)
+- Textures: skin texture, fabric weave, metal sheen (when materials are important)
+- Art style: "oil painting style", "Studio Ghibli anime" (for illustrated/stylized)`
             },
             aspectRatio: { type: Type.STRING, description: 'Aspect ratio. Options: "1:1" (square), "16:9" (landscape), "9:16" (portrait), "4:3", "3:4", "21:9" (ultrawide). Default: "16:9"', enum: Object.values(AspectRatio) },
             model: { type: Type.STRING, description: 'Image model. Use "gemini-2.5-flash-image" (fast, default) or "gemini-3-pro-image-preview" (pro/high quality).', enum: Object.values(ImageModel) },
             resolution: { type: Type.STRING, description: 'Output resolution. Options: "1K" (default), "2K" (Pro only), "4K" (Pro only).', enum: Object.values(ImageResolution) },
             useGrounding: { type: Type.BOOLEAN, description: 'Use Google Search for factual accuracy (Pro model only). Default: false.' },
             negativePrompt: { type: Type.STRING, description: 'What to EXCLUDE from the image. Use semantic descriptions: "blurry, low quality, distorted faces, anime style" (when user wants realism).' },
-            numberOfImages: { type: Type.NUMBER, description: 'How many variations to generate (1-4). Default: 1.' }
+            numberOfImages: { type: Type.NUMBER, description: 'How many variations to generate (1-4). Default: 1.' },
+            reference_mode: {
+                type: Type.STRING,
+                description: `How to handle reference images from conversation history:
+- NONE: No reference images (pure text-to-image)
+- USER_UPLOADED_ONLY: Only use images the USER uploaded (ignore AI-generated ones) - Use when user says "regenerate", "try again", "not satisfied"
+- LAST_GENERATED: Use the most recent AI-generated image - Use when user wants to EDIT/MODIFY the last result
+- ALL_USER_UPLOADED: Use ALL images the user uploaded in this conversation
+- LAST_N: Use the last N images (set reference_count)
+Default: NONE for new generations, USER_UPLOADED_ONLY when regenerating.`,
+                enum: ['NONE', 'USER_UPLOADED_ONLY', 'LAST_GENERATED', 'ALL_USER_UPLOADED', 'LAST_N']
+            },
+            reference_count: { type: Type.NUMBER, description: 'Only for LAST_N mode: how many recent images to use. Default: 1.' }
         },
         required: ['prompt']
     }
@@ -108,17 +135,46 @@ const generateImageTool: FunctionDeclaration = {
  * Keep Anchor (first) and Active (latest) images, replace rest with semantic text.
  * Also preserves thought_signature for Gemini 3 Pro Thinking mode multi-turn stability.
  */
-const convertHistoryToNativeFormat = (history: ChatMessage[]): Content[] => {
+const convertHistoryToNativeFormat = (history: ChatMessage[], modelName: string): Content[] => {
+    // Determine image limit based on model (conservatively)
+    // Flash: limit 3 images total. Pro: limit 5 hi-res images.
+    const isFlash = modelName.includes('flash');
+    const maxImages = isFlash ? 3 : 5;
+
+    // 1. Identify which images to keep (Prioritize LATEST images)
+    // We scan from end to start to find the indices of images we can keep
+    let imagesKept = 0;
+    const imageIndicesToKeep = new Set<string>(); // Format: "msgIndex-imgIndex"
+
+    for (let i = history.length - 1; i >= 0; i--) {
+        const msg = history[i];
+        const imgCount = (msg.images?.length || 0) + (msg.image ? 1 : 0);
+
+        if (imgCount > 0) {
+            if (msg.images && msg.images.length > 0) {
+                // For multiple images in one message, iterate backwards too if we want latest
+                for (let j = msg.images.length - 1; j >= 0; j--) {
+                    if (imagesKept < maxImages) {
+                        imageIndicesToKeep.add(`${i}-${j}`);
+                        imagesKept++;
+                    }
+                }
+            } else if (msg.image) {
+                if (imagesKept < maxImages) {
+                    imageIndicesToKeep.add(`${i}-0`);
+                    imagesKept++;
+                }
+            }
+        }
+    }
+
     return history.map((msg, index) => {
         const parts: Part[] = [];
-        // IMPROVED: Keep more images in context (first 5, last 3)
-        const isFirstImage = index < 5 && (msg.images?.length || msg.image);
-        const isLatestImage = index >= history.length - 3;
-        const shouldKeepPixels = isFirstImage || isLatestImage;
 
         if (msg.images && msg.images.length > 0) {
             msg.images.forEach((img, imgIdx) => {
-                if (shouldKeepPixels) {
+                const shouldKeep = imageIndicesToKeep.has(`${index}-${imgIdx}`);
+                if (shouldKeep) {
                     const matches = img.match(/^data:(.+);base64,(.+)$/);
                     if (matches) {
                         const partData: any = { inlineData: { mimeType: matches[1], data: matches[2] } };
@@ -132,7 +188,8 @@ const convertHistoryToNativeFormat = (history: ChatMessage[]): Content[] => {
                 }
             });
         } else if (msg.image) {
-            if (shouldKeepPixels) {
+            const shouldKeep = imageIndicesToKeep.has(`${index}-0`);
+            if (shouldKeep) {
                 const matches = msg.image.match(/^data:(.+);base64,(.+)$/);
                 if (matches) {
                     const partData: any = { inlineData: { mimeType: matches[1], data: matches[2] } };
@@ -142,6 +199,7 @@ const convertHistoryToNativeFormat = (history: ChatMessage[]): Content[] => {
                     parts.push(partData);
                 }
             } else {
+
                 parts.push({ text: `[Visual History: Reference image provided previously.]` });
             }
         }
@@ -178,9 +236,51 @@ const convertHistoryToNativeFormat = (history: ChatMessage[]): Content[] => {
 
 export const optimizePrompt = async (prompt: string, mode: AppMode, _smartAssets?: SmartAsset[]): Promise<string> => {
     const ai = getAIClient();
-    const systemPrompt = `You are a Creative Director. Refine this user prompt for ${mode} generation.
-    Output ONLY the enhanced prompt string. No explanations.
-    Input: "${prompt}"`;
+    const isVideo = mode === AppMode.VIDEO;
+
+    const systemPrompt = isVideo ? `
+You are a professional video prompt optimizer for Veo 3.1.
+
+CRITICAL RULES:
+1. PRESERVE the user's original subject, intent, and core idea EXACTLY
+2. DO NOT add new subjects, characters, or change the main theme
+3. ONLY enhance with: camera movement, composition, mood, sound design
+
+ENHANCEMENT STRUCTURE (add missing elements):
+- Subject: Keep original, add detail if vague
+- Action: Specify motion if implied
+- Style: Add cinematic style (sci-fi, noir, documentary) if appropriate
+- Camera: Add camera movement (tracking shot, aerial, dolly zoom)
+- Composition: Specify shot type (wide-angle, close-up, POV)
+- Mood: Add lighting/color tone (warm golden hour, cool blue tones)
+- Audio: Add sound design ("footsteps echo", "wind howls")
+
+OUTPUT: Enhanced prompt in the user's original language, with technical terms in English.
+Keep concise but descriptive. Output ONLY the enhanced prompt, no explanations.
+
+User prompt: "${prompt}"
+` : `
+You are a professional image prompt optimizer for Gemini Image.
+
+CRITICAL RULES:
+1. PRESERVE the user's original subject, intent, and core idea EXACTLY
+2. DO NOT add new subjects, characters, or change the main theme
+3. ONLY enhance with: lighting, composition, textures, atmosphere
+
+ENHANCEMENT STRUCTURE:
+- Shot type: close-up, wide-angle, aerial view, macro
+- Subject: Keep original, add vivid details
+- Environment: Expand setting description
+- Lighting: golden hour, soft diffused, dramatic rim lighting
+- Camera: lens type, bokeh, depth of field
+- Mood: atmosphere description
+- Textures: surface details, materials
+
+OUTPUT: Enhanced prompt in the user's original language, with photography terms in English.
+Use narrative description, not keyword lists. Output ONLY the enhanced prompt, no explanations.
+
+User prompt: "${prompt}"
+`;
 
     const response = await ai.models.generateContent({
         model: TextModel.FLASH,
@@ -254,17 +354,27 @@ export const streamChatResponse = async (
     - numberOfImages: 1 (unless user asks for multiple)
     - useGrounding: false (set true only when user needs real-world facts/current events)
     
+    [REFERENCE MODE SELECTION - Critical for multi-turn editing]
+    Choose reference_mode based on user intent:
+    - "NONE": Pure text-to-image, no references needed (user says "生成/create a new...")
+    - "USER_UPLOADED_ONLY": User uploaded reference images AND says "不满意/regenerate/try again/换一个" 
+      → Keep original references, ignore AI-generated results
+    - "LAST_GENERATED": User wants to EDIT the previous result (says "把这张图改成/modify this/change the background")
+      → Use the last AI-generated image as base
+    - "ALL_USER_UPLOADED": User wants to combine multiple uploaded references
+    - "LAST_N": Use with reference_count when user refers to "last few images"
+    
     ${useSearch ? `
     [SEARCH MODE ACTIVE] 
     Since Google Search is active, you CANNOT use official tools to generate images.
     INSTEAD, if you are ready to generate, output this EXACT string at the end of your message:
-    !!!GENERATE_IMAGE {"prompt": "...", "aspectRatio": "...", "model": "gemini-2.5-flash-image", "useGrounding": true} !!!
+    !!!GENERATE_IMAGE {"prompt": "...", "aspectRatio": "...", "useGrounding": true} !!!
     ` : `
     [TOOL MODE ACTIVE]
     When ready to generate after proper consultation, use the 'generate_image' tool.
     `}`;
 
-    const contents = convertHistoryToNativeFormat(history);
+    const contents = convertHistoryToNativeFormat(history, realModelName);
 
     /**
      * CRITICAL FIX: Gemini does not support combining googleSearch and functionDeclarations.
@@ -296,7 +406,10 @@ export const streamChatResponse = async (
     const collectedSignatures: Array<{ partIndex: number; signature: string }> = [];
     let pendingToolCall: { toolName: string; args: any } | null = null; // Collect tool call, execute after stream
 
+    console.log('[Stream] Starting stream loop...');
+    let chunkCount = 0;
     for await (const chunk of result) {
+        chunkCount++;
         if (signal.aborted) break;
 
         // Process parts to separate thought content from answer content
@@ -387,6 +500,7 @@ export const streamChatResponse = async (
         fullText += sourceText;
         onChunk(fullText);
     }
+    console.log('[Stream] Stream completed. Total chunks:', chunkCount, 'Has pending tool call:', !!pendingToolCall);
 
     // Return collected thought signatures to caller for storage
     if (collectedSignatures.length > 0 && onThoughtSignatures) {
@@ -452,12 +566,38 @@ export const generateImage = async (
     // Send message to chat session
     // The chat automatically includes context from previous turns
     console.log('[GeminiService] sendMessage config:', JSON.stringify(messageConfig, null, 2));
-    const response = await chat.sendMessage({
-        message: parts,
-        config: messageConfig
+
+    // PRE-FLIGHT ABORT CHECK: Fail fast if already cancelled
+    // Note: chat.sendMessage doesn't accept AbortSignal, so we race with an abort promise
+    // to return early when the user cancels (request still runs server-side).
+    if (signal.aborted) throw new Error('Cancelled');
+
+    let abortHandler: (() => void) | null = null;
+    const abortPromise = new Promise<never>((_, reject) => {
+        if (signal.aborted) {
+            reject(new Error('Cancelled'));
+            return;
+        }
+        abortHandler = () => reject(new Error('Cancelled'));
+        signal.addEventListener('abort', abortHandler, { once: true });
     });
 
-    // Check for abort
+    let response: any;
+    try {
+        response = await Promise.race([
+            chat.sendMessage({
+                message: parts,
+                config: messageConfig
+            }),
+            abortPromise
+        ]);
+    } finally {
+        if (abortHandler) {
+            signal.removeEventListener('abort', abortHandler);
+        }
+    }
+
+    // POST-FLIGHT ABORT CHECK: Discard result if cancelled during generation
     if (signal.aborted) throw new Error('Cancelled');
 
     // Process response
@@ -537,11 +677,28 @@ export const generateVideo = async (
         await new Promise(resolve => setTimeout(resolve, 5000));
         operation = await ai.operations.getVideosOperation({ operation });
     }
+
+    // FIX: Validate downloadLink exists
     const downloadLink = operation.response?.generatedVideos?.[0]?.video?.uri;
+    if (!downloadLink) {
+        throw new Error("Video generation completed but no download link was returned. The video may have been blocked by safety filters.");
+    }
+
+    // FIX: Validate API key is not undefined
     const apiKey = getUserApiKey() || (typeof import.meta !== 'undefined' ? (import.meta as any).env?.VITE_API_KEY : undefined);
+    if (!apiKey) {
+        throw new Error("API key is required to download the generated video. Please configure your API key in settings.");
+    }
+
     const response = await fetch(`${downloadLink}&key=${apiKey}`);
+
+    // FIX: Validate response is OK
+    if (!response.ok) {
+        throw new Error(`Failed to download video: HTTP ${response.status} ${response.statusText}`);
+    }
+
     const blob = await response.blob();
-    return URL.createObjectURL(blob);
+    return createTrackedBlobUrl(blob);
 };
 
 export const describeImage = async (base64: string, mimeType: string): Promise<string> => {
@@ -580,7 +737,7 @@ export const testConnection = async (apiKey: string): Promise<boolean> => {
 export const extractPromptFromHistory = async (history: ChatMessage[], mode: AppMode): Promise<string | null> => {
     if (history.length === 0) return null;
     const ai = getAIClient();
-    const contents = convertHistoryToNativeFormat(history);
+    const contents = convertHistoryToNativeFormat(history, TextModel.FLASH);
     contents.push({ role: 'user', parts: [{ text: `Based on above, output a single visual prompt for ${mode}. Text only.` }] });
     const response = await ai.models.generateContent({ model: TextModel.FLASH, contents });
     return (response.text ?? '').trim();

@@ -374,41 +374,102 @@ export const updateAsset = async (id: string, updates: Partial<AssetItem>): Prom
   });
 };
 
-// --- Memory Leak Prevention: URL Registry ---
-// Track all active Blob URLs created by this service
-const activeBlobUrls: string[] = [];
-const MAX_BLOB_URLS = 100; // FIX: Limit max URLs to prevent unbounded growth
+// --- Memory Leak Prevention: Reference-Counted URL Registry ---
+// Track all active Blob URLs with reference counting to prevent premature revocation
+
+interface BlobUrlEntry {
+  url: string;
+  refCount: number;
+  createdAt: number;
+}
+
+const blobUrlRegistry = new Map<string, BlobUrlEntry>();
+const MAX_BLOB_URLS = 150; // Increased limit with smarter cleanup
 
 /**
- * Helper to cleanup previously allocated Blob URLs from memory.
- * This prevents memory leaks where the browser holds onto Blob references indefinitely.
+ * Create a tracked Blob URL with reference counting.
  */
-const cleanupBlobUrls = () => {
-  if (activeBlobUrls.length > 0) {
-    // console.debug(`[Storage] Cleaning up ${activeBlobUrls.length} blob URLs to free memory.`);
-    activeBlobUrls.forEach(url => URL.revokeObjectURL(url));
-    activeBlobUrls.length = 0; // Clear the registry
+export const createTrackedBlobUrl = (blob: Blob): string => {
+  const url = URL.createObjectURL(blob);
+  blobUrlRegistry.set(url, {
+    url,
+    refCount: 1,
+    createdAt: Date.now()
+  });
+  return url;
+};
+
+/**
+ * Increment reference count for an existing URL.
+ * Call this when a new component starts using the URL.
+ */
+export const retainBlobUrl = (url: string): void => {
+  const entry = blobUrlRegistry.get(url);
+  if (entry) {
+    entry.refCount++;
   }
 };
 
 /**
- * FIX: Partial cleanup when URL count exceeds limit
- * Revokes oldest URLs to keep memory usage bounded
+ * Decrement reference count and revoke if no longer in use.
+ * Call this when a component stops using the URL (e.g., on unmount).
  */
-const trimBlobUrls = () => {
-  if (activeBlobUrls.length > MAX_BLOB_URLS) {
-    const toRemove = activeBlobUrls.splice(0, activeBlobUrls.length - MAX_BLOB_URLS);
-    toRemove.forEach(url => {
-      try { URL.revokeObjectURL(url); } catch { }
+export const releaseBlobUrl = (url: string): void => {
+  const entry = blobUrlRegistry.get(url);
+  if (entry) {
+    entry.refCount--;
+    if (entry.refCount <= 0) {
+      try {
+        URL.revokeObjectURL(url);
+      } catch { /* ignore errors */ }
+      blobUrlRegistry.delete(url);
+    }
+  }
+};
+
+/**
+ * Cleanup ALL blob URLs. Use only on app unload.
+ * This forcefully revokes all URLs regardless of reference count.
+ */
+export const cleanupAllBlobUrls = () => {
+  if (blobUrlRegistry.size > 0) {
+    console.debug(`[Storage] Force cleanup of ${blobUrlRegistry.size} blob URLs`);
+    blobUrlRegistry.forEach((entry) => {
+      try {
+        URL.revokeObjectURL(entry.url);
+      } catch { /* ignore */ }
     });
-    console.debug(`[Storage] Trimmed ${toRemove.length} old blob URLs to prevent memory leak`);
+    blobUrlRegistry.clear();
+  }
+};
+
+/**
+ * Smart cleanup: Remove only URLs with refCount=0 and oldest entries above limit.
+ * Never removes URLs that are actively in use.
+ */
+const trimUnusedBlobUrls = () => {
+  // First pass: Remove all entries with refCount <= 0
+  const toRemove: string[] = [];
+  blobUrlRegistry.forEach((entry, url) => {
+    if (entry.refCount <= 0) {
+      toRemove.push(url);
+    }
+  });
+
+  toRemove.forEach(url => {
+    try {
+      URL.revokeObjectURL(url);
+    } catch { /* ignore */ }
+    blobUrlRegistry.delete(url);
+  });
+
+  // Second pass: If still over limit, log warning but DON'T revoke active URLs
+  if (blobUrlRegistry.size > MAX_BLOB_URLS) {
+    console.warn(`[Storage] ${blobUrlRegistry.size} blob URLs active (limit: ${MAX_BLOB_URLS}). Consider implementing virtual scrolling.`);
   }
 };
 
 export const loadAssets = async (projectId?: string): Promise<AssetItem[]> => {
-  // STEP 1: Perform cleanup before loading new assets
-  cleanupBlobUrls();
-
   const transaction = await getTransaction(STORE_ASSETS, 'readonly');
   return new Promise((resolve, reject) => {
     const store = transaction.objectStore(STORE_ASSETS);
@@ -431,14 +492,12 @@ export const loadAssets = async (projectId?: string): Promise<AssetItem[]> => {
         rawAssets = rawAssets.filter((a: any) => a.projectId === projectId);
       }
 
-      // Rehydrate Blobs to URLs
+      // Rehydrate Blobs to URLs with reference counting
       const assets = rawAssets.map((record: any) => {
-        // Generic Blob Rehydration (Works for both IMAGE and VIDEO now)
+        // Generic Blob Rehydration (Works for both IMAGE and VIDEO)
         if (record.blob instanceof Blob) {
-          const newUrl = URL.createObjectURL(record.blob);
-
-          // STEP 2: Register the new URL so we can clean it up later
-          activeBlobUrls.push(newUrl);
+          // STEP 1: Use reference-counted URL creation
+          const newUrl = createTrackedBlobUrl(record.blob);
 
           // We do not modify the record in DB, just the returned object for the app
           return { ...record, url: newUrl, blob: undefined };
@@ -454,8 +513,8 @@ export const loadAssets = async (projectId?: string): Promise<AssetItem[]> => {
       // Sort by newest first
       assets.sort((a: AssetItem, b: AssetItem) => b.createdAt - a.createdAt);
 
-      // FIX: Trim old blob URLs if we have too many
-      trimBlobUrls();
+      // STEP 2: Clean up any orphaned URLs (refCount=0) but never active ones
+      trimUnusedBlobUrls();
 
       resolve(assets);
     };

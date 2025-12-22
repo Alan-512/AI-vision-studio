@@ -262,10 +262,10 @@ export class AgentStateMachine {
             const nextAction = planSteps[currentStepIndex + 1];
 
             if (nextAction.requiresConfirmation) {
-                this.updateState({ pendingAction: nextAction });
+                this.updateState({ pendingAction: nextAction, retryCount: 0 });
                 this.transitionTo('AWAITING_CONFIRMATION');
             } else {
-                this.updateState({ pendingAction: nextAction });
+                this.updateState({ pendingAction: nextAction, retryCount: 0 });
                 this.transitionTo('EXECUTING');
                 // Continue execution...
             }
@@ -278,37 +278,21 @@ export class AgentStateMachine {
         return this.state;
     }
 
+    /**
+     * Handle action failure - ONLY called after all retries are exhausted
+     * Note: Retry logic is handled by executeWithRetry(), not here.
+     * This method is for final failure handling only.
+     */
     private async handleActionFailure(error: any): Promise<AgentState> {
         const errorMessage = error?.message || String(error);
 
-        if (this.state.retryCount < this.state.maxRetries) {
-            // Retry
-            this.updateState({
-                retryCount: this.state.retryCount + 1,
-                error: `Retry ${this.state.retryCount + 1}/${this.state.maxRetries}: ${errorMessage}`
-            });
-            this.transitionTo('RETRYING');
-
-            // Attempt retry with backoff
-            await this.delay(Math.pow(2, this.state.retryCount) * 1000);
-
-            if (this.state.pendingAction && this.onExecuteAction) {
-                try {
-                    const result = await this.onExecuteAction(this.state.pendingAction);
-                    return this.handleActionSuccess(result);
-                } catch (retryError: any) {
-                    return this.handleActionFailure(retryError);
-                }
-            }
-        } else {
-            // Max retries exceeded
-            this.updateState({
-                error: `Failed after ${this.state.maxRetries} retries: ${errorMessage}`,
-                pendingAction: undefined,
-                retryCount: 0
-            });
-            this.transitionTo('ERROR');
-        }
+        // All retries have been exhausted by executeWithRetry - transition to ERROR
+        this.updateState({
+            error: `Generation failed: ${errorMessage}`,
+            pendingAction: undefined,
+            retryCount: 0
+        });
+        this.transitionTo('ERROR');
 
         return this.state;
     }
@@ -330,14 +314,20 @@ export class AgentStateMachine {
         }
 
         let lastError: any;
+        this.updateState({ retryCount: 0 });
 
         for (let attempt = 0; attempt <= this.state.maxRetries; attempt++) {
             try {
+                if (attempt > 0) {
+                    this.transitionTo('EXECUTING');
+                }
                 return await this.onExecuteAction(action);
             } catch (error) {
                 lastError = error;
 
                 if (attempt < this.state.maxRetries) {
+                    this.updateState({ retryCount: attempt + 1 });
+                    this.transitionTo('RETRYING');
                     // Exponential backoff
                     await this.delay(Math.pow(2, attempt) * 1000);
                 }
@@ -415,14 +405,13 @@ export class AgentStateMachine {
 
 /**
  * Determine if an action requires HITL confirmation
+ * 
+ * Design decision: Multi-image generation does NOT require confirmation because
+ * the user has already expressed their intent when specifying `numberOfImages`.
+ * Only expensive/irreversible operations like video generation need confirmation.
  */
 export const shouldRequireConfirmation = (action: PendingAction): boolean => {
-    // Always confirm for multi-image generation
-    if (action.type === 'GENERATE_IMAGE' && action.params.numberOfImages > 1) {
-        return true;
-    }
-
-    // Always confirm for video generation (expensive)
+    // Video generation is expensive, always confirm
     if (action.type === 'GENERATE_VIDEO') {
         return true;
     }

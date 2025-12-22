@@ -11,6 +11,8 @@ interface GenerationFormProps {
   mode: AppMode;
   params: GenerationParams;
   setParams: React.Dispatch<React.SetStateAction<GenerationParams>>;
+  chatParams: GenerationParams;
+  setChatParams: React.Dispatch<React.SetStateAction<GenerationParams>>;
   isGenerating: boolean;
   startTime?: number;
   onGenerate: (overrideParams?: Partial<GenerationParams>) => void;
@@ -47,6 +49,8 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
   mode,
   params,
   setParams,
+  chatParams,
+  setChatParams,
   isGenerating,
   startTime,
   onGenerate,
@@ -307,18 +311,32 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
 
     if (field === 'smart') {
       const validFiles = Array.from(files).filter(isValidImage);
-      Promise.all(validFiles.map(processFile)).then(results => {
-        setParams(prev => {
-          const newAssets: SmartAsset[] = results.map(r => ({ id: crypto.randomUUID(), data: r.data, mimeType: r.mimeType, type: 'STRUCTURE' }));
-          return { ...prev, smartAssets: [...(prev.smartAssets || []), ...newAssets] };
-        });
+      // FIX: Use Promise.allSettled to handle partial failures gracefully
+      // This ensures valid files are still processed even if some fail
+      Promise.allSettled(validFiles.map(processFile)).then(settledResults => {
+        const successfulResults = settledResults
+          .filter((r): r is PromiseFulfilledResult<{ data: string, mimeType: string }> => r.status === 'fulfilled')
+          .map(r => r.value);
+
+        if (successfulResults.length > 0) {
+          setParams(prev => {
+            const newAssets: SmartAsset[] = successfulResults.map(r => ({ id: crypto.randomUUID(), data: r.data, mimeType: r.mimeType, type: 'STRUCTURE' }));
+            return { ...prev, smartAssets: [...(prev.smartAssets || []), ...newAssets] };
+          });
+        }
       });
     } else if (field === 'videoStyle') {
       const currentCount = params.videoStyleReferences?.length || 0;
       const availableSlots = 3 - currentCount;
       const validFiles = Array.from(files).filter(isValidImage).slice(0, availableSlots);
-      Promise.all(validFiles.map(processFile)).then(results => {
-        setParams(prev => ({ ...prev, videoStyleReferences: [...(prev.videoStyleReferences || []), ...results] }));
+      Promise.allSettled(validFiles.map(processFile)).then(settledResults => {
+        const results = settledResults
+          .filter((r): r is PromiseFulfilledResult<{ data: string, mimeType: string }> => r.status === 'fulfilled')
+          .map(r => r.value);
+
+        if (results.length > 0) {
+          setParams(prev => ({ ...prev, videoStyleReferences: [...(prev.videoStyleReferences || []), ...results] }));
+        }
       });
     } else {
       if (!isValidImage(files[0])) { alert("Invalid file type."); return; }
@@ -384,11 +402,18 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
             reader.onload = (ev) => { const res = ev.target?.result as string; const matches = res.match(/^data:(.+);base64,(.+)$/); if (matches) resolve({ mimeType: matches[1], data: matches[2] }); else reject(); };
             reader.readAsDataURL(file);
           });
-          const results = await Promise.all(validFiles.map(processFile));
-          if (target === 'smart') setParams(prev => ({ ...prev, smartAssets: [...(prev.smartAssets || []), ...results.map(r => ({ id: crypto.randomUUID(), data: r.data, mimeType: r.mimeType, type: 'STRUCTURE' as const }))] }));
-          else if (target === 'videoStyle') setParams(prev => ({ ...prev, videoStyleReferences: [...(prev.videoStyleReferences || []), ...results].slice(0, 3) }));
-          else if (target === 'videoStart' && results[0]) setParams(prev => ({ ...prev, videoStartImage: results[0].data, videoStartImageMimeType: results[0].mimeType }));
-          else if (target === 'videoEnd' && results[0]) setParams(prev => ({ ...prev, videoEndImage: results[0].data, videoEndImageMimeType: results[0].mimeType }));
+          // FIX: Use Promise.allSettled to handle partial failures gracefully
+          const settledResults = await Promise.allSettled(validFiles.map(processFile));
+          const results = settledResults
+            .filter((r): r is PromiseFulfilledResult<{ data: string, mimeType: string }> => r.status === 'fulfilled')
+            .map(r => r.value);
+
+          if (results.length > 0) {
+            if (target === 'smart') setParams(prev => ({ ...prev, smartAssets: [...(prev.smartAssets || []), ...results.map(r => ({ id: crypto.randomUUID(), data: r.data, mimeType: r.mimeType, type: 'STRUCTURE' as const }))] }));
+            else if (target === 'videoStyle') setParams(prev => ({ ...prev, videoStyleReferences: [...(prev.videoStyleReferences || []), ...results].slice(0, 3) }));
+            else if (target === 'videoStart' && results[0]) setParams(prev => ({ ...prev, videoStartImage: results[0].data, videoStartImageMimeType: results[0].mimeType }));
+            else if (target === 'videoEnd' && results[0]) setParams(prev => ({ ...prev, videoEndImage: results[0].data, videoEndImageMimeType: results[0].mimeType }));
+          }
         }
       }
     } catch (error) { console.error("Drop failed", error); }
@@ -454,8 +479,8 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
             selectedImages={chatSelectedImages}
             setSelectedImages={setChatSelectedImages}
             projectId={projectId}
-            params={params}
-            setParams={setParams}
+            params={chatParams}
+            setParams={setChatParams}
             mode={mode}
             onToolCall={onToolCall}
             projectContextSummary={projectContextSummary}

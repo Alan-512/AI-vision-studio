@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { Image as ImageIcon, Video, LayoutGrid, Folder, Sparkles, Settings, Star, CheckSquare, MoveHorizontal, X, Languages, Trash2, Recycle, Download } from 'lucide-react';
 import { AppMode, AspectRatio, GenerationParams, AssetItem, ImageResolution, VideoResolution, ImageModel, VideoModel, ImageStyle, Project, ChatMessage, BackgroundTask, SmartAsset, VideoDuration, VideoStyle, AgentAction } from './types';
 import { GenerationForm } from './components/GenerationForm';
@@ -15,7 +15,8 @@ import { generateImage, generateVideo, getUserApiKey, generateTitle, resetImageC
 import {
     initDB, loadProjects, saveProject, saveAsset, loadAssets, updateAsset,
     deleteProjectFromDB, softDeleteAssetInDB, restoreAssetInDB,
-    permanentlyDeleteAssetFromDB, bulkPermanentlyDeleteAssets, recoverOrphanedProjects
+    permanentlyDeleteAssetFromDB, bulkPermanentlyDeleteAssets, recoverOrphanedProjects,
+    releaseBlobUrl
 } from './services/storageService';
 import { useLanguage } from './contexts/LanguageContext';
 import { StorageStatusBanner } from './components/StorageStatusBanner';
@@ -32,6 +33,12 @@ const DEFAULT_PARAMS: GenerationParams = {
     imageResolution: ImageResolution.RES_1K,
     videoResolution: VideoResolution.RES_720P,
     videoDuration: VideoDuration.SHORT,
+};
+const CHAT_DEFAULT_PARAMS: GenerationParams = {
+    ...DEFAULT_PARAMS,
+    continuousMode: false,
+    isAutoMode: true,
+    smartAssets: []
 };
 
 // Shared Audio Context to bypass browser autoplay restrictions
@@ -164,13 +171,29 @@ export function App() {
     const [mode, setMode] = useState<AppMode>(AppMode.IMAGE);
     const [rightPanelMode, setRightPanelMode] = useState<'GALLERY' | 'TRASH' | 'CANVAS'>('GALLERY');
     const [params, setParams] = useState<GenerationParams>(DEFAULT_PARAMS);
+    const [chatParams, setChatParams] = useState<GenerationParams>(CHAT_DEFAULT_PARAMS);
     const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
     const [assets, setAssets] = useState<AssetItem[]>([]);
+    const [trashAssets, setTrashAssets] = useState<AssetItem[]>([]);
+    const assetBlobUrlsRef = useRef<Set<string>>(new Set());
     const [projects, setProjects] = useState<Project[]>([]);
     const [activeProjectId, setActiveProjectId] = useState<string>('');
     const [toasts, setToasts] = useState<ToastMessage[]>([]);
     const [tasks, setTasks] = useState<BackgroundTask[]>([]);
-    const [generatingStates] = useState<Record<string, number>>({});
+    // FIX: Derive generatingStates from tasks instead of never-updating useState
+    // This enables ProjectSidebar to show generation indicators and GenerationForm to get accurate startTime
+    const generatingStates = useMemo(() => {
+        const states: Record<string, number> = {};
+        tasks.forEach(task => {
+            if (task.status === 'GENERATING' || task.status === 'QUEUED') {
+                // Use executionStartTime if available, otherwise startTime
+                if (!states[task.projectId] || (task.executionStartTime && task.executionStartTime < states[task.projectId])) {
+                    states[task.projectId] = task.executionStartTime || task.startTime;
+                }
+            }
+        });
+        return states;
+    }, [tasks]);
     const [veoVerified, setVeoVerified] = useState(false);
 
     // UI State
@@ -259,6 +282,34 @@ export function App() {
             window.removeEventListener('beforeunload', handleBeforeUnload);
         };
     }, [tasks]);
+
+    // Blob URL tracking for assets to avoid revoking active URLs
+    useEffect(() => {
+        const nextUrls = new Set<string>();
+        assets.forEach(asset => {
+            if (asset.url && asset.url.startsWith('blob:')) {
+                nextUrls.add(asset.url);
+            }
+        });
+
+        assetBlobUrlsRef.current.forEach((url) => {
+            if (!nextUrls.has(url)) {
+                releaseBlobUrl(url);
+            }
+        });
+
+        assetBlobUrlsRef.current = nextUrls;
+    }, [assets]);
+
+    // Load all deleted assets globally when switching to TRASH mode
+    useEffect(() => {
+        if (rightPanelMode === 'TRASH') {
+            loadAssets().then(allAssets => {
+                const deletedAssets = allAssets.filter(a => a.deletedAt !== undefined);
+                setTrashAssets(deletedAssets);
+            });
+        }
+    }, [rightPanelMode]);
 
     // Project Switch Logic
     useEffect(() => {
@@ -423,8 +474,11 @@ export function App() {
     };
 
     const handleAgentToolCall = async (action: AgentAction) => {
+        const rawArgs = action.args && typeof action.args === 'object' && 'parameters' in action.args
+            ? (action.args as { parameters: any }).parameters
+            : action.args;
         // FIX: Generate unique key for deduplication based on action content
-        const toolCallKey = `${action.toolName}-${JSON.stringify(action.args).slice(0, 100)}`;
+        const toolCallKey = `${action.toolName}-${JSON.stringify(rawArgs ?? {}).slice(0, 100)}`;
 
         // Check if already processing this exact tool call
         if (processingToolCallRef.current.has(toolCallKey)) {
@@ -441,16 +495,27 @@ export function App() {
         }, 30000);
 
         if (action.toolName === 'generate_image') {
-            const { prompt, aspectRatio, style, resolution, negativePrompt, save_as_reference, use_ref_context, numberOfImages, useGrounding } = action.args;
+            const toolArgs = rawArgs && typeof rawArgs === 'object' ? rawArgs : {};
+            const { prompt, aspectRatio, style, resolution, negativePrompt, save_as_reference, numberOfImages, useGrounding } = toolArgs;
             setRightPanelMode('GALLERY');
             if (mode !== AppMode.IMAGE) handleModeSwitch(AppMode.IMAGE);
 
             const isGroundingRequested = useGrounding === true || useGrounding === 'true';
-            const shouldUseRefContext = use_ref_context === true || use_ref_context === 'true';
+            const normalizedPrompt = typeof prompt === 'string' ? prompt.trim() : '';
+            if (!normalizedPrompt) {
+                addToast('error', 'Prompt Missing', '对话生成未收到有效提示词，请重试或换句话描述。');
+                return;
+            }
+            const chatDefaults = {
+                aspectRatio: AspectRatio.LANDSCAPE,
+                imageStyle: ImageStyle.NONE,
+                imageResolution: ImageResolution.RES_1K,
+                negativePrompt: ''
+            };
 
             // AUTO MODE: Default to Flash model for speed, matching System Prompt guidance
             // Use Pro only if explicitly specified in the tool call args
-            const requestedModel = action.args.model;
+            const requestedModel = toolArgs.model;
             let effectiveModel = ImageModel.FLASH; // Default to Flash as per system prompt
             if (requestedModel && Object.values(ImageModel).includes(requestedModel as ImageModel)) {
                 effectiveModel = requestedModel as ImageModel;
@@ -458,41 +523,117 @@ export function App() {
 
             // Clear previous thought images for new generation
             setThoughtImages([]);
+            const resolvedAspectRatio = Object.values(AspectRatio).includes(aspectRatio as AspectRatio)
+                ? (aspectRatio as AspectRatio)
+                : chatDefaults.aspectRatio;
+            const resolvedStyle = Object.values(ImageStyle).includes(style as ImageStyle)
+                ? (style as ImageStyle)
+                : chatDefaults.imageStyle;
+            const resolvedResolution = Object.values(ImageResolution).includes(resolution as ImageResolution)
+                ? (resolution as ImageResolution)
+                : (effectiveModel === ImageModel.PRO ? ImageResolution.RES_2K : chatDefaults.imageResolution);
+            const resolvedNegativePrompt = typeof negativePrompt === 'string' ? negativePrompt : chatDefaults.negativePrompt;
+            const resolvedNumberOfImages = numberOfImages !== undefined ? Number(numberOfImages) : 1;
 
             const executionParams: Partial<GenerationParams> = {
-                prompt: (prompt as string) || params.prompt,
-                aspectRatio: Object.values(AspectRatio).includes(aspectRatio as AspectRatio) ? (aspectRatio as AspectRatio) : params.aspectRatio,
+                prompt: normalizedPrompt,
+                aspectRatio: resolvedAspectRatio,
                 imageModel: effectiveModel,
-                imageStyle: Object.values(ImageStyle).includes(style as ImageStyle) ? (style as ImageStyle) : params.imageStyle,
+                imageStyle: resolvedStyle,
                 // Default resolution based on model: Pro=2K, Flash=1K (Flash only supports 1K)
-                imageResolution: Object.values(ImageResolution).includes(resolution as ImageResolution)
-                    ? (resolution as ImageResolution)
-                    : (effectiveModel === ImageModel.PRO ? ImageResolution.RES_2K : ImageResolution.RES_1K),
-                negativePrompt: (negativePrompt as string) || params.negativePrompt,
-                numberOfImages: numberOfImages !== undefined ? Number(numberOfImages) : 1,
+                imageResolution: resolvedResolution,
+                negativePrompt: resolvedNegativePrompt,
+                numberOfImages: resolvedNumberOfImages,
                 useGrounding: isGroundingRequested,
-                smartAssets: [...(params.smartAssets || [])]
+                smartAssets: [...agentContextAssets],
+                continuousMode: false
+            };
+            // === SEMANTIC REFERENCE MODE SELECTION ===
+            // AI chooses reference_mode based on user intent analysis
+            // Smart default: if user uploaded images and AI didn't specify, use them
+            const hasUserUploadedImages = chatHistory.some(m => m.role === 'user' && (m.image || (m.images && m.images.length > 0)));
+            const referenceMode = toolArgs.reference_mode as string || (hasUserUploadedImages ? 'USER_UPLOADED_ONLY' : 'NONE');
+            const referenceCount = toolArgs.reference_count as number || 1;
+
+            // Helper: convert image data to SmartAsset
+            const toSmartAsset = (imgData: string, id: string): SmartAsset | null => {
+                const match = imgData.match(/^data:(.+);base64,(.+)$/);
+                return match ? { id, mimeType: match[1], data: match[2] } : null;
             };
 
-            if (agentContextAssets.length > 0) executionParams.smartAssets = [...(executionParams.smartAssets || []), ...agentContextAssets];
-            if (shouldUseRefContext) {
-                const lastImageMsg = [...chatHistory].reverse().find(m => m.image || (m.images && m.images.length > 0));
-                if (lastImageMsg) {
-                    const imgData = lastImageMsg.image || (lastImageMsg.images && lastImageMsg.images.length > 0 ? lastImageMsg.images[0] : null);
-                    if (imgData) {
-                        const match = imgData.match(/^data:(.+);base64,(.+)$/);
-                        if (match) {
-                            const historyRefAsset: SmartAsset = {
-                                id: `history-${Date.now()}`, mimeType: match[1], data: match[2]
-                            };
-                            const exists = executionParams.smartAssets?.some(a => a.data.slice(0, 50) === match[2].slice(0, 50));
-                            if (!exists) {
-                                executionParams.smartAssets?.push(historyRefAsset);
-                                addToast('info', 'Context Active', 'Using previous image as reference.');
+            // Get all messages with images from chat history
+            const messagesWithImages = chatHistory.filter(m => m.image || (m.images && m.images.length > 0));
+
+            // Select references based on mode
+            let selectedReferences: SmartAsset[] = [];
+            switch (referenceMode) {
+                case 'NONE':
+                    // Pure text-to-image, no references
+                    break;
+
+                case 'USER_UPLOADED_ONLY':
+                    // Only user-uploaded images (role === 'user' AND has image)
+                    messagesWithImages
+                        .filter(m => m.role === 'user')
+                        .forEach(m => {
+                            const img = m.image || (m.images?.[0]);
+                            if (img) {
+                                const asset = toSmartAsset(img, `user-${m.timestamp}`);
+                                if (asset) selectedReferences.push(asset);
                             }
+                        });
+                    break;
+
+                case 'LAST_GENERATED':
+                    // Last AI-generated image (role === 'assistant' or model)
+                    const lastGenerated = [...messagesWithImages]
+                        .reverse()
+                        .find(m => m.role === 'model');
+                    if (lastGenerated) {
+                        const img = lastGenerated.image || (lastGenerated.images?.[0]);
+                        if (img) {
+                            const asset = toSmartAsset(img, `generated-${lastGenerated.timestamp}`);
+                            if (asset) selectedReferences.push(asset);
                         }
                     }
+                    break;
+
+                case 'ALL_USER_UPLOADED':
+                    // All user-uploaded images
+                    messagesWithImages
+                        .filter(m => m.role === 'user')
+                        .forEach(m => {
+                            const img = m.image || (m.images?.[0]);
+                            if (img) {
+                                const asset = toSmartAsset(img, `user-all-${m.timestamp}`);
+                                if (asset) selectedReferences.push(asset);
+                            }
+                        });
+                    break;
+
+                case 'LAST_N':
+                    // Last N images regardless of source
+                    messagesWithImages.slice(-referenceCount).forEach(m => {
+                        const img = m.image || (m.images?.[0]);
+                        if (img) {
+                            const asset = toSmartAsset(img, `last-n-${m.timestamp}`);
+                            if (asset) selectedReferences.push(asset);
+                        }
+                    });
+                    break;
+            }
+
+            // Add selected references to smartAssets (avoid duplicates)
+            selectedReferences.forEach(ref => {
+                const exists = executionParams.smartAssets?.some(a => a.data.slice(0, 50) === ref.data.slice(0, 50));
+                if (!exists) {
+                    executionParams.smartAssets?.push(ref);
                 }
+            });
+
+            if (selectedReferences.length > 0) {
+                console.log(`[Agent] reference_mode: ${referenceMode}, selected ${selectedReferences.length} images`);
+                addToast('info', 'Reference Active', `Using ${selectedReferences.length} reference image(s).`);
             }
 
             let onSuccessCallback: ((asset: AssetItem) => void) | undefined;
@@ -689,13 +830,23 @@ export function App() {
     const handleClearCompletedTasks = () => { setTasks(prev => prev.filter(t => t.status === 'GENERATING' || t.status === 'QUEUED')); };
     const handleDeleteProject = async (projectId: string) => { await deleteProjectFromDB(projectId); setProjects(prev => prev.filter(p => p.id !== projectId)); if (activeProjectId === projectId) { const remaining = projects.filter(p => p.id !== projectId); if (remaining.length > 0) switchProject(remaining[0].id, remaining[0]); else createNewProject(true); } };
     const openConfirmDelete = (assetId: string) => { setConfirmDialog({ isOpen: true, title: t('confirm.delete.title'), message: t('confirm.delete.desc'), confirmLabel: t('btn.delete'), cancelLabel: t('btn.cancel'), isDestructive: true, action: async () => { const asset = assets.find(a => a.id === assetId); if (asset) { await softDeleteAssetInDB(asset); setAssets(prev => prev.map(a => a.id === assetId ? { ...a, deletedAt: Date.now() } : a)); } setConfirmDialog(prev => ({ ...prev, isOpen: false })); if (activeCanvasAsset?.id === assetId) setActiveCanvasAsset(null); } }); };
-    const handleRestoreAsset = async (assetId: string) => { const asset = assets.find(a => a.id === assetId); if (asset) { await restoreAssetInDB(asset); setAssets(prev => prev.map(a => a.id === assetId ? { ...a, deletedAt: undefined } : a)); } };
-    const openConfirmDeleteForever = (assetId: string) => { setConfirmDialog({ isOpen: true, title: t('confirm.delete_forever.title'), message: t('confirm.delete_forever.desc'), confirmLabel: t('btn.delete_forever'), cancelLabel: t('btn.cancel'), isDestructive: true, action: async () => { await permanentlyDeleteAssetFromDB(assetId); setAssets(prev => prev.filter(a => a.id !== assetId)); setConfirmDialog(prev => ({ ...prev, isOpen: false })); } }); };
-    const openConfirmEmptyTrash = () => { setConfirmDialog({ isOpen: true, title: t('confirm.empty_trash.title'), message: t('confirm.empty_trash.desc'), confirmLabel: t('btn.empty_trash'), cancelLabel: t('btn.cancel'), isDestructive: true, action: async () => { const trashAssets = assets.filter(a => a.deletedAt !== undefined); const trashIds = trashAssets.map(a => a.id); if (trashIds.length > 0) { await bulkPermanentlyDeleteAssets(trashIds); setAssets(prev => prev.filter(a => a.deletedAt === undefined)); } setConfirmDialog(prev => ({ ...prev, isOpen: false })); } }); };
+    const handleRestoreAsset = async (assetId: string) => { const asset = trashAssets.find(a => a.id === assetId) || assets.find(a => a.id === assetId); if (asset) { await restoreAssetInDB(asset); setAssets(prev => prev.map(a => a.id === assetId ? { ...a, deletedAt: undefined } : a)); setTrashAssets(prev => prev.filter(a => a.id !== assetId)); } };
+    const openConfirmDeleteForever = (assetId: string) => { setConfirmDialog({ isOpen: true, title: t('confirm.delete_forever.title'), message: t('confirm.delete_forever.desc'), confirmLabel: t('btn.delete_forever'), cancelLabel: t('btn.cancel'), isDestructive: true, action: async () => { await permanentlyDeleteAssetFromDB(assetId); setAssets(prev => prev.filter(a => a.id !== assetId)); setTrashAssets(prev => prev.filter(a => a.id !== assetId)); setConfirmDialog(prev => ({ ...prev, isOpen: false })); } }); };
+    const openConfirmEmptyTrash = () => { setConfirmDialog({ isOpen: true, title: t('confirm.empty_trash.title'), message: t('confirm.empty_trash.desc'), confirmLabel: t('btn.empty_trash'), cancelLabel: t('btn.cancel'), isDestructive: true, action: async () => { const trashIds = trashAssets.map(a => a.id); if (trashIds.length > 0) { await bulkPermanentlyDeleteAssets(trashIds); setAssets(prev => prev.filter(a => a.deletedAt === undefined)); setTrashAssets([]); } setConfirmDialog(prev => ({ ...prev, isOpen: false })); } }); };
     const handleBulkDelete = () => { if (selectedAssetIds.size === 0) return; setConfirmDialog({ isOpen: true, title: t('confirm.delete_bulk.title'), message: `${selectedAssetIds.size} items`, confirmLabel: t('btn.delete'), cancelLabel: t('btn.cancel'), isDestructive: true, action: async () => { const ids = Array.from(selectedAssetIds) as string[]; await bulkPermanentlyDeleteAssets(ids); setAssets(prev => prev.filter(a => !selectedAssetIds.has(a.id))); setSelectedAssetIds(new Set()); setConfirmDialog(prev => ({ ...prev, isOpen: false })); setIsSelectionMode(false); } }); };
     const handleBulkDownload = () => { selectedAssetIds.forEach(id => { const asset = assets.find(a => a.id === id); if (asset) { const link = document.createElement('a'); link.href = asset.url; link.download = `lumina-export-${asset.id}.${asset.type === 'IMAGE' ? 'png' : 'mp4'}`; link.click(); } }); };
     const toggleAssetSelection = (asset: AssetItem) => { const newSet = new Set(selectedAssetIds); if (newSet.has(asset.id)) newSet.delete(asset.id); else newSet.add(asset.id); setSelectedAssetIds(newSet); };
-    const handleCompare = () => { if (selectedAssetIds.size !== 2) return; const items = assets.filter(a => selectedAssetIds.has(a.id)); if (items.length === 2) setComparisonAssets([items[0], items[1]]); };
+    // FIX: Only allow image comparison (ComparisonView doesn't support video)
+    const handleCompare = () => {
+        if (selectedAssetIds.size !== 2) return;
+        const items = assets.filter(a => selectedAssetIds.has(a.id));
+        // Check that both are images
+        if (items.some(a => a.type !== 'IMAGE')) {
+            addToast('error', 'Comparison Error', 'Only images can be compared. Please select two images.');
+            return;
+        }
+        if (items.length === 2) setComparisonAssets([items[0], items[1]]);
+    };
     const handleVideoContinue = (data: string, mimeType: string) => { setParams(prev => ({ ...prev, inputVideoData: data, inputVideoMimeType: mimeType })); setMode(AppMode.VIDEO); setActiveTab('studio'); setRightPanelMode('GALLERY'); addToast('info', 'Video Extension', t('help.extend_desc')); };
     const handleRemix = (asset: AssetItem) => { setParams(prev => ({ ...prev, prompt: asset.prompt })); if (asset.type === 'IMAGE') handleUseAsReference(asset); };
     const handleCanvasSave = async (compositeDataUrl: string, maskDataUrl?: string) => {
@@ -716,9 +867,8 @@ export function App() {
 
     if (!isLoaded) return <div className="h-screen w-screen bg-dark-bg text-white flex items-center justify-center">Loading Studio...</div>;
 
-    const allTrashAssets = assets.filter(a => a.deletedAt !== undefined);
     const currentProjectAssets = assets.filter(a => a.projectId === activeProjectId && a.deletedAt === undefined);
-    const displayedAssets = rightPanelMode === 'TRASH' ? allTrashAssets : (showFavoritesOnly ? currentProjectAssets.filter(a => a.isFavorite) : currentProjectAssets);
+    const displayedAssets = rightPanelMode === 'TRASH' ? trashAssets : (showFavoritesOnly ? currentProjectAssets.filter(a => a.isFavorite) : currentProjectAssets);
 
     const handleAssetClick = (asset: AssetItem) => {
         if (asset.isNew) {
@@ -764,7 +914,7 @@ export function App() {
             <ProjectSidebar isOpen={showProjects} onClose={() => setShowProjects(false)} projects={projects} activeProjectId={activeProjectId} generatingStates={generatingStates} onSelectProject={(id) => switchProject(id)} onCreateProject={() => createNewProject()} onRenameProject={(id, name) => { const p = projects.find(p => p.id === id); if (p) { const updated = { ...p, name }; setProjects(prev => prev.map(prj => prj.id === id ? updated : prj)); saveProject(updated); } }} onDeleteProject={handleDeleteProject} />
 
             <div className="flex-1 flex overflow-hidden relative">
-                <GenerationForm mode={mode} params={params} setParams={setParams} isGenerating={tasks.some(t => t.projectId === activeProjectId && (t.status === 'GENERATING' || t.status === 'QUEUED'))} startTime={generatingStates[activeProjectId]} onGenerate={handleGenerate} onVerifyVeo={handleAuthVerify} veoVerified={veoVerified} chatHistory={chatHistory} setChatHistory={setChatHistory} activeTab={activeTab} onTabChange={setActiveTab} chatSelectedImages={chatSelectedImages} setChatSelectedImages={setChatSelectedImages} projectId={activeProjectId} cooldownEndTime={videoCooldownEndTime} thoughtImages={thoughtImages} setThoughtImages={setThoughtImages} {...({ projectContextSummary: contextSummary, projectSummaryCursor: summaryCursor, onUpdateProjectContext: (s: string, c: number) => { setContextSummary(s); setSummaryCursor(c); }, onToolCall: handleAgentToolCall, agentContextAssets: agentContextAssets } as any)} />
+                <GenerationForm mode={mode} params={params} setParams={setParams} chatParams={chatParams} setChatParams={setChatParams} isGenerating={tasks.some(t => t.projectId === activeProjectId && (t.status === 'GENERATING' || t.status === 'QUEUED'))} startTime={generatingStates[activeProjectId]} onGenerate={handleGenerate} onVerifyVeo={handleAuthVerify} veoVerified={veoVerified} chatHistory={chatHistory} setChatHistory={setChatHistory} activeTab={activeTab} onTabChange={setActiveTab} chatSelectedImages={chatSelectedImages} setChatSelectedImages={setChatSelectedImages} projectId={activeProjectId} cooldownEndTime={videoCooldownEndTime} thoughtImages={thoughtImages} setThoughtImages={setThoughtImages} {...({ projectContextSummary: contextSummary, projectSummaryCursor: summaryCursor, onUpdateProjectContext: (s: string, c: number) => { setContextSummary(s); setSummaryCursor(c); }, onToolCall: handleAgentToolCall, agentContextAssets: agentContextAssets } as any)} />
 
                 <div className="flex-1 bg-dark-bg flex flex-col min-w-0 relative">
                     {rightPanelMode === 'CANVAS' && activeCanvasAsset ? (
