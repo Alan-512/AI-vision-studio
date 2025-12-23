@@ -1,6 +1,6 @@
 
-import { GoogleGenAI, Part, Content, FunctionDeclaration, Type, Chat } from "@google/genai";
-import { ChatMessage, AppMode, SmartAsset, GenerationParams, ImageModel, AgentAction, AssetItem, AspectRatio, ImageResolution, TextModel } from "../types";
+import { GoogleGenAI, Part, Content, FunctionDeclaration, Type } from "@google/genai";
+import { ChatMessage, AppMode, SmartAsset, GenerationParams, ImageModel, AgentAction, AssetItem, AspectRatio, ImageResolution, TextModel, SearchPolicy } from "../types";
 import { createTrackedBlobUrl } from "./storageService";
 
 // Key management
@@ -14,62 +14,56 @@ const getAIClient = (userKey?: string) => {
     return new GoogleGenAI({ apiKey: key });
 };
 
-// --- MULTI-TURN IMAGE CHAT SESSION ---
-// Manages a persistent chat session for image generation with automatic context
-let imageChat: Chat | null = null;
-let imageChatProjectId: string | null = null;
-let imageChatModel: ImageModel | null = null;
-let imageChatGrounding: boolean = false;
+// --- STRUCTURED FACTS HELPERS (Two-Phase Search Architecture) ---
 
 /**
- * Get or create an image generation chat session.
- * The session remembers all generated images and enables multi-turn editing.
- * Session is rebuilt when project, model, or grounding setting changes.
+ * Structured fact from LLM search phase
  */
-export const getImageChat = (projectId: string, model: ImageModel, useGrounding = false): Chat => {
-    const ai = getAIClient();
+export interface StructuredFact {
+    item: string;
+    source?: string;
+}
 
-    // Reset if project, model, or grounding changed - or no session exists
-    const needsRebuild = !imageChat ||
-        imageChatProjectId !== projectId ||
-        imageChatModel !== model ||
-        imageChatGrounding !== useGrounding;
-
-    if (needsRebuild) {
-        const config: any = {
-            responseModalities: ['TEXT', 'IMAGE'],
-        };
-
-        // Pro model supports Google Search grounding
-        if (model === ImageModel.PRO && useGrounding) {
-            config.tools = [{ googleSearch: {} }];
-        }
-
-        imageChat = ai.chats.create({
-            model: model,
-            config
-        });
-
-        // Track current session params
-        imageChatProjectId = projectId;
-        imageChatModel = model;
-        imageChatGrounding = useGrounding;
-
-        console.log(`[ImageChat] Created new session - project: ${projectId}, model: ${model}, grounding: ${useGrounding}`);
+/**
+ * Parse facts from LLM search phase output.
+ * Expected format: { facts: [{ item, source }], promptDraft: "..." }
+ */
+export const parseFactsFromLLM = (llmOutput: string): { facts: StructuredFact[], promptDraft: string } => {
+    try {
+        // Try to parse as JSON first
+        const data = JSON.parse(llmOutput);
+        const facts = Array.isArray(data?.facts) ? data.facts : [];
+        const promptDraft = typeof data?.promptDraft === 'string' ? data.promptDraft : '';
+        return { facts, promptDraft };
+    } catch {
+        // If not JSON, return empty - caller should use original prompt
+        console.warn('[parseFactsFromLLM] Could not parse structured facts, using empty');
+        return { facts: [], promptDraft: '' };
     }
-
-    return imageChat!;
 };
 
 /**
- * Reset the image chat session (call when switching projects)
+ * Build final prompt by embedding structured facts block.
+ * Facts are appended as natural language reference notes for image model.
  */
-export const resetImageChat = () => {
-    imageChat = null;
-    imageChatProjectId = null;
-    imageChatModel = null;
-    imageChatGrounding = false;
-    console.log('[ImageChat] Session reset');
+export const buildPromptWithFacts = (rawPrompt: string, factsBlock: StructuredFact[]): string => {
+    if (!factsBlock || factsBlock.length === 0) return rawPrompt.trim();
+
+    // Format facts: combine item (label) with source (detailed description)
+    const factsText = factsBlock.map(fact => {
+        if (fact.source) {
+            return `- ${fact.item}: ${fact.source}`;
+        }
+        return `- ${fact.item}`;
+    }).join('\n');
+
+    return [
+        rawPrompt.trim(),
+        '',
+        '---',
+        'Reference Notes:',
+        factsText
+    ].join('\n');
 };
 
 // --- OFFICIAL FUNCTION DECLARATIONS ---
@@ -125,7 +119,17 @@ Default: NONE for new generations, USER_UPLOADED_ONLY when regenerating.`,
             },
             reference_count: { type: Type.NUMBER, description: 'Only for LAST_N mode: how many recent images to use. Default: 1.' }
         },
-        required: ['prompt']
+        required: [
+            'prompt',
+            'model',
+            'aspectRatio',
+            'resolution',
+            'useGrounding',
+            'numberOfImages',
+            'negativePrompt',
+            'reference_mode',
+            'reference_count'
+        ]
     }
 };
 
@@ -301,11 +305,12 @@ export const streamChatResponse = async (
     _onUpdateContext?: (summary: string, cursor: number) => void,
     onToolCall?: (action: AgentAction) => void,
     useSearch?: boolean,
-    _params?: GenerationParams,
+    params?: GenerationParams,
     _agentContextAssets?: SmartAsset[],
     onThoughtSignatures?: (signatures: Array<{ partIndex: number; signature: string }>) => void,
     onThoughtImage?: (imageData: { data: string; mimeType: string; isFinal: boolean }) => void,
-    onThoughtText?: (text: string) => void  // NEW: Callback for thinking process text
+    onThoughtText?: (text: string) => void,  // Callback for thinking process text
+    onSearchChunk?: (text: string, isComplete: boolean) => void  // NEW: Callback for search streaming
 ) => {
     const ai = getAIClient();
     const isReasoning = modelName === TextModel.PRO;
@@ -317,6 +322,99 @@ export const streamChatResponse = async (
     const contextPart = contextSummary
         ? `\n[CONVERSATION CONTEXT]\nHere is a summary of our earlier conversation:\n${contextSummary}\n\nUse this context to maintain consistency and understand references to previous work.\n`
         : '';
+
+    // LLM_ONLY mode: LLM searches, image model does NOT use grounding
+    const allowSearch = !!useSearch;
+    const runLlmSearch = allowSearch && isImageMode;
+
+    console.log('[Chat] Search config:', { allowSearch, isImageMode, runLlmSearch });
+
+    let searchFacts: StructuredFact[] = [];
+    let searchPromptDraft = '';
+
+    if (runLlmSearch) {
+        const searchInstruction = `You are in SEARCH PHASE for image generation.
+${contextPart}
+
+[OUTPUT FORMAT - STRICT JSON ONLY]
+Return ONLY a valid JSON object with:
+- facts: array of { "item": string, "source": string }
+- promptDraft: string (use the user's language)
+
+Rules:
+- Use googleSearch ONLY when external facts are needed.
+- Do NOT output markdown, code fences, or extra commentary.
+`;
+
+        const searchContents = convertHistoryToNativeFormat(history, realModelName);
+        if (signal.aborted) throw new Error('Cancelled');
+
+        // Notify UI that search is starting
+        if (onSearchChunk) {
+            onSearchChunk('🔍 正在搜索...', false);
+        }
+
+        // Use streaming for search to show real-time progress
+        const searchResult = await ai.models.generateContentStream({
+            model: realModelName,
+            contents: searchContents,
+            config: {
+                systemInstruction: searchInstruction,
+                tools: [{ googleSearch: {} }],
+                abortSignal: signal
+            }
+        });
+
+        let searchFullText = '';
+        for await (const chunk of searchResult) {
+            if (signal.aborted) throw new Error('Cancelled');
+
+            const chunkText = chunk.text ?? '';
+            if (chunkText) {
+                searchFullText += chunkText;
+                // Stream search content to UI
+                if (onSearchChunk) {
+                    onSearchChunk(searchFullText, false);
+                }
+            }
+        }
+
+        // Mark search as complete (UI should auto-collapse)
+        if (onSearchChunk) {
+            onSearchChunk(searchFullText, true);
+        }
+
+        if (signal.aborted) throw new Error('Cancelled');
+
+        // Extract JSON from potential markdown code blocks
+        let searchText = searchFullText.trim();
+        // Remove markdown code fences if present (```json ... ``` or ``` ... ```)
+        const jsonBlockMatch = searchText.match(/```(?:json)?\s*([\s\S]*?)```/);
+        if (jsonBlockMatch) {
+            searchText = jsonBlockMatch[1].trim();
+        }
+
+        let parsedOk = true;
+        try {
+            JSON.parse(searchText);
+        } catch {
+            parsedOk = false;
+        }
+
+        // If JSON parse fails, continue without facts (more forgiving)
+        if (!parsedOk) {
+            console.warn('[Search] Could not parse search output as JSON, continuing without facts');
+            // Don't return, just continue with empty facts
+        }
+
+        const parsed = parsedOk ? parseFactsFromLLM(searchText) : { facts: [], promptDraft: '' };
+        searchFacts = parsed.facts;
+        searchPromptDraft = parsed.promptDraft;
+    }
+
+    const groundingPolicyLine = allowSearch
+        ? '- Search is ON: LLM already searched, set useGrounding=false for image model.'
+        : '- Search permission is off: set useGrounding=false.';
 
     const systemInstruction = `You are Lumina, the Lead Creative Director at a professional AI image generation studio.
     ${contextPart}
@@ -363,16 +461,14 @@ export const streamChatResponse = async (
       → Use the last AI-generated image as base
     - "ALL_USER_UPLOADED": User wants to combine multiple uploaded references
     - "LAST_N": Use with reference_count when user refers to "last few images"
-    
-    ${useSearch ? `
-    [SEARCH MODE ACTIVE] 
-    Since Google Search is active, you CANNOT use official tools to generate images.
-    INSTEAD, if you are ready to generate, output this EXACT string at the end of your message:
-    !!!GENERATE_IMAGE {"prompt": "...", "aspectRatio": "...", "useGrounding": true} !!!
-    ` : `
-    [TOOL MODE ACTIVE]
-    When ready to generate after proper consultation, use the 'generate_image' tool.
-    `}`;
+
+    [SEARCH POLICY]
+    ${groundingPolicyLine}
+
+    [PARAMETER CONTRACT]
+    You MUST call 'generate_image' with ALL parameters:
+    prompt, model, aspectRatio, resolution, useGrounding, numberOfImages, negativePrompt, reference_mode, reference_count.
+    `;
 
     const contents = convertHistoryToNativeFormat(history, realModelName);
 
@@ -382,9 +478,9 @@ export const streamChatResponse = async (
      */
     const config: any = {
         systemInstruction: systemInstruction,
-        tools: useSearch
-            ? [{ googleSearch: {} }]
-            : (isImageMode ? [{ functionDeclarations: [generateImageTool] }] : undefined)
+        tools: isImageMode
+            ? [{ functionDeclarations: [generateImageTool] }]
+            : (allowSearch ? [{ googleSearch: {} }] : undefined)
     };
 
     if (isReasoning) {
@@ -426,17 +522,6 @@ export const streamChatResponse = async (
                         // Regular answer text - accumulate and send to main chunk callback
                         fullText += part.text;
                         onChunk(fullText);
-
-                        // FALLBACK: Detect text-based trigger when search is on
-                        const toolRegex = /!!!\s*GENERATE_IMAGE\s*(\{.*?\})\s*!!!/s;
-                        const match = fullText.match(toolRegex);
-                        if (match && onToolCall) {
-                            try {
-                                const args = JSON.parse(match[1]);
-                                onToolCall({ toolName: 'generate_image', args });
-                                return; // Stop stream after tool detected
-                            } catch (e) { console.error("JSON parse failed in fallback trigger", e); }
-                        }
                     }
                 }
             }
@@ -510,7 +595,24 @@ export const streamChatResponse = async (
     // DEFERRED TOOL CALL: Execute after stream completes so AI response is fully shown
     if (pendingToolCall && onToolCall) {
         console.log('[Stream] Executing deferred tool call:', pendingToolCall.toolName);
-        onToolCall(pendingToolCall);
+        const adjustedArgs = pendingToolCall.args && typeof pendingToolCall.args === 'object'
+            ? { ...pendingToolCall.args }
+            : {};
+
+        const basePrompt = typeof adjustedArgs.prompt === 'string'
+            ? adjustedArgs.prompt
+            : (searchPromptDraft || _newMessage);
+
+        if (searchFacts.length > 0) {
+            adjustedArgs.prompt = buildPromptWithFacts(basePrompt, searchFacts);
+        } else if (basePrompt && !adjustedArgs.prompt) {
+            adjustedArgs.prompt = basePrompt;
+        }
+
+        // LLM_ONLY mode: image model does NOT use grounding
+        adjustedArgs.useGrounding = false;
+
+        onToolCall({ toolName: pendingToolCall.toolName, args: adjustedArgs });
     }
 };
 
@@ -520,39 +622,73 @@ export const generateImage = async (
     onStart: () => void,
     signal: AbortSignal,
     id: string,
+    history?: ChatMessage[],
     onThoughtImage?: (imageData: { data: string; mimeType: string; isFinal: boolean }) => void
 ): Promise<AssetItem> => {
     onStart();
+
+    // DEBUG: Log key parameters for troubleshooting search grounding
+    console.log('[generateImage] Called with:', {
+        model: params.imageModel,
+        useGrounding: params.useGrounding,
+        aspectRatio: params.aspectRatio
+    });
+
+    const ai = getAIClient();
+    const historyContents = history && history.length > 0
+        ? convertHistoryToNativeFormat(history, params.imageModel)
+        : [];
+
+    const historyImagePrefixes = new Set<string>();
+    let historyImageCount = 0;
+    historyContents.forEach(content => {
+        content.parts?.forEach((part: any) => {
+            if (part?.inlineData?.data) {
+                historyImageCount++;
+                historyImagePrefixes.add(String(part.inlineData.data).slice(0, 50));
+            }
+        });
+    });
 
     // Build message parts
     const parts: Part[] = [];
 
     // Add reference images first (user describes their usage in prompt)
-    if (params.smartAssets && params.smartAssets.length > 0) {
-        const maxImages = params.imageModel === ImageModel.PRO ? 14 : 3;
-        if (params.smartAssets.length > maxImages) {
-            throw new Error(`Maximum ${maxImages} reference images allowed for ${params.imageModel}. You provided ${params.smartAssets.length}.`);
-        }
+    const maxImages = params.imageModel === ImageModel.PRO ? 14 : 3;
+    const availableSlots = Math.max(0, maxImages - historyImageCount);
+    const smartAssets = (params.smartAssets || []).filter(asset => {
+        return !historyImagePrefixes.has(asset.data.slice(0, 50));
+    });
+    const smartAssetsToUse = availableSlots > 0
+        ? smartAssets.slice(-availableSlots)
+        : [];
 
-        // Add images as "Image 1", "Image 2", etc. for easy reference in prompt
-        params.smartAssets.forEach((asset, index) => {
-            parts.push({ inlineData: { mimeType: asset.mimeType, data: asset.data } });
-            parts.push({ text: `[Image ${index + 1}]` });
-        });
-    }
+    // Add images as "Image 1", "Image 2", etc. for easy reference in prompt
+    smartAssetsToUse.forEach((asset, index) => {
+        parts.push({ inlineData: { mimeType: asset.mimeType, data: asset.data } });
+        parts.push({ text: `[Image ${index + 1}]` });
+    });
 
     // Add user's prompt (they describe how to use the images here)
     let mainPrompt = params.prompt;
+
+    // Add time context when search grounding is enabled (helps with time-sensitive queries)
+    if (params.useGrounding) {
+        const now = new Date();
+        const timeContext = `[Current Date: ${now.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}]\n`;
+        mainPrompt = timeContext + mainPrompt;
+    }
+
     if (params.negativePrompt) mainPrompt += `\nAvoid: ${params.negativePrompt}`;
     parts.push({ text: mainPrompt });
 
-    // Get or create chat session for this project
-    // This enables multi-turn editing - the model remembers previous images
-    const chat = getImageChat(projectId, params.imageModel, params.useGrounding);
+    const contents: Content[] = [...historyContents, { role: 'user', parts }];
 
     // Build message config with imageConfig
     const isPro = params.imageModel === ImageModel.PRO;
-    const messageConfig: any = {};
+    const messageConfig: any = {
+        responseModalities: ['TEXT', 'IMAGE']
+    };
 
     if (params.aspectRatio || (isPro && params.imageResolution)) {
         // Official JS SDK uses imageConfig (not imageGenerationConfig)
@@ -562,12 +698,15 @@ export const generateImage = async (
         };
     }
 
-    // Send message to chat session
-    // The chat automatically includes context from previous turns
-    console.log('[GeminiService] sendMessage config:', JSON.stringify(messageConfig, null, 2));
+    if (isPro && params.useGrounding) {
+        messageConfig.tools = [{ googleSearch: {} }];
+    }
+
+    // Send message with unified history + current prompt
+    console.log('[GeminiService] generateContent config:', JSON.stringify(messageConfig, null, 2));
 
     // PRE-FLIGHT ABORT CHECK: Fail fast if already cancelled
-    // Note: chat.sendMessage doesn't accept AbortSignal, so we race with an abort promise
+    // Note: generateContent doesn't accept AbortSignal, so we race with an abort promise
     // to return early when the user cancels (request still runs server-side).
     if (signal.aborted) throw new Error('Cancelled');
 
@@ -584,8 +723,9 @@ export const generateImage = async (
     let response: any;
     try {
         response = await Promise.race([
-            chat.sendMessage({
-                message: parts,
+            ai.models.generateContent({
+                model: params.imageModel,
+                contents: contents,
                 config: messageConfig
             }),
             abortPromise
@@ -602,9 +742,13 @@ export const generateImage = async (
     // Process response
     let imageUrl = '';
     const finishReason = String(response.candidates?.[0]?.finishReason || 'UNKNOWN');
+    const collectedSignatures: Array<{ partIndex: number; signature: string }> = [];
 
     if (response.candidates?.[0]?.content?.parts) {
-        for (const part of response.candidates[0].content.parts as any[]) {
+        let imagePartIndex = 0;
+        for (let idx = 0; idx < (response.candidates[0].content.parts as any[]).length; idx++) {
+            const part = (response.candidates[0].content.parts as any[])[idx];
+
             if (part.inlineData && part.inlineData.data && part.inlineData.mimeType) {
                 const isThought = part.thought === true;
 
@@ -621,6 +765,18 @@ export const generateImage = async (
                 if (!isThought && !imageUrl) {
                     imageUrl = `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
                 }
+
+                if (part.thoughtSignature) {
+                    collectedSignatures.push({ partIndex: imagePartIndex, signature: part.thoughtSignature });
+                }
+
+                imagePartIndex++;
+                continue;
+            }
+
+            // Collect thoughtSignature for non-image parts (text)
+            if (part.thoughtSignature) {
+                collectedSignatures.push({ partIndex: -1, signature: part.thoughtSignature });
             }
         }
     }
@@ -640,7 +796,13 @@ export const generateImage = async (
 
     return {
         id, projectId, type: 'IMAGE', url: imageUrl, prompt: params.prompt, createdAt: Date.now(), status: 'COMPLETED',
-        metadata: { model: params.imageModel, aspectRatio: params.aspectRatio, resolution: params.imageResolution, usedGrounding: params.useGrounding }
+        metadata: {
+            model: params.imageModel,
+            aspectRatio: params.aspectRatio,
+            resolution: params.imageResolution,
+            usedGrounding: params.useGrounding,
+            thoughtSignatures: collectedSignatures.length > 0 ? collectedSignatures : undefined
+        }
     };
 };
 

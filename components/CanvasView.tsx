@@ -183,13 +183,16 @@ export const CanvasView: React.FC<CanvasViewProps> = ({ asset, onClose, onDelete
       </div>
 
       {/* Bottom Details Panel */}
-      <div className="shrink-0 bg-dark-panel border-t border-dark-border p-6 flex flex-col md:flex-row gap-6 z-40 shadow-[0_-5px_30px_rgba(0,0,0,0.5)]">
+      <div className="shrink-0 bg-dark-panel border-t border-dark-border p-6 flex flex-col md:flex-row gap-6 z-40 shadow-[0_-5px_30px_rgba(0,0,0,0.5)] select-auto">
         {/* Left: Prompt & Info */}
         <div className="flex-1 min-w-0">
           <div className="text-brand-500 font-bold text-[10px] uppercase tracking-wider mb-2 flex items-center gap-2">
             {asset.type} GENERATION
           </div>
-          <p className="text-sm text-gray-200 leading-relaxed whitespace-pre-wrap max-h-32 overflow-y-auto custom-scrollbar">
+          <p
+            className="text-sm text-gray-200 leading-relaxed whitespace-pre-wrap max-h-32 overflow-y-auto custom-scrollbar"
+            style={{ userSelect: 'text', cursor: 'text' }}
+          >
             {asset.prompt}
           </p>
         </div>

@@ -1,6 +1,6 @@
 
 import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { Send, User, Sparkles, ChevronDown, BrainCircuit, Zap, X, Box, Copy, Check, Plus, MonitorPlay, Palette, Film, Bot, Square, Crop, CheckCircle2, Globe, Brain, CircuitBoard, Wrench, Image as ImageIcon, CircleDashed, Terminal, Clapperboard, AudioWaveform, Move3d, RefreshCw, AlertCircle } from 'lucide-react';
+import { Send, User, Sparkles, ChevronDown, BrainCircuit, Zap, X, Box, Copy, Check, Plus, MonitorPlay, Palette, Film, Bot, Square, Crop, CheckCircle2, Globe, Brain, CircuitBoard, Wrench, Image as ImageIcon, CircleDashed, Terminal, Clapperboard, AudioWaveform, Move3d, RefreshCw, AlertCircle, Search } from 'lucide-react';
 import { ChatMessage, GenerationParams, ImageStyle, ImageResolution, AppMode, ImageModel, VideoResolution, VideoModel, VideoStyle, AspectRatio, SmartAsset, APP_LIMITS, AgentAction, TextModel } from '../types';
 import { streamChatResponse } from '../services/geminiService';
 import { AgentStateMachine, AgentState, createInitialAgentState, PendingAction, createGenerateAction } from '../services/agentService';
@@ -215,7 +215,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   onUpdateProjectContext,
   onToolCall,
   agentContextAssets,
-  thoughtImages = [],
+  // thoughtImages removed - not used in this component
   setThoughtImages
 }) => {
   const { t, language } = useLanguage();
@@ -234,6 +234,21 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   // NEW: Track LLM thinking process text
   const [thinkingText, setThinkingText] = useState<string>('');
   const thinkingTextRef = useRef<string>(''); // Ref to hold latest value for finally block
+
+  // NEW: Track search streaming content
+  const [searchContent, setSearchContent] = useState<string>('');
+  const [searchIsComplete, setSearchIsComplete] = useState(false);
+  const [searchIsCollapsed, setSearchIsCollapsed] = useState(false);
+  const searchScrollRef = useRef<HTMLDivElement>(null);
+
+  // NEW: Track active tool call status for UI display
+  const [toolCallStatus, setToolCallStatus] = useState<{
+    isActive: boolean;
+    toolName: string;
+    model?: string;
+    prompt?: string;
+  } | null>(null);
+  const [toolCallExpanded, setToolCallExpanded] = useState(false);
 
   // NEW: Agent state machine for workflow management and retry
   const [agentState, setAgentState] = useState<AgentState>(createInitialAgentState());
@@ -303,11 +318,23 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
     // Since requiresConfirmation=false, setPendingAction will auto-execute
     try {
       console.log('[Agent] Setting pending action (will auto-execute)');
+      // Show tool call status in UI (collapsed by default)
+      const modelName = finalArgs.model === ImageModel.PRO ? 'Nano Banana Pro' : 'Nano Banana';
+      setToolCallStatus({
+        isActive: true,
+        toolName: 'generate_image',
+        model: modelName,
+        prompt: finalArgs.prompt || ''
+      });
+      setToolCallExpanded(false); // Start collapsed
       await agentMachine.setPendingAction(pendingAction);
       console.log('[Agent] Action execution completed');
     } catch (error) {
       console.error('[Agent] Action failed after retries:', error);
       // State machine will have transitioned to ERROR state
+    } finally {
+      // Clear tool call status after completion
+      setToolCallStatus(null);
     }
   };
 
@@ -368,6 +395,10 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
       const tempAiMsg: ChatMessage = { role: 'model', content: '', timestamp: Date.now(), isThinking: true };
       setThinkingText(''); // Clear previous thinking text
       thinkingTextRef.current = ''; // Clear ref too
+      // Clear search state for new message
+      setSearchContent('');
+      setSearchIsComplete(false);
+      setSearchIsCollapsed(false);
       setHistory(prev => [...prev, tempAiMsg]);
 
       await streamChatResponse(
@@ -397,11 +428,27 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
             timestamp: Date.now()
           }]);
         } : undefined,
-        // NEW: Callback for thinking process text (思考过程)
+        // Callback for thinking process text (思考过程)
         (text) => {
           if (projectIdRef.current !== sendingProjectId) return;
-          thinkingTextRef.current += text; // Update ref for finally block
+          thinkingTextRef.current += text;
           setThinkingText(prev => prev + text);
+        },
+        // NEW: Callback for search streaming (搜索过程)
+        (text, isComplete) => {
+          if (projectIdRef.current !== sendingProjectId) return;
+          setSearchContent(text);
+          if (isComplete) {
+            setSearchIsComplete(true);
+            // Auto-collapse after 2 seconds
+            setTimeout(() => {
+              setSearchIsCollapsed(true);
+            }, 2000);
+          }
+          // Auto-scroll search content
+          if (searchScrollRef.current) {
+            searchScrollRef.current.scrollTop = searchScrollRef.current.scrollHeight;
+          }
         }
       );
     } catch (error: any) {
@@ -487,13 +534,26 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
             )}
           </div>
         ) : (
-          history.map((msg, idx) => (
-            <ChatBubble
-              key={idx}
-              message={msg}
-              nativeThinkingText={idx === history.length - 1 && msg.isThinking ? thinkingText : undefined}
-            />
-          ))
+          <>
+            {history.map((msg, idx) => {
+              const isLastAiMessage = idx === history.length - 1 && msg.role === 'model';
+              return (
+                <ChatBubble
+                  key={idx}
+                  message={msg}
+                  nativeThinkingText={isLastAiMessage && msg.isThinking ? thinkingText : undefined}
+                  // Only pass search/tool data to last AI message during loading
+                  searchContent={isLastAiMessage ? searchContent : undefined}
+                  searchIsComplete={isLastAiMessage ? searchIsComplete : undefined}
+                  searchIsCollapsed={isLastAiMessage ? searchIsCollapsed : undefined}
+                  onSearchToggle={isLastAiMessage ? () => setSearchIsCollapsed(!searchIsCollapsed) : undefined}
+                  toolCallStatus={isLastAiMessage ? toolCallStatus : undefined}
+                  toolCallExpanded={isLastAiMessage ? toolCallExpanded : undefined}
+                  onToolCallToggle={isLastAiMessage ? () => setToolCallExpanded(!toolCallExpanded) : undefined}
+                />
+              );
+            })}
+          </>
         )}
 
         {/* Agent Status Indicator - 重试/错误状态 */}
@@ -603,7 +663,31 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   );
 };
 
-const ChatBubble: React.FC<{ message: ChatMessage; nativeThinkingText?: string }> = ({ message, nativeThinkingText }) => {
+interface ChatBubbleProps {
+  message: ChatMessage;
+  nativeThinkingText?: string;
+  // Search flow props (only passed for current AI message during loading)
+  searchContent?: string;
+  searchIsComplete?: boolean;
+  searchIsCollapsed?: boolean;
+  onSearchToggle?: () => void;
+  // Tool call flow props
+  toolCallStatus?: { isActive: boolean; toolName: string; model?: string; prompt?: string } | null;
+  toolCallExpanded?: boolean;
+  onToolCallToggle?: () => void;
+}
+
+const ChatBubble: React.FC<ChatBubbleProps> = ({
+  message,
+  nativeThinkingText,
+  searchContent,
+  searchIsComplete,
+  searchIsCollapsed,
+  onSearchToggle,
+  toolCallStatus,
+  toolCallExpanded,
+  onToolCallToggle
+}) => {
   const { t, language } = useLanguage();
   const isUser = message.role === 'user';
   const isSystem = message.isSystem;
@@ -687,6 +771,27 @@ const ChatBubble: React.FC<{ message: ChatMessage; nativeThinkingText?: string }
           </div>
         )}
 
+        {/* SEARCH SECTION - Shows during search phase */}
+        {!isUser && !isSystem && searchContent && (
+          <div className={`w-full max-w-md mb-2 bg-gradient-to-r from-blue-500/10 to-purple-500/10 border border-blue-500/30 rounded-xl overflow-hidden transition-all duration-300 ${searchIsCollapsed ? 'max-h-10' : 'max-h-48'}`}>
+            <button
+              onClick={onSearchToggle}
+              className="w-full flex items-center justify-between px-3 py-2 text-xs text-blue-300 hover:bg-white/5 transition-colors"
+            >
+              <div className="flex items-center gap-2">
+                <Search size={14} className={searchIsComplete ? '' : 'animate-pulse'} />
+                <span>{searchIsComplete ? (language === 'zh' ? '搜索完成' : 'Search Complete') : (language === 'zh' ? '正在搜索...' : 'Searching...')}</span>
+              </div>
+              <ChevronDown size={14} className={`transition-transform ${searchIsCollapsed ? '' : 'rotate-180'}`} />
+            </button>
+            {!searchIsCollapsed && (
+              <div className="px-3 pb-3 max-h-32 overflow-y-auto text-xs text-gray-400 font-mono whitespace-pre-wrap custom-scrollbar">
+                {searchContent}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* COLLAPSIBLE THINKING SECTION - For streaming AI reasoning */}
         {!isUser && !isSystem && (message.isThinking || finalContent) && (
           <div className="w-full max-w-md">
@@ -739,6 +844,37 @@ const ChatBubble: React.FC<{ message: ChatMessage; nativeThinkingText?: string }
                     </button>
                   </div>
                 )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* TOOL CALL SECTION - Shows when AI is calling a tool */}
+        {!isUser && !isSystem && toolCallStatus && toolCallStatus.isActive && (
+          <div className="w-full max-w-md mt-2 bg-gradient-to-r from-purple-500/10 to-pink-500/10 border border-purple-500/30 rounded-xl overflow-hidden animate-in fade-in">
+            <button
+              onClick={onToolCallToggle}
+              className="w-full flex items-center gap-3 p-3 hover:bg-white/5 transition-colors"
+            >
+              <div className="w-8 h-8 rounded-lg bg-purple-500/20 flex items-center justify-center shrink-0">
+                <ImageIcon size={16} className="text-purple-400 animate-pulse" />
+              </div>
+              <div className="flex-1 min-w-0 text-left">
+                <div className="flex items-center gap-2 text-xs font-medium text-purple-300">
+                  <span>{language === 'zh' ? '正在生成图像' : 'Generating Image'}</span>
+                  <span className="px-1.5 py-0.5 bg-purple-500/20 rounded text-[10px]">
+                    {toolCallStatus.model}
+                  </span>
+                </div>
+              </div>
+              <div className="w-4 h-4 border-2 border-purple-400/30 border-t-purple-400 rounded-full animate-spin shrink-0" />
+              <ChevronDown size={14} className={`text-purple-400 transition-transform shrink-0 ${toolCallExpanded ? 'rotate-180' : ''}`} />
+            </button>
+            {toolCallExpanded && toolCallStatus.prompt && (
+              <div className="px-3 pb-3 border-t border-purple-500/20">
+                <div className="mt-2 max-h-24 overflow-y-auto text-xs text-gray-400 whitespace-pre-wrap custom-scrollbar">
+                  {toolCallStatus.prompt}
+                </div>
               </div>
             )}
           </div>

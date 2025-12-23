@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { Image as ImageIcon, Video, LayoutGrid, Folder, Sparkles, Settings, Star, CheckSquare, MoveHorizontal, X, Languages, Trash2, Recycle, Download } from 'lucide-react';
-import { AppMode, AspectRatio, GenerationParams, AssetItem, ImageResolution, VideoResolution, ImageModel, VideoModel, ImageStyle, Project, ChatMessage, BackgroundTask, SmartAsset, VideoDuration, VideoStyle, AgentAction } from './types';
+import { AppMode, AspectRatio, GenerationParams, AssetItem, ImageResolution, VideoResolution, ImageModel, VideoModel, ImageStyle, Project, ChatMessage, BackgroundTask, SmartAsset, VideoDuration, VideoStyle, AgentAction, SearchPolicy } from './types';
 import { GenerationForm } from './components/GenerationForm';
 import { AssetCard } from './components/AssetCard';
 import { ProjectSidebar } from './components/ProjectSidebar';
@@ -11,7 +11,7 @@ import { ConfirmDialog } from './components/ConfirmDialog';
 import { ComparisonView } from './components/ComparisonView';
 import { CanvasEditor } from './components/CanvasEditor';
 import { CanvasView } from './components/CanvasView';
-import { generateImage, generateVideo, getUserApiKey, generateTitle, resetImageChat } from './services/geminiService';
+import { generateImage, generateVideo, getUserApiKey, generateTitle } from './services/geminiService';
 import {
     initDB, loadProjects, saveProject, saveAsset, loadAssets, updateAsset,
     deleteProjectFromDB, softDeleteAssetInDB, restoreAssetInDB,
@@ -33,6 +33,8 @@ const DEFAULT_PARAMS: GenerationParams = {
     imageResolution: ImageResolution.RES_1K,
     videoResolution: VideoResolution.RES_720P,
     videoDuration: VideoDuration.SHORT,
+    useGrounding: false, // Explicit default for search grounding
+    searchPolicy: SearchPolicy.LLM_ONLY,
 };
 const CHAT_DEFAULT_PARAMS: GenerationParams = {
     ...DEFAULT_PARAMS,
@@ -320,9 +322,6 @@ export function App() {
                 // Mark as initializing to prevent 'Save' effect from bumping the updatedAt
                 isInitializingRef.current = true;
 
-                // Reset image chat session for new project (enables fresh multi-turn context)
-                resetImageChat();
-
                 // FIX: Cancel any pending asset load to prevent race conditions
                 if (assetLoadAbortRef.current) {
                     assetLoadAbortRef.current.abort();
@@ -513,12 +512,47 @@ export function App() {
                 negativePrompt: ''
             };
 
-            // AUTO MODE: Default to Flash model for speed, matching System Prompt guidance
-            // Use Pro only if explicitly specified in the tool call args
-            const requestedModel = toolArgs.model;
-            let effectiveModel = ImageModel.FLASH; // Default to Flash as per system prompt
-            if (requestedModel && Object.values(ImageModel).includes(requestedModel as ImageModel)) {
-                effectiveModel = requestedModel as ImageModel;
+            // === NEW ARCHITECTURE: Model Selection with User Lock Priority ===
+            // Priority order (from high to low):
+            // 1. Non-auto mode: User's params.imageModel is locked
+            // 2. AI explicitly selected a valid model
+            // 3. searchPolicy=image_only/both + grounding requested → Pro
+            // 4. Default to Flash
+
+            const isAutoMode = params.isAutoMode !== false; // Default true
+            const searchPolicy = params.searchPolicy || SearchPolicy.LLM_ONLY;
+
+            let effectiveModel: ImageModel;
+            let effectiveGrounding: boolean;
+
+            if (!isAutoMode) {
+                // User locked model - override AI selection
+                effectiveModel = params.imageModel;
+                // In non-auto mode, grounding follows user's explicit setting
+                effectiveGrounding = params.useGrounding === true;
+                console.log(`[Agent] Non-auto mode: using locked model ${effectiveModel}, grounding=${effectiveGrounding}`);
+            } else {
+                // Auto mode: AI can suggest, but searchPolicy controls grounding
+                const aiModel = toolArgs.model;
+
+                const shouldForceGrounding = isGroundingRequested &&
+                    (searchPolicy === SearchPolicy.IMAGE_ONLY || searchPolicy === SearchPolicy.BOTH);
+
+                if (shouldForceGrounding) {
+                    // image_only/both: Image model searches directly, must be Pro
+                    effectiveModel = ImageModel.PRO;
+                    effectiveGrounding = true;
+                } else if (aiModel && Object.values(ImageModel).includes(aiModel as ImageModel)) {
+                    // AI explicitly selected a valid model
+                    effectiveModel = aiModel as ImageModel;
+                    // llm_only or no grounding: never enable grounding (LLM already searched)
+                    effectiveGrounding = false;
+                } else {
+                    // Default to Flash
+                    effectiveModel = ImageModel.FLASH;
+                    effectiveGrounding = false;
+                }
+                console.log(`[Agent] Auto mode: model=${effectiveModel}, grounding=${effectiveGrounding}, policy=${searchPolicy}`);
             }
 
             // Clear previous thought images for new generation
@@ -533,7 +567,8 @@ export function App() {
                 ? (resolution as ImageResolution)
                 : (effectiveModel === ImageModel.PRO ? ImageResolution.RES_2K : chatDefaults.imageResolution);
             const resolvedNegativePrompt = typeof negativePrompt === 'string' ? negativePrompt : chatDefaults.negativePrompt;
-            const resolvedNumberOfImages = numberOfImages !== undefined ? Number(numberOfImages) : 1;
+            const parsedNumberOfImages = Number(numberOfImages);
+            const resolvedNumberOfImages = Number.isFinite(parsedNumberOfImages) ? parsedNumberOfImages : 1;
 
             const executionParams: Partial<GenerationParams> = {
                 prompt: normalizedPrompt,
@@ -544,7 +579,7 @@ export function App() {
                 imageResolution: resolvedResolution,
                 negativePrompt: resolvedNegativePrompt,
                 numberOfImages: resolvedNumberOfImages,
-                useGrounding: isGroundingRequested,
+                useGrounding: effectiveGrounding,
                 smartAssets: [...agentContextAssets],
                 continuousMode: false
             };
@@ -553,12 +588,18 @@ export function App() {
             // Smart default: if user uploaded images and AI didn't specify, use them
             const hasUserUploadedImages = chatHistory.some(m => m.role === 'user' && (m.image || (m.images && m.images.length > 0)));
             const referenceMode = toolArgs.reference_mode as string || (hasUserUploadedImages ? 'USER_UPLOADED_ONLY' : 'NONE');
-            const referenceCount = toolArgs.reference_count as number || 1;
+            const referenceCount = Number(toolArgs.reference_count) || 1;
 
             // Helper: convert image data to SmartAsset
             const toSmartAsset = (imgData: string, id: string): SmartAsset | null => {
                 const match = imgData.match(/^data:(.+);base64,(.+)$/);
                 return match ? { id, mimeType: match[1], data: match[2] } : null;
+            };
+
+            const extractImages = (message: ChatMessage): string[] => {
+                if (message.images && message.images.length > 0) return message.images;
+                if (message.image) return [message.image];
+                return [];
             };
 
             // Get all messages with images from chat history
@@ -576,51 +617,50 @@ export function App() {
                     messagesWithImages
                         .filter(m => m.role === 'user')
                         .forEach(m => {
-                            const img = m.image || (m.images?.[0]);
-                            if (img) {
-                                const asset = toSmartAsset(img, `user-${m.timestamp}`);
+                            extractImages(m).forEach((img, idx) => {
+                                const asset = toSmartAsset(img, `user-${m.timestamp}-${idx}`);
                                 if (asset) selectedReferences.push(asset);
-                            }
+                            });
                         });
                     break;
 
-                case 'LAST_GENERATED':
+                case 'LAST_GENERATED': {
                     // Last AI-generated image (role === 'assistant' or model)
                     const lastGenerated = [...messagesWithImages]
                         .reverse()
-                        .find(m => m.role === 'model');
+                        .find(m => m.role === 'model' && extractImages(m).length > 0);
                     if (lastGenerated) {
-                        const img = lastGenerated.image || (lastGenerated.images?.[0]);
-                        if (img) {
-                            const asset = toSmartAsset(img, `generated-${lastGenerated.timestamp}`);
-                            if (asset) selectedReferences.push(asset);
-                        }
+                        const images = extractImages(lastGenerated);
+                        const img = images[images.length - 1];
+                        const asset = img ? toSmartAsset(img, `generated-${lastGenerated.timestamp}`) : null;
+                        if (asset) selectedReferences.push(asset);
                     }
                     break;
+                }
 
                 case 'ALL_USER_UPLOADED':
                     // All user-uploaded images
                     messagesWithImages
                         .filter(m => m.role === 'user')
                         .forEach(m => {
-                            const img = m.image || (m.images?.[0]);
-                            if (img) {
-                                const asset = toSmartAsset(img, `user-all-${m.timestamp}`);
+                            extractImages(m).forEach((img, idx) => {
+                                const asset = toSmartAsset(img, `user-all-${m.timestamp}-${idx}`);
                                 if (asset) selectedReferences.push(asset);
-                            }
+                            });
                         });
                     break;
 
-                case 'LAST_N':
+                case 'LAST_N': {
                     // Last N images regardless of source
-                    messagesWithImages.slice(-referenceCount).forEach(m => {
-                        const img = m.image || (m.images?.[0]);
-                        if (img) {
-                            const asset = toSmartAsset(img, `last-n-${m.timestamp}`);
-                            if (asset) selectedReferences.push(asset);
-                        }
+                    const allImages = messagesWithImages.flatMap(m =>
+                        extractImages(m).map((img, idx) => ({ img, id: `last-n-${m.timestamp}-${idx}` }))
+                    );
+                    allImages.slice(-referenceCount).forEach(({ img, id }) => {
+                        const asset = toSmartAsset(img, id);
+                        if (asset) selectedReferences.push(asset);
                     });
                     break;
+                }
             }
 
             // Add selected references to smartAssets (avoid duplicates)
@@ -664,16 +704,20 @@ export function App() {
                     contextImageBase64 = await compressImageForContext(blob);
                 } catch (e) { console.warn("Failed to fetch image data for chat context", e); }
                 if (contextImageBase64) {
+                    // Extract thoughtSignatures from asset metadata for multi-turn editing
+                    const assetSignatures = (asset.metadata as any)?.thoughtSignatures;
                     setChatHistory(prev => [
                         ...prev,
                         {
                             role: 'user', content: `[SYSTEM_FEEDBACK]: Image generated successfully based on prompt: "${asset.prompt}".\nHere is the visual result (Thumbnail). Use this as context for consistency.`,
-                            timestamp: Date.now(), image: contextImageBase64, isSystem: true
+                            timestamp: Date.now(), image: contextImageBase64, isSystem: true,
+                            // Pass thoughtSignatures for Pro model multi-turn editing stability
+                            thoughtSignatures: assetSignatures
                         }
                     ]);
                 }
             };
-            await handleGenerate(executionParams, AppMode.IMAGE, onComplete);
+            await handleGenerate(executionParams, AppMode.IMAGE, onComplete, chatHistory);
         }
     };
 
@@ -687,7 +731,7 @@ export function App() {
         return t('err.unknown');
     };
 
-    const handleGenerate = async (overrideParams?: Partial<GenerationParams>, modeOverride?: AppMode, onSuccess?: (asset: AssetItem) => void) => {
+    const handleGenerate = async (overrideParams?: Partial<GenerationParams>, modeOverride?: AppMode, onSuccess?: (asset: AssetItem) => void, historyOverride?: ChatMessage[]) => {
         // RESUME AUDIO CONTEXT ON USER CLICK: Critical for browser audio policies
         const audioCtx = getAudioContext();
         if (audioCtx && audioCtx.state === 'suspended') {
@@ -751,8 +795,9 @@ export function App() {
 
                 let asset: AssetItem;
                 const genParams = { ...activeParams };
+                const historyForGeneration = currentMode === AppMode.IMAGE ? historyOverride : undefined;
                 if (currentMode === AppMode.IMAGE) {
-                    asset = await generateImage(genParams, currentProjectId, onStart, controller.signal, taskId,
+                    asset = await generateImage(genParams, currentProjectId, onStart, controller.signal, taskId, historyForGeneration,
                         // onThoughtImage callback to capture draft images (构思图)
                         (imageData) => {
                             setThoughtImages(prev => [...prev, {

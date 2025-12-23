@@ -252,10 +252,13 @@ export const LightboxViewer: React.FC<LightboxViewerProps> = ({ asset, onClose, 
         </div>
 
         {/* Metadata Panel */}
-        <div className="mt-4 flex flex-col md:flex-row items-start justify-between bg-dark-panel p-4 md:p-6 rounded-2xl border border-dark-border gap-4 shrink-0">
+        <div className="mt-4 flex flex-col md:flex-row items-start justify-between bg-dark-panel p-4 md:p-6 rounded-2xl border border-dark-border gap-4 shrink-0 select-auto">
           <div className="flex-1 min-w-0">
             <h3 className="text-xs text-brand-500 font-bold mb-1 uppercase tracking-wider">{asset.type} Generation</h3>
-            <p className="text-white text-sm md:text-base leading-relaxed overflow-y-auto max-h-36 pr-2 custom-scrollbar whitespace-pre-wrap break-words">
+            <p
+              className="text-white text-sm md:text-base leading-relaxed overflow-y-auto max-h-36 pr-2 custom-scrollbar whitespace-pre-wrap break-words"
+              style={{ userSelect: 'text', cursor: 'text' }}
+            >
               {asset.prompt}
             </p>
           </div>

@@ -86,6 +86,13 @@ export enum VideoDuration {
   LONG = '8'
 }
 
+// SearchPolicy: Controls how search is performed when user enables search
+export enum SearchPolicy {
+  LLM_ONLY = 'llm_only',      // Default: LLM searches, passes structured facts to prompt
+  IMAGE_ONLY = 'image_only',  // Image model searches directly (Pro only)
+  BOTH = 'both'               // Both search (rarely needed, avoid cost duplication)
+}
+
 // Reference Image (simplified - user describes usage in prompt)
 export interface SmartAsset {
   id: string;
@@ -110,6 +117,7 @@ export interface GenerationParams {
   imageStyle?: ImageStyle;
   numberOfImages?: number; // New: Number of images to generate (1-4)
   useGrounding?: boolean; // New: Use Google Search Grounding (Pro model only)
+  searchPolicy?: SearchPolicy; // New: Controls search behavior (llm_only, image_only, both)
 
   // --- NEW: UNIFIED VISUAL CONTROL ---
   smartAssets?: SmartAsset[];
@@ -262,6 +270,7 @@ export interface AssetItem {
     usedGrounding?: boolean; // New: Metadata to track if grounding was used
     error?: string; // Error message
     maskUrl?: string; // New: Link to mask image if this was an edit
+    thoughtSignatures?: Array<{ partIndex: number; signature: string }>; // Pro model multi-turn editing
   };
   blob?: Blob; // For IndexedDB storage
 }
