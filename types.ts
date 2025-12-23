@@ -100,6 +100,14 @@ export interface SmartAsset {
   mimeType: string;
 }
 
+export interface EditRegion {
+  id: string;
+  color?: string; // UI hint
+  instruction?: string;
+  maskData: string; // Base64
+  maskMimeType: string;
+}
+
 export interface GenerationParams {
   prompt: string;
   // --- New: Isolated Prompts Storage ---
@@ -121,6 +129,13 @@ export interface GenerationParams {
 
   // --- NEW: UNIFIED VISUAL CONTROL ---
   smartAssets?: SmartAsset[];
+
+  // --- EDITING (Base + Mask + Edit Spec) ---
+  editBaseImage?: SmartAsset; // Clean base image
+  editMask?: SmartAsset; // Merged mask (white=editable, black=locked)
+  editRegions?: EditRegion[]; // Per-region masks + instructions
+  editPreviewImage?: string; // Base64 preview for UI display
+  editPreviewMimeType?: string; // Mime type for preview
 
   // --- LEGACY FIELDS (Kept for compatibility with existing saved projects/Inpainting flow) ---
   subjectReferences?: { data: string; mimeType: string }[];

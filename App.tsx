@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { Image as ImageIcon, Video, LayoutGrid, Folder, Sparkles, Settings, Star, CheckSquare, MoveHorizontal, X, Languages, Trash2, Recycle, Download } from 'lucide-react';
-import { AppMode, AspectRatio, GenerationParams, AssetItem, ImageResolution, VideoResolution, ImageModel, VideoModel, ImageStyle, Project, ChatMessage, BackgroundTask, SmartAsset, VideoDuration, VideoStyle, AgentAction, SearchPolicy } from './types';
+import { AppMode, AspectRatio, GenerationParams, AssetItem, ImageResolution, VideoResolution, ImageModel, VideoModel, ImageStyle, Project, ChatMessage, BackgroundTask, SmartAsset, VideoDuration, VideoStyle, AgentAction, SearchPolicy, EditRegion } from './types';
 import { GenerationForm } from './components/GenerationForm';
 import { AssetCard } from './components/AssetCard';
 import { ProjectSidebar } from './components/ProjectSidebar';
@@ -581,6 +581,9 @@ export function App() {
                 numberOfImages: resolvedNumberOfImages,
                 useGrounding: effectiveGrounding,
                 smartAssets: [...agentContextAssets],
+                editBaseImage: params.editBaseImage,
+                editMask: params.editMask,
+                editRegions: params.editRegions,
                 continuousMode: false
             };
             // === SEMANTIC REFERENCE MODE SELECTION ===
@@ -731,6 +734,26 @@ export function App() {
         return t('err.unknown');
     };
 
+    const buildEditPrompt = (basePrompt: string, regions?: EditRegion[]) => {
+        const normalizedBase = basePrompt && basePrompt.trim().length > 0
+            ? basePrompt.trim()
+            : 'Apply the edits described below.';
+        const regionLines = (regions || [])
+            .filter(region => region.instruction && region.instruction.trim().length > 0)
+            .map(region => `${region.id}. ${region.instruction!.trim()}`);
+
+        const editBlock = [
+            '[EDIT_SPEC]',
+            'Image 1 is the base image.',
+            'Image 2 is the mask (white=editable, black=locked).',
+            'Only modify white areas and keep the rest unchanged.',
+            ...(regionLines.length > 0 ? ['Region instructions:', ...regionLines] : []),
+            '[/EDIT_SPEC]'
+        ].join('\n');
+
+        return `${normalizedBase}\n\n${editBlock}`.trim();
+    };
+
     const handleGenerate = async (overrideParams?: Partial<GenerationParams>, modeOverride?: AppMode, onSuccess?: (asset: AssetItem) => void, historyOverride?: ChatMessage[]) => {
         // RESUME AUDIO CONTEXT ON USER CLICK: Critical for browser audio policies
         const audioCtx = getAudioContext();
@@ -795,7 +818,15 @@ export function App() {
 
                 let asset: AssetItem;
                 const genParams = { ...activeParams };
-                const historyForGeneration = currentMode === AppMode.IMAGE ? historyOverride : undefined;
+                const isEditMode = currentMode === AppMode.IMAGE && !!activeParams.editBaseImage && !!activeParams.editMask;
+                if (isEditMode) {
+                    genParams.smartAssets = [
+                        activeParams.editBaseImage as SmartAsset,
+                        activeParams.editMask as SmartAsset
+                    ];
+                    genParams.prompt = buildEditPrompt(activeParams.prompt, activeParams.editRegions);
+                }
+                const historyForGeneration = !isEditMode && currentMode === AppMode.IMAGE ? historyOverride : undefined;
                 if (currentMode === AppMode.IMAGE) {
                     asset = await generateImage(genParams, currentProjectId, onStart, controller.signal, taskId, historyForGeneration,
                         // onThoughtImage callback to capture draft images (构思图)
@@ -877,8 +908,8 @@ export function App() {
         const project = projects.find(p => p.id === projectId);
         setConfirmDialog({
             isOpen: true,
-            title: t('confirm.delete_project.title') || 'Delete Project?',
-            message: `"${project?.name || 'Project'}" - ${t('confirm.delete_project.desc') || 'This will move the project to trash.'}`,
+            title: t('confirm.delete.title'),
+            message: `"${project?.name || 'Project'}" - ${t('confirm.delete.desc')}`,
             confirmLabel: t('btn.delete') || 'Delete',
             cancelLabel: t('btn.cancel') || 'Cancel',
             isDestructive: true,
@@ -915,20 +946,56 @@ export function App() {
     };
     const handleVideoContinue = (data: string, mimeType: string) => { setParams(prev => ({ ...prev, inputVideoData: data, inputVideoMimeType: mimeType })); setMode(AppMode.VIDEO); setActiveTab('studio'); setRightPanelMode('GALLERY'); addToast('info', 'Video Extension', t('help.extend_desc')); };
     const handleRemix = (asset: AssetItem) => { setParams(prev => ({ ...prev, prompt: asset.prompt })); if (asset.type === 'IMAGE') handleUseAsReference(asset); };
-    const handleCanvasSave = async (compositeDataUrl: string, maskDataUrl?: string) => {
-        const matches = compositeDataUrl.match(/^data:(.+);base64,(.+)$/);
-        if (matches) {
-            const mimeType = matches[1]; const base64Data = matches[2];
-            const smartAsset: SmartAsset = {
-                id: crypto.randomUUID(), data: base64Data, mimeType: mimeType
-            };
-            setParams(prev => ({
-                ...prev, smartAssets: [...(prev.smartAssets || []), smartAsset],
-                maskImage: maskDataUrl ? maskDataUrl.split(',')[1] : undefined, maskImageMimeType: maskDataUrl ? 'image/png' : undefined
-            }));
-            setRightPanelMode('GALLERY'); setActiveTab('studio'); setEditorAsset(null);
-            addToast('success', 'Ready to Generate', 'Image added to Smart Assets.');
-        }
+    const handleCanvasSave = async (payload: {
+        baseImageDataUrl: string;
+        previewDataUrl: string;
+        mergedMaskDataUrl: string;
+        regions: Array<{ id: string; color: string; instruction: string; maskDataUrl: string }>;
+    }) => {
+        const baseMatch = payload.baseImageDataUrl.match(/^data:(.+);base64,(.+)$/);
+        const maskMatch = payload.mergedMaskDataUrl.match(/^data:(.+);base64,(.+)$/);
+        const previewMatch = payload.previewDataUrl.match(/^data:(.+);base64,(.+)$/);
+        if (!baseMatch || !maskMatch) return;
+
+        const baseAsset: SmartAsset = {
+            id: crypto.randomUUID(),
+            data: baseMatch[2],
+            mimeType: baseMatch[1]
+        };
+
+        const maskAsset: SmartAsset = {
+            id: crypto.randomUUID(),
+            data: maskMatch[2],
+            mimeType: maskMatch[1]
+        };
+
+        const editRegions = payload.regions
+            .map(region => {
+                const regionMatch = region.maskDataUrl.match(/^data:(.+);base64,(.+)$/);
+                if (!regionMatch) return null;
+                const entry: EditRegion = {
+                    id: region.id,
+                    color: region.color,
+                    instruction: region.instruction,
+                    maskData: regionMatch[2],
+                    maskMimeType: regionMatch[1]
+                };
+                return entry;
+            })
+            .filter((region): region is EditRegion => region !== null);
+
+        setParams(prev => ({
+            ...prev,
+            editBaseImage: baseAsset,
+            editMask: maskAsset,
+            editRegions: editRegions.length > 0 ? editRegions : undefined,
+            editPreviewImage: previewMatch ? previewMatch[2] : prev.editPreviewImage,
+            editPreviewMimeType: previewMatch ? previewMatch[1] : prev.editPreviewMimeType
+        }));
+        setRightPanelMode('GALLERY');
+        setActiveTab('studio');
+        setEditorAsset(null);
+        addToast('success', 'Edit Ready', 'Base image and mask saved for editing.');
     };
 
     if (!isLoaded) return <div className="h-screen w-screen bg-dark-bg text-white flex items-center justify-center">Loading Studio...</div>;
