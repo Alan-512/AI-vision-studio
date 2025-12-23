@@ -536,13 +536,20 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         ) : (
           <>
             {history.map((msg, idx) => {
-              const isLastAiMessage = idx === history.length - 1 && msg.role === 'model';
+              // Find the last AI message index for tool call display (ES5 compatible)
+              let lastAiIdx = -1;
+              for (let i = history.length - 1; i >= 0; i--) {
+                if (history[i].role === 'model') { lastAiIdx = i; break; }
+              }
+              const isLastAiMessage = idx === lastAiIdx;
+              const isStreaming = isLastAiMessage && msg.isThinking;
+
               return (
                 <ChatBubble
                   key={idx}
                   message={msg}
-                  nativeThinkingText={isLastAiMessage && msg.isThinking ? thinkingText : undefined}
-                  // Only pass search/tool data to last AI message during loading
+                  nativeThinkingText={isStreaming ? thinkingText : undefined}
+                  // Pass search/tool data to last AI message (regardless of isThinking)
                   searchContent={isLastAiMessage ? searchContent : undefined}
                   searchIsComplete={isLastAiMessage ? searchIsComplete : undefined}
                   searchIsCollapsed={isLastAiMessage ? searchIsCollapsed : undefined}

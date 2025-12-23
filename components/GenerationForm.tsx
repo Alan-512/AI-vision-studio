@@ -354,6 +354,16 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
   const removeImage = (field: 'start' | 'end') => { setParams(prev => { if (field === 'start') return { ...prev, videoStartImage: undefined, videoStartImageMimeType: undefined }; if (field === 'end') return { ...prev, videoEndImage: undefined, videoEndImageMimeType: undefined }; return prev; }); };
   const removeVideoStyleRef = (index: number) => setParams(prev => ({ ...prev, videoStyleReferences: prev.videoStyleReferences?.filter((_, i) => i !== index) }));
   const removeSmartAsset = (id: string) => { setParams(prev => ({ ...prev, smartAssets: prev.smartAssets?.filter(a => a.id !== id) })); };
+  const clearEditPreview = () => {
+    setParams(prev => ({
+      ...prev,
+      editBaseImage: undefined,
+      editMask: undefined,
+      editRegions: undefined,
+      editPreviewImage: undefined,
+      editPreviewMimeType: undefined
+    }));
+  };
 
   const handleGenerateClick = async () => { if (activeTab === 'chat') { setIsAnalyzing(true); try { const chatPrompt = await extractPromptFromHistory(chatHistory, mode); if (chatPrompt) onGenerate({ prompt: chatPrompt }); else { const lastUserMsg = [...chatHistory].reverse().find(m => m.role === 'user'); if (lastUserMsg && lastUserMsg.content) onGenerate({ prompt: lastUserMsg.content }); } } catch (e) { console.error("Failed to extract prompt", e); } finally { setIsAnalyzing(false); } } else { onGenerate(); } };
   const handleDragOver = (e: React.DragEvent, target: 'smart' | 'videoStart' | 'videoEnd' | 'videoStyle') => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; setDragTarget(target); };
@@ -587,6 +597,25 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
               </div>
             )}
           </div>
+
+          {mode === AppMode.IMAGE && params.editPreviewImage && params.editPreviewMimeType && (
+            <div className="space-y-3 animate-in fade-in slide-in-from-bottom-3">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">{t('lbl.edit_preview')}</span>
+                <button onClick={clearEditPreview} className="text-[10px] text-gray-400 hover:text-white transition-colors">
+                  {t('btn.clear_edit')}
+                </button>
+              </div>
+              <div className="flex items-center gap-3">
+                <div className="relative w-20 h-20 rounded-lg overflow-hidden border border-dark-border bg-black">
+                  <img src={`data:${params.editPreviewMimeType};base64,${params.editPreviewImage}`} alt="Edit Preview" className="w-full h-full object-cover" />
+                </div>
+                <div className="text-[11px] text-gray-400 leading-relaxed">
+                  {t('help.edit_preview')}
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* SMART ASSETS */}
           {mode === AppMode.IMAGE && (

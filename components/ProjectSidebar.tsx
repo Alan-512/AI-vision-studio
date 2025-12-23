@@ -75,12 +75,12 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
   return (
     <>
       {/* Invisible backdrop to capture clicks outside the sidebar */}
-      <div 
+      <div
         className="fixed inset-0 z-40 bg-transparent"
         onClick={onClose}
       />
-      
-      <div 
+
+      <div
         className="absolute top-0 bottom-0 left-24 w-72 bg-dark-panel border-r border-dark-border z-50 shadow-2xl shadow-black/50 flex flex-col animate-in slide-in-from-left-5 fade-in duration-200"
         onClick={(e) => e.stopPropagation()} // Prevent clicks inside from closing
       >
@@ -90,7 +90,7 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
             <X size={16} />
           </button>
         </div>
-        
+
         <div className="p-4 border-b border-dark-border">
           <button
             onClick={() => {
@@ -116,25 +116,24 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
               return (
                 <div
                   key={project.id}
-                  className={`group flex items-center justify-between p-3 rounded-lg cursor-pointer transition-all border ${
-                    project.id === activeProjectId && !isEditing
+                  className={`group flex items-center justify-between p-3 rounded-lg cursor-pointer transition-all border ${project.id === activeProjectId && !isEditing
                       ? 'bg-brand-500/10 text-white border-brand-500/30 shadow-sm'
                       : 'text-gray-400 hover:bg-white/5 hover:text-gray-200 border-transparent'
-                  }`}
+                    }`}
                   onClick={() => !isEditing && onSelectProject(project.id)}
                 >
                   <div className="flex items-center gap-3 overflow-hidden flex-1 min-w-0 mr-2">
                     <div className="relative shrink-0">
-                       <MessageSquare size={18} className={project.id === activeProjectId && !isEditing ? 'text-brand-500' : 'text-gray-600'} />
-                       {isGenerating && (
-                          <div className="absolute -top-1 -right-1 bg-dark-panel rounded-full p-[1px]">
-                             <Loader2 size={10} className="text-brand-500 animate-spin" />
-                          </div>
-                       )}
+                      <MessageSquare size={18} className={project.id === activeProjectId && !isEditing ? 'text-brand-500' : 'text-gray-600'} />
+                      {isGenerating && (
+                        <div className="absolute -top-1 -right-1 bg-dark-panel rounded-full p-[1px]">
+                          <Loader2 size={10} className="text-brand-500 animate-spin" />
+                        </div>
+                      )}
                     </div>
                     <div className="flex flex-col min-w-0 flex-1">
                       {isEditing ? (
-                        <input 
+                        <input
                           ref={editInputRef}
                           value={editName}
                           onChange={(e) => setEditName(e.target.value)}
@@ -174,9 +173,8 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
                             alert(t('nav.delete_error'));
                             return;
                           }
-                          if (confirm(t('nav.delete_confirm'))) {
-                            onDeleteProject(project.id);
-                          }
+                          // Let parent handle confirmation dialog
+                          onDeleteProject(project.id);
                         }}
                         className="p-1.5 hover:bg-red-500/20 text-gray-500 hover:text-red-500 rounded transition-colors"
                         title="Delete Project"
@@ -190,7 +188,7 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
             })
           )}
         </div>
-        
+
         <div className="p-3 bg-black/20 text-[10px] text-gray-600 text-center border-t border-dark-border">
           Context is saved automatically.
         </div>

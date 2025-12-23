@@ -1,6 +1,6 @@
 
 import { GoogleGenAI, Part, Content, FunctionDeclaration, Type } from "@google/genai";
-import { ChatMessage, AppMode, SmartAsset, GenerationParams, ImageModel, AgentAction, AssetItem, AspectRatio, ImageResolution, TextModel, SearchPolicy } from "../types";
+import { ChatMessage, AppMode, SmartAsset, GenerationParams, ImageModel, AgentAction, AssetItem, AspectRatio, ImageResolution, TextModel } from "../types";
 import { createTrackedBlobUrl } from "./storageService";
 
 // Key management
@@ -305,7 +305,7 @@ export const streamChatResponse = async (
     _onUpdateContext?: (summary: string, cursor: number) => void,
     onToolCall?: (action: AgentAction) => void,
     useSearch?: boolean,
-    params?: GenerationParams,
+    _params?: GenerationParams,
     _agentContextAssets?: SmartAsset[],
     onThoughtSignatures?: (signatures: Array<{ partIndex: number; signature: string }>) => void,
     onThoughtImage?: (imageData: { data: string; mimeType: string; isFinal: boolean }) => void,
@@ -336,14 +336,24 @@ export const streamChatResponse = async (
         const searchInstruction = `You are in SEARCH PHASE for image generation.
 ${contextPart}
 
-[OUTPUT FORMAT - STRICT JSON ONLY]
-Return ONLY a valid JSON object with:
-- facts: array of { "item": string, "source": string }
-- promptDraft: string (use the user's language)
+[OUTPUT FORMAT]
+First, output a brief narrative in the USER'S LANGUAGE describing:
+1. What you are searching for
+2. Key findings from your search (visual details, character features, etc.)
+
+Then, at the very end, output a JSON block wrapped in \`\`\`json ... \`\`\` containing:
+{
+  "facts": [{ "item": "label", "source": "detailed description" }],
+  "promptDraft": "synthesized prompt in user's language"
+}
+
+\`\`\`json
+{"facts": [...], "promptDraft": "..."}
+\`\`\`
 
 Rules:
-- Use googleSearch ONLY when external facts are needed.
-- Do NOT output markdown, code fences, or extra commentary.
+- Use googleSearch when external facts are needed.
+- Output narrative FIRST for user visibility, JSON LAST for parsing.
 `;
 
         const searchContents = convertHistoryToNativeFormat(history, realModelName);

@@ -1,23 +1,97 @@
 
-import React, { useRef, useState } from 'react';
-import { Save, Undo, Brush, Eraser, Square, MousePointer2 } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { Save, Undo, Brush, Eraser, Square, MousePointer2, ArrowUpRight, Type } from 'lucide-react';
 import { useLanguage } from '../contexts/LanguageContext';
+
+interface CanvasEditRegionExport {
+  id: string;
+  color: string;
+  instruction: string;
+  maskDataUrl: string;
+}
+
+interface CanvasEditorExportPayload {
+  baseImageDataUrl: string;
+  previewDataUrl: string;
+  mergedMaskDataUrl: string;
+  regions: CanvasEditRegionExport[];
+}
 
 interface CanvasEditorProps {
   imageUrl: string;
-  // Updated signature: returns composite, and optionally mask and original if needed
-  onSave: (compositeDataUrl: string, maskDataUrl?: string) => void;
+  onSave: (payload: CanvasEditorExportPayload) => void;
   onClose: () => void;
 }
 
-type ToolType = 'brush' | 'rect' | 'marker' | 'eraser';
+type ToolType = 'brush' | 'rect' | 'marker' | 'eraser' | 'arrow' | 'text';
+
+interface RegionState {
+  id: string;
+  color: string;
+  instruction: string;
+  markerPosition?: { x: number; y: number };
+  rectLabelPosition?: { x: number; y: number };
+}
+
+interface RegionSnapshot {
+  id: string;
+  imageData: ImageData;
+}
+
+interface RegionCreationResult {
+  region: RegionState;
+  regions: RegionState[];
+  nextLabelIndex: number;
+}
+
+interface TextAnnotation {
+  id: string;
+  x: number;
+  y: number;
+  text: string;
+  color: string;
+  fontSize: number;
+  width: number;
+  height: number;
+  regionId?: string;
+  instructionText?: string;
+}
+
+interface ArrowAnnotation {
+  id: string;
+  startX: number;
+  startY: number;
+  endX: number;
+  endY: number;
+  color: string;
+  lineWidth: number;
+  headLength: number;
+}
+
+interface TextEntryState {
+  id?: string;
+  x: number;
+  y: number;
+  screenX: number;
+  screenY: number;
+  value: string;
+  width: number;
+  height: number;
+  fontSize: number;
+  color: string;
+}
 
 interface HistoryItem {
-  imageData: ImageData;
+  regions: RegionState[];
+  regionSnapshots: RegionSnapshot[];
+  textAnnotations: TextAnnotation[];
+  arrowAnnotations: ArrowAnnotation[];
+  activeRegionId: string | null;
   labelIndex: number;
 }
 
 const MARKER_CURSOR = `crosshair`;
+const TEXT_BOX_PADDING = 6;
 
 export const CanvasEditor: React.FC<CanvasEditorProps> = ({ imageUrl, onSave, onClose }) => {
   const { t } = useLanguage();
@@ -25,19 +99,32 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ imageUrl, onSave, on
   // Refs
   const containerRef = useRef<HTMLDivElement>(null); // The scrollable/clippable viewport
   const contentRef = useRef<HTMLDivElement>(null);   // The transforming wrapper (scale/translate)
-  const canvasRef = useRef<HTMLCanvasElement>(null); // The transparent drawing layer
+  const maskPreviewCanvasRef = useRef<HTMLCanvasElement>(null); // Composite preview of all region masks
+  const markerCanvasRef = useRef<HTMLCanvasElement>(null); // Marker/label layer
+  const annotationCanvasRef = useRef<HTMLCanvasElement>(null); // Arrow/text annotations
   const bgImageRef = useRef<HTMLImageElement>(null); // The static background image
+  const regionCanvasesRef = useRef<Map<string, HTMLCanvasElement>>(new Map());
 
   // Tools
   const [activeTool, setActiveTool] = useState<ToolType>('brush');
   const [brushSize, setBrushSize] = useState(15);
-  const [brushColor, setBrushColor] = useState('#ef4444'); // Default Red-500
+  const [brushColor, setBrushColor] = useState('#ef4444'); // Region color (UI only)
 
   // State
   const [isDrawing, setIsDrawing] = useState(false);
   const [history, setHistory] = useState<HistoryItem[]>([]);
+  const [regions, setRegions] = useState<RegionState[]>([]);
+  const [activeRegionId, setActiveRegionId] = useState<string | null>(null);
   const [nextLabelIndex, setNextLabelIndex] = useState(1);
   const [isImageLoaded, setIsImageLoaded] = useState(false);
+  const [imageSize, setImageSize] = useState({ width: 0, height: 0 });
+  const [textEntry, setTextEntry] = useState<TextEntryState | null>(null);
+  const [textAnnotations, setTextAnnotations] = useState<TextAnnotation[]>([]);
+  const [arrowAnnotations, setArrowAnnotations] = useState<ArrowAnnotation[]>([]);
+  const [selectedTextId, setSelectedTextId] = useState<string | null>(null);
+  const [isDraggingText, setIsDraggingText] = useState(false);
+  const [isResizingText, setIsResizingText] = useState(false);
+  const [textHoverState, setTextHoverState] = useState<'none' | 'body' | 'handle'>('none');
 
   // Viewport Transform State
   const [scale, setScale] = useState(1);
@@ -45,19 +132,70 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ imageUrl, onSave, on
   const [isPanning, setIsPanning] = useState(false);
   const [panStart, setPanStart] = useState({ x: 0, y: 0 });
 
+  const updateRegionInstruction = (id: string, instruction: string) => {
+    setRegions(prev => prev.map(region => (
+      region.id === id ? { ...region, instruction } : region
+    )));
+  };
+
+  const handleSelectRegion = (id: string) => {
+    setActiveRegionId(id);
+    const region = regions.find(r => r.id === id);
+    if (region) {
+      setBrushColor(region.color);
+    }
+  };
+
+  useEffect(() => {
+    if (textEntry && textInputRef.current && !textFocusRef.current) {
+      textInputRef.current.focus();
+      textInputRef.current.select();
+      textFocusRef.current = true;
+    }
+    if (!textEntry) {
+      textFocusRef.current = false;
+    }
+  }, [textEntry]);
+
+  useEffect(() => {
+    if (activeTool !== 'text' && textEntry) {
+      setTextEntry(null);
+    }
+    if (activeTool !== 'text' && selectedTextId) {
+      setSelectedTextId(null);
+    }
+    if (activeTool !== 'text' && textHoverState !== 'none') {
+      setTextHoverState('none');
+    }
+  }, [activeTool, textEntry, selectedTextId, textHoverState]);
+
+  useEffect(() => {
+    renderAnnotations(textAnnotations, arrowAnnotations, textEntry ? null : selectedTextId);
+  }, [textAnnotations, arrowAnnotations, selectedTextId, textEntry]);
+
   // Rect Drawing Temp State
   const dragStartRef = useRef<{ x: number, y: number } | null>(null);
   const snapshotRef = useRef<ImageData | null>(null);
+  const arrowStartRef = useRef<{ x: number; y: number } | null>(null);
+  const textInputRef = useRef<HTMLInputElement>(null);
+  const textFocusRef = useRef(false);
+  const dragOffsetRef = useRef<{ x: number; y: number } | null>(null);
+  const resizeStartRef = useRef<{ x: number; y: number; fontSize: number } | null>(null);
 
   // Initialize Canvas Sizing once image loads
   const handleImageLoad = (e: React.SyntheticEvent<HTMLImageElement>) => {
     const img = e.currentTarget;
     setIsImageLoaded(true);
 
-    if (canvasRef.current && containerRef.current) {
+    if (maskPreviewCanvasRef.current && markerCanvasRef.current && annotationCanvasRef.current && containerRef.current) {
       // Match canvas resolution to native image resolution
-      canvasRef.current.width = img.naturalWidth;
-      canvasRef.current.height = img.naturalHeight;
+      maskPreviewCanvasRef.current.width = img.naturalWidth;
+      maskPreviewCanvasRef.current.height = img.naturalHeight;
+      markerCanvasRef.current.width = img.naturalWidth;
+      markerCanvasRef.current.height = img.naturalHeight;
+      annotationCanvasRef.current.width = img.naturalWidth;
+      annotationCanvasRef.current.height = img.naturalHeight;
+      setImageSize({ width: img.naturalWidth, height: img.naturalHeight });
 
       // Initial "Fit to Screen" Logic
       const container = containerRef.current;
@@ -75,51 +213,101 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ imageUrl, onSave, on
       setOffset({ x: 0, y: 0 });
 
       // Save initial blank state
-      saveState(1);
+      saveState(1, []);
     }
   };
 
-  const saveState = (labelIndexOverride?: number) => {
-    const canvas = canvasRef.current;
-    const ctx = canvas?.getContext('2d');
-    if (canvas && ctx) {
-      const currentLabelIndex = labelIndexOverride !== undefined ? labelIndexOverride : nextLabelIndex;
-      const newItem = {
-        // We only save the drawing layer, NOT the background image. Lightweight and correct.
-        imageData: ctx.getImageData(0, 0, canvas.width, canvas.height),
-        labelIndex: currentLabelIndex
-      };
-
-      if (history.length > 10) {
-        setHistory(prev => [...prev.slice(1), newItem]);
-      } else {
-        setHistory(prev => [...prev, newItem]);
+  const snapshotRegions = (regionList: RegionState[]): RegionSnapshot[] => {
+    const snapshots: RegionSnapshot[] = [];
+    regionList.forEach(region => {
+      const canvas = regionCanvasesRef.current.get(region.id);
+      const ctx = canvas?.getContext('2d');
+      if (canvas && ctx) {
+        snapshots.push({
+          id: region.id,
+          imageData: ctx.getImageData(0, 0, canvas.width, canvas.height)
+        });
       }
+    });
+    return snapshots;
+  };
+
+  const saveState = (
+    labelIndexOverride?: number,
+    regionsOverride?: RegionState[],
+    activeRegionOverride?: string | null,
+    textOverride?: TextAnnotation[],
+    arrowOverride?: ArrowAnnotation[]
+  ) => {
+    const currentLabelIndex = labelIndexOverride !== undefined ? labelIndexOverride : nextLabelIndex;
+    const regionList = regionsOverride ? regionsOverride.map(r => ({ ...r })) : regions.map(r => ({ ...r }));
+    const textList = textOverride ? textOverride.map(item => ({ ...item })) : textAnnotations.map(item => ({ ...item }));
+    const arrowList = arrowOverride ? arrowOverride.map(item => ({ ...item })) : arrowAnnotations.map(item => ({ ...item }));
+    const newItem: HistoryItem = {
+      regions: regionList,
+      regionSnapshots: snapshotRegions(regionList),
+      textAnnotations: textList,
+      arrowAnnotations: arrowList,
+      activeRegionId: activeRegionOverride !== undefined ? activeRegionOverride : activeRegionId,
+      labelIndex: currentLabelIndex
+    };
+
+    if (history.length > 10) {
+      setHistory(prev => [...prev.slice(1), newItem]);
+    } else {
+      setHistory(prev => [...prev, newItem]);
     }
+  };
+
+  const restoreFromHistory = (snapshot: HistoryItem) => {
+    const newRegionMap = new Map<string, HTMLCanvasElement>();
+    snapshot.regions.forEach(region => {
+      const canvas = document.createElement('canvas');
+      canvas.width = imageSize.width;
+      canvas.height = imageSize.height;
+      const ctx = canvas.getContext('2d');
+      const data = snapshot.regionSnapshots.find(r => r.id === region.id);
+      if (ctx && data) {
+        ctx.putImageData(data.imageData, 0, 0);
+      }
+      newRegionMap.set(region.id, canvas);
+    });
+
+    regionCanvasesRef.current = newRegionMap;
+    setRegions(snapshot.regions.map(r => ({ ...r })));
+    setTextAnnotations(snapshot.textAnnotations.map(item => ({ ...item })));
+    setArrowAnnotations(snapshot.arrowAnnotations.map(item => ({ ...item })));
+    setSelectedTextId(null);
+    setIsDraggingText(false);
+    setIsResizingText(false);
+    setActiveRegionId(snapshot.activeRegionId);
+    setNextLabelIndex(snapshot.labelIndex);
+    renderMaskPreview(snapshot.regions);
+    renderMarkerLayer(snapshot.regions);
+    renderAnnotations(snapshot.textAnnotations, snapshot.arrowAnnotations, null);
   };
 
   const handleUndo = () => {
-    const canvas = canvasRef.current;
-    const ctx = canvas?.getContext('2d');
-    if (canvas && ctx && history.length > 1) {
+    if (history.length > 1) {
       const newHistory = [...history];
       newHistory.pop(); // Remove current state
       const previousState = newHistory[newHistory.length - 1];
-      ctx.putImageData(previousState.imageData, 0, 0);
-      setNextLabelIndex(previousState.labelIndex);
+      restoreFromHistory(previousState);
       setHistory(newHistory);
-    } else if (history.length === 1 && canvas) {
-      // Clear to initial blank state
-      ctx?.clearRect(0, 0, canvas.width, canvas.height);
+    } else if (history.length === 1) {
+      const previousState = history[0];
+      restoreFromHistory(previousState);
     }
   };
 
   // Convert screen coordinates to canvas coordinates (accounting for CSS transform & resolution)
   const getCanvasCoordinates = (e: React.MouseEvent | React.TouchEvent) => {
-    const canvas = canvasRef.current;
-    if (!canvas) return { x: 0, y: 0 };
+    const canvas = maskPreviewCanvasRef.current;
+    const image = bgImageRef.current;
+    const target = image || canvas;
+    if (!target) return { x: 0, y: 0, inBounds: false };
 
-    const rect = canvas.getBoundingClientRect();
+    const rect = target.getBoundingClientRect();
     let clientX, clientY;
 
     if ('touches' in e) {
@@ -130,11 +318,92 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ imageUrl, onSave, on
       clientY = (e as React.MouseEvent).clientY;
     }
 
-    // Map screen pixel to native image pixel
-    const x = (clientX - rect.left) * (canvas.width / rect.width);
-    const y = (clientY - rect.top) * (canvas.height / rect.height);
+    const inBounds = clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom;
 
-    return { x, y };
+    const width = canvas?.width || image?.naturalWidth || rect.width;
+    const height = canvas?.height || image?.naturalHeight || rect.height;
+
+    // Map screen pixel to native image pixel
+    const x = (clientX - rect.left) * (width / rect.width);
+    const y = (clientY - rect.top) * (height / rect.height);
+
+    const clampedX = Math.min(Math.max(x, 0), width);
+    const clampedY = Math.min(Math.max(y, 0), height);
+
+    return { x: clampedX, y: clampedY, inBounds };
+  };
+
+  const getClientPoint = (e: React.MouseEvent | React.TouchEvent) => {
+    if ('touches' in e) {
+      if (e.touches.length > 0) {
+        return { x: e.touches[0].clientX, y: e.touches[0].clientY };
+      }
+      const changed = (e as React.TouchEvent).changedTouches;
+      if (changed && changed.length > 0) {
+        return { x: changed[0].clientX, y: changed[0].clientY };
+      }
+    }
+    return { x: (e as React.MouseEvent).clientX, y: (e as React.MouseEvent).clientY };
+  };
+
+  const getScreenCoordinates = (x: number, y: number) => {
+    const canvas = maskPreviewCanvasRef.current;
+    const image = bgImageRef.current;
+    const target = image || canvas;
+    if (!target) return { x: 0, y: 0 };
+    const rect = target.getBoundingClientRect();
+    const width = canvas?.width || image?.naturalWidth || rect.width;
+    const height = canvas?.height || image?.naturalHeight || rect.height;
+    return {
+      x: rect.left + (x / width) * rect.width,
+      y: rect.top + (y / height) * rect.height
+    };
+  };
+
+  const measureEntryBox = (text: string, fontSize: number) => {
+    const annotationCanvas = annotationCanvasRef.current;
+    const annotationCtx = annotationCanvas?.getContext('2d');
+    if (!annotationCtx) {
+      return { width: 56, height: Math.max(18, fontSize * 1.1) };
+    }
+    const sample = text && text.length > 0 ? text : ' ';
+    const metrics = measureTextBox(annotationCtx, sample, fontSize);
+    const minWidth = Math.max(32, Math.round(fontSize * 1.1));
+    return {
+      width: Math.max(minWidth, metrics.width),
+      height: Math.max(18, metrics.height)
+    };
+  };
+
+  const openTextEntry = (e: React.MouseEvent | React.TouchEvent, annotation?: TextAnnotation) => {
+    if (textEntry) return;
+    const { x, y, inBounds } = getCanvasCoordinates(e);
+    if (!inBounds) return;
+    const container = containerRef.current;
+    if (!container) return;
+    const rect = container.getBoundingClientRect();
+    const annotationCanvas = annotationCanvasRef.current;
+    const annotationCtx = annotationCanvas?.getContext('2d');
+    const scaleFactor = annotationCtx ? Math.max(1, getDynamicScaleFactor(annotationCtx)) : 1;
+    const fontSize = annotation?.fontSize ?? Math.round(22 * scaleFactor);
+    const color = annotation?.color ?? brushColor;
+    const { width, height } = measureEntryBox(annotation?.text ?? '', fontSize);
+
+    const entryX = annotation ? annotation.x : x;
+    const entryY = annotation ? annotation.y : y;
+    const screenPoint = getScreenCoordinates(entryX - TEXT_BOX_PADDING, entryY - TEXT_BOX_PADDING);
+    setTextEntry({
+      id: annotation?.id,
+      x: entryX,
+      y: entryY,
+      screenX: screenPoint.x - rect.left,
+      screenY: screenPoint.y - rect.top,
+      value: annotation?.text ?? '',
+      width: annotation?.width ?? width,
+      height: annotation?.height ?? height,
+      fontSize,
+      color
+    });
   };
 
   // --- Input Handlers ---
@@ -171,6 +440,30 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ imageUrl, onSave, on
     stopDrawing();
   };
 
+  const handleClick = (e: React.MouseEvent) => {
+    if (isPanning || activeTool !== 'text') return;
+    if (textEntry) return;
+    const { x, y, inBounds } = getCanvasCoordinates(e);
+    if (!inBounds) return;
+    const hit = getTextHit(x, y);
+    if (hit) {
+      setSelectedTextId(hit.annotation.id);
+      return;
+    }
+    setSelectedTextId(null);
+    openTextEntry(e);
+  };
+
+  const handleDoubleClick = (e: React.MouseEvent) => {
+    if (isPanning || activeTool !== 'text') return;
+    const { x, y, inBounds } = getCanvasCoordinates(e);
+    if (!inBounds) return;
+    const hit = getTextHit(x, y);
+    if (!hit) return;
+    setSelectedTextId(hit.annotation.id);
+    openTextEntry(e, hit.annotation);
+  };
+
   const handleWheel = (e: React.WheelEvent) => {
     const zoomSensitivity = 0.001;
     const delta = -e.deltaY * zoomSensitivity;
@@ -178,12 +471,379 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ imageUrl, onSave, on
     setScale(newScale);
   };
 
-  const startDrawing = (e: React.MouseEvent | React.TouchEvent) => {
-    const { x, y } = getCanvasCoordinates(e);
-    const ctx = canvasRef.current?.getContext('2d');
-    const canvas = canvasRef.current;
+  const renderMarkerLayer = (regionList: RegionState[] = regions) => {
+    const canvas = markerCanvasRef.current;
+    const ctx = canvas?.getContext('2d');
+    if (!canvas || !ctx) return;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    regionList.forEach(region => {
+      if (region.markerPosition) {
+        drawMarker(ctx, region.markerPosition.x, region.markerPosition.y, region.id, region.color);
+      }
+      if (region.rectLabelPosition) {
+        drawRectLabel(ctx, region.rectLabelPosition.x, region.rectLabelPosition.y, region.id, region.color);
+      }
+    });
+  };
 
-    if (ctx && canvas) {
+  const renderMaskPreview = (regionList?: RegionState[]) => {
+    const canvas = maskPreviewCanvasRef.current;
+    const ctx = canvas?.getContext('2d');
+    if (!canvas || !ctx) return;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    if (!regionList) {
+      regionCanvasesRef.current.forEach(regionCanvas => {
+        ctx.drawImage(regionCanvas, 0, 0);
+      });
+      return;
+    }
+    regionList.forEach(region => {
+      const regionCanvas = regionCanvasesRef.current.get(region.id);
+      if (regionCanvas) {
+        ctx.drawImage(regionCanvas, 0, 0);
+      }
+    });
+  };
+
+  const createRegionCanvas = () => {
+    const canvas = document.createElement('canvas');
+    canvas.width = imageSize.width;
+    canvas.height = imageSize.height;
+    return canvas;
+  };
+
+  const createRegion = (
+    markerPosition?: { x: number; y: number },
+    options?: { skipHistory?: boolean; instruction?: string }
+  ): RegionCreationResult => {
+    const id = String(nextLabelIndex);
+    const nextIndex = nextLabelIndex + 1;
+    const newRegion: RegionState = {
+      id,
+      color: brushColor,
+      instruction: options?.instruction ?? '',
+      markerPosition
+    };
+    const updatedRegions = [...regions, newRegion];
+    regionCanvasesRef.current.set(id, createRegionCanvas());
+    setRegions(updatedRegions);
+    setActiveRegionId(id);
+    setNextLabelIndex(nextIndex);
+    renderMarkerLayer(updatedRegions);
+    renderMaskPreview(updatedRegions);
+    if (!options?.skipHistory) {
+      saveState(nextIndex, updatedRegions, id);
+    }
+    return { region: newRegion, regions: updatedRegions, nextLabelIndex: nextIndex };
+  };
+
+  const getActiveRegion = () => {
+    return activeRegionId ? regions.find(r => r.id === activeRegionId) : undefined;
+  };
+
+  const drawArrow = (
+    ctx: CanvasRenderingContext2D,
+    startX: number,
+    startY: number,
+    endX: number,
+    endY: number,
+    options?: { color?: string; lineWidth?: number; headLength?: number }
+  ) => {
+    const scaleFactor = Math.max(1, getDynamicScaleFactor(ctx));
+    const lineWidth = options?.lineWidth ?? Math.max(2, brushSize * 0.2);
+    const headLength = options?.headLength ?? Math.max(26 * scaleFactor, lineWidth * 7);
+    const color = options?.color ?? brushColor;
+    const angle = Math.atan2(endY - startY, endX - startX);
+
+    ctx.save();
+    ctx.strokeStyle = color;
+    ctx.fillStyle = color;
+    ctx.lineWidth = lineWidth;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+
+    ctx.beginPath();
+    ctx.moveTo(startX, startY);
+    ctx.lineTo(endX, endY);
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.moveTo(endX, endY);
+    ctx.lineTo(
+      endX - headLength * Math.cos(angle - Math.PI / 6),
+      endY - headLength * Math.sin(angle - Math.PI / 6)
+    );
+    ctx.lineTo(
+      endX - headLength * Math.cos(angle + Math.PI / 6),
+      endY - headLength * Math.sin(angle + Math.PI / 6)
+    );
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  };
+
+  const measureTextBox = (ctx: CanvasRenderingContext2D, text: string, fontSize: number) => {
+    ctx.font = `600 ${fontSize}px "Inter", sans-serif`;
+    const width = ctx.measureText(text).width;
+    const height = fontSize * 1.2;
+    return { width, height };
+  };
+
+  const drawTextAnnotation = (ctx: CanvasRenderingContext2D, annotation: TextAnnotation) => {
+    ctx.save();
+    ctx.font = `600 ${annotation.fontSize}px "Inter", sans-serif`;
+    ctx.fillStyle = annotation.color;
+    ctx.strokeStyle = 'rgba(0,0,0,0.45)';
+    ctx.lineWidth = Math.max(2, annotation.fontSize * 0.12);
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+    ctx.strokeText(annotation.text, annotation.x, annotation.y);
+    ctx.fillText(annotation.text, annotation.x, annotation.y);
+    ctx.restore();
+  };
+
+  const drawTextSelection = (ctx: CanvasRenderingContext2D, annotation: TextAnnotation) => {
+    const padding = TEXT_BOX_PADDING;
+    const handleSize = Math.max(10, annotation.fontSize * 0.4);
+    const x = annotation.x - padding;
+    const y = annotation.y - padding;
+    const width = annotation.width + padding * 2;
+    const height = annotation.height + padding * 2;
+
+    ctx.save();
+    ctx.strokeStyle = 'rgba(255,255,255,0.7)';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([6, 4]);
+    ctx.strokeRect(x, y, width, height);
+    ctx.setLineDash([]);
+    ctx.fillStyle = 'rgba(255,255,255,0.9)';
+    ctx.fillRect(x + width - handleSize, y + height - handleSize, handleSize, handleSize);
+    ctx.strokeStyle = 'rgba(0,0,0,0.45)';
+    ctx.strokeRect(x + width - handleSize, y + height - handleSize, handleSize, handleSize);
+    ctx.restore();
+  };
+
+  const renderAnnotations = (
+    textList: TextAnnotation[] = textAnnotations,
+    arrowList: ArrowAnnotation[] = arrowAnnotations,
+    selectedId: string | null = selectedTextId,
+    previewArrow?: ArrowAnnotation
+  ) => {
+    const annotationCanvas = annotationCanvasRef.current;
+    const annotationCtx = annotationCanvas?.getContext('2d');
+    if (!annotationCanvas || !annotationCtx) return;
+
+    annotationCtx.clearRect(0, 0, annotationCanvas.width, annotationCanvas.height);
+
+    arrowList.forEach(arrow => {
+      drawArrow(annotationCtx, arrow.startX, arrow.startY, arrow.endX, arrow.endY, {
+        color: arrow.color,
+        lineWidth: arrow.lineWidth,
+        headLength: arrow.headLength
+      });
+    });
+
+    if (previewArrow) {
+      drawArrow(annotationCtx, previewArrow.startX, previewArrow.startY, previewArrow.endX, previewArrow.endY, {
+        color: previewArrow.color,
+        lineWidth: previewArrow.lineWidth,
+        headLength: previewArrow.headLength
+      });
+    }
+
+    const editingId = textEntry?.id;
+    textList.forEach(annotation => {
+      if (editingId && annotation.id === editingId) {
+        return;
+      }
+      drawTextAnnotation(annotationCtx, annotation);
+      if (selectedId && annotation.id === selectedId) {
+        drawTextSelection(annotationCtx, annotation);
+      }
+    });
+  };
+
+  const getTextHit = (x: number, y: number) => {
+    for (let i = textAnnotations.length - 1; i >= 0; i -= 1) {
+      const annotation = textAnnotations[i];
+    const padding = TEXT_BOX_PADDING;
+      const boxX = annotation.x - padding;
+      const boxY = annotation.y - padding;
+      const boxWidth = annotation.width + padding * 2;
+      const boxHeight = annotation.height + padding * 2;
+      const handleSize = Math.max(10, annotation.fontSize * 0.4);
+      const handleX = boxX + boxWidth - handleSize;
+      const handleY = boxY + boxHeight - handleSize;
+      const onHandle = x >= handleX && x <= handleX + handleSize && y >= handleY && y <= handleY + handleSize;
+      if (onHandle) {
+        return { annotation, onHandle: true };
+      }
+      const within =
+        x >= boxX &&
+        x <= boxX + boxWidth &&
+        y >= boxY &&
+        y <= boxY + boxHeight;
+      if (within) {
+        return { annotation, onHandle: false };
+      }
+    }
+    return null;
+  };
+
+  const updateRegionInstructionLine = (regionId: string, oldText: string | undefined, newText: string) => {
+    const updated = regions.map(region => {
+      if (region.id !== regionId) return region;
+      const lines = (region.instruction || '').split('\n').filter(Boolean);
+      if (oldText) {
+        const idx = lines.findIndex(line => line.trim() === oldText.trim());
+        if (idx >= 0) {
+          lines[idx] = newText;
+          return { ...region, instruction: lines.join('\n') };
+        }
+      }
+      return { ...region, instruction: lines.concat(newText).join('\n') };
+    });
+    setRegions(updated);
+    return updated;
+  };
+
+  const applyTextAnnotation = (
+    x: number,
+    y: number,
+    text: string,
+    editingId?: string,
+    options?: { width?: number; height?: number; fontSize?: number; color?: string }
+  ) => {
+    const annotationCanvas = annotationCanvasRef.current;
+    const annotationCtx = annotationCanvas?.getContext('2d');
+    if (!annotationCanvas || !annotationCtx) return;
+
+    const trimmed = text.trim();
+    if (!trimmed) return;
+
+    if (editingId) {
+      let updatedRegions = regions;
+      const next = textAnnotations.map(item => {
+        if (item.id !== editingId) return item;
+        if (item.regionId) {
+          updatedRegions = updateRegionInstructionLine(item.regionId, item.instructionText, trimmed);
+        }
+        return {
+          ...item,
+          text: trimmed,
+          width: options?.width ?? item.width,
+          height: options?.height ?? item.height,
+          fontSize: options?.fontSize ?? item.fontSize,
+          color: options?.color ?? item.color,
+          instructionText: item.regionId ? trimmed : item.instructionText
+        };
+      });
+      setTextAnnotations(next);
+      setSelectedTextId(editingId);
+      saveState(nextLabelIndex, updatedRegions, activeRegionId ?? null, next);
+      return;
+    }
+
+    const scaleFactor = Math.max(1, getDynamicScaleFactor(annotationCtx));
+    const fontSize = options?.fontSize ?? Math.round(22 * scaleFactor);
+    const metrics = {
+      width: options?.width ?? measureEntryBox(trimmed, fontSize).width,
+      height: options?.height ?? measureEntryBox(trimmed, fontSize).height
+    };
+    const regionId = activeRegionId || undefined;
+    const updatedRegions = regionId ? updateRegionInstructionLine(regionId, undefined, trimmed) : regions;
+
+    const newId = crypto.randomUUID();
+    const next = textAnnotations.concat([{
+      id: newId,
+      x,
+      y,
+      text: trimmed,
+      color: options?.color ?? brushColor,
+      fontSize,
+      width: metrics.width,
+      height: metrics.height,
+      regionId,
+      instructionText: regionId ? trimmed : undefined
+    }]);
+    setTextAnnotations(next);
+    setSelectedTextId(newId);
+    saveState(nextLabelIndex, updatedRegions, activeRegionId ?? null, next);
+  };
+
+  const handleTextCommit = () => {
+    if (!textEntry) return;
+    const trimmed = textEntry.value.trim();
+    const entryId = textEntry.id;
+    const { x, y, width, height, fontSize, color } = textEntry;
+    setTextEntry(null);
+    if (!trimmed) return;
+    applyTextAnnotation(x, y, trimmed, entryId, { width, height, fontSize, color });
+  };
+
+  const handleTextCancel = () => {
+    setTextEntry(null);
+  };
+
+  const startDrawing = (e: React.MouseEvent | React.TouchEvent) => {
+    const { x, y, inBounds } = getCanvasCoordinates(e);
+    if (!inBounds) return;
+
+    if (activeTool === 'marker') {
+      createRegion({ x, y });
+      return;
+    }
+
+    if (activeTool === 'text') {
+      const hit = getTextHit(x, y);
+      if (hit) {
+        setSelectedTextId(hit.annotation.id);
+        if (hit.onHandle) {
+          setIsResizingText(true);
+          resizeStartRef.current = { x, y, fontSize: hit.annotation.fontSize };
+        } else {
+          setIsDraggingText(true);
+          dragOffsetRef.current = { x: x - hit.annotation.x, y: y - hit.annotation.y };
+        }
+      } else {
+        setSelectedTextId(null);
+      }
+      return;
+    }
+
+    if (activeTool === 'arrow') {
+      const annotationCanvas = annotationCanvasRef.current;
+      const annotationCtx = annotationCanvas?.getContext('2d');
+      if (!annotationCanvas || !annotationCtx) return;
+      setIsDrawing(true);
+      arrowStartRef.current = { x, y };
+      return;
+    }
+
+    let region = getActiveRegion();
+    if (!region && (activeTool === 'brush' || activeTool === 'eraser')) {
+      region = createRegion(undefined, { skipHistory: true }).region;
+    }
+    if (activeTool === 'rect') {
+      const created = createRegion();
+      region = created.region;
+    }
+
+    if (!region) return;
+
+    if (region.color !== brushColor) {
+      const updatedRegions = regions.map(r =>
+        r.id === region?.id ? { ...r, color: brushColor } : r
+      );
+      setRegions(updatedRegions);
+      renderMarkerLayer(updatedRegions);
+      region = updatedRegions.find(r => r.id === region?.id) || region;
+    }
+
+    const regionCanvas = regionCanvasesRef.current.get(region.id);
+    const ctx = regionCanvas?.getContext('2d');
+
+    if (ctx && regionCanvas) {
       if (activeTool === 'brush' || activeTool === 'eraser') {
         setIsDrawing(true);
         ctx.beginPath();
@@ -193,8 +853,6 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ imageUrl, onSave, on
         ctx.lineWidth = brushSize;
 
         if (activeTool === 'eraser') {
-          // CRITICAL: This is what makes it "Non-Destructive". 
-          // We are erasing the drawing layer to transparent, revealing the original image below.
           ctx.globalCompositeOperation = 'destination-out';
         } else {
           ctx.globalCompositeOperation = 'source-over';
@@ -204,13 +862,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ imageUrl, onSave, on
         setIsDrawing(true);
         ctx.globalCompositeOperation = 'source-over';
         dragStartRef.current = { x, y };
-        snapshotRef.current = ctx.getImageData(0, 0, canvas.width, canvas.height);
-      } else if (activeTool === 'marker') {
-        ctx.globalCompositeOperation = 'source-over';
-        drawMarker(ctx, x, y, nextLabelIndex);
-        const newIndex = nextLabelIndex + 1;
-        setNextLabelIndex(newIndex);
-        saveState(newIndex);
+        snapshotRef.current = ctx.getImageData(0, 0, regionCanvas.width, regionCanvas.height);
       }
     }
   };
@@ -220,7 +872,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ imageUrl, onSave, on
     return Math.max(ctx.canvas.width, ctx.canvas.height) / 1500;
   };
 
-  const drawMarker = (ctx: CanvasRenderingContext2D, x: number, y: number, index: number) => {
+  const drawMarker = (ctx: CanvasRenderingContext2D, x: number, y: number, label: string, color: string) => {
     const baseRadius = 24;
     const scaleFactor = Math.max(1, getDynamicScaleFactor(ctx));
     const radius = baseRadius * scaleFactor;
@@ -234,7 +886,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ imageUrl, onSave, on
     // Circle
     ctx.beginPath();
     ctx.arc(x, y, radius, 0, 2 * Math.PI);
-    ctx.fillStyle = brushColor;
+    ctx.fillStyle = color;
     ctx.fill();
 
     // Border
@@ -248,47 +900,109 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ imageUrl, onSave, on
     ctx.font = `bold ${radius * 1.1}px "Inter", sans-serif`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(index.toString(), x, y + (radius * 0.1)); // optical center adj
+    ctx.fillText(label, x, y + (radius * 0.1)); // optical center adj
     ctx.restore();
   };
 
-  const drawRectLabel = (ctx: CanvasRenderingContext2D, x: number, y: number, index: number) => {
+  const drawRectLabel = (ctx: CanvasRenderingContext2D, x: number, y: number, label: string, color: string) => {
     const scaleFactor = Math.max(1, getDynamicScaleFactor(ctx));
-    const padding = 12 * scaleFactor;
-    const fontSize = 24 * scaleFactor;
-
+    const fontSize = Math.round(14 * scaleFactor);
+    const paddingX = 8 * scaleFactor;
+    const paddingY = 4 * scaleFactor;
     ctx.save();
-    ctx.font = `bold ${fontSize}px "Inter", sans-serif`;
-    const text = index.toString();
-    const metrics = ctx.measureText(text);
-    const bgWidth = metrics.width + (padding * 2);
-    const bgHeight = fontSize + padding;
+    ctx.font = `600 ${fontSize}px "Inter", sans-serif`;
+    const metrics = ctx.measureText(label);
+    const width = metrics.width + paddingX * 2;
+    const height = fontSize + paddingY * 2;
+    const radius = 6 * scaleFactor;
 
-    // Ensure label stays within view roughly
-    const labelX = x;
-    const labelY = y < bgHeight ? y : y - bgHeight;
-
-    ctx.fillStyle = brushColor;
-    ctx.fillRect(labelX, labelY, bgWidth, bgHeight);
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.moveTo(x + radius, y);
+    ctx.lineTo(x + width - radius, y);
+    ctx.quadraticCurveTo(x + width, y, x + width, y + radius);
+    ctx.lineTo(x + width, y + height - radius);
+    ctx.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
+    ctx.lineTo(x + radius, y + height);
+    ctx.quadraticCurveTo(x, y + height, x, y + height - radius);
+    ctx.lineTo(x, y + radius);
+    ctx.quadraticCurveTo(x, y, x + radius, y);
+    ctx.closePath();
+    ctx.fill();
 
     ctx.fillStyle = '#ffffff';
+    ctx.textAlign = 'left';
     ctx.textBaseline = 'top';
-    ctx.fillText(text, labelX + padding, labelY + (padding / 2));
-
+    ctx.fillText(label, x + paddingX, y + paddingY);
     ctx.restore();
   };
-
   const draw = (e: React.MouseEvent | React.TouchEvent) => {
+    const { x, y } = getCanvasCoordinates(e);
+
+    if (activeTool === 'text' && selectedTextId && (isDraggingText || isResizingText)) {
+      setTextAnnotations(prev => prev.map(item => {
+        if (item.id !== selectedTextId) return item;
+        if (isDraggingText && dragOffsetRef.current) {
+          const annotationCanvas = annotationCanvasRef.current;
+          const maxX = annotationCanvas ? Math.max(0, annotationCanvas.width - item.width) : Infinity;
+          const maxY = annotationCanvas ? Math.max(0, annotationCanvas.height - item.height) : Infinity;
+          const newX = Math.min(Math.max(0, x - dragOffsetRef.current.x), maxX);
+          const newY = Math.min(Math.max(0, y - dragOffsetRef.current.y), maxY);
+          return { ...item, x: newX, y: newY };
+        }
+        if (isResizingText && resizeStartRef.current) {
+          const delta = (x - resizeStartRef.current.x + (y - resizeStartRef.current.y)) * 0.15;
+          const nextFontSize = Math.max(12, Math.round(resizeStartRef.current.fontSize + delta));
+          const annotationCanvas = annotationCanvasRef.current;
+          const annotationCtx = annotationCanvas?.getContext('2d');
+          if (!annotationCtx) return item;
+          const metrics = measureEntryBox(item.text, nextFontSize);
+          return { ...item, fontSize: nextFontSize, width: metrics.width, height: metrics.height };
+        }
+        return item;
+      }));
+      return;
+    }
+
+    if (activeTool === 'text' && !isDrawing && !isDraggingText && !isResizingText) {
+      const hit = getTextHit(x, y);
+      const nextHover = hit ? (hit.onHandle ? 'handle' : 'body') : 'none';
+      setTextHoverState(prev => (prev === nextHover ? prev : nextHover));
+    } else if (textHoverState !== 'none') {
+      setTextHoverState('none');
+    }
+
     if (!isDrawing) return;
 
-    const { x, y } = getCanvasCoordinates(e);
-    const ctx = canvasRef.current?.getContext('2d');
-    const canvas = canvasRef.current;
+    if (activeTool === 'arrow' && arrowStartRef.current) {
+      const annotationCanvas = annotationCanvasRef.current;
+      const annotationCtx = annotationCanvas?.getContext('2d');
+      if (!annotationCanvas || !annotationCtx) return;
+      const lineWidth = Math.max(2, brushSize * 0.2);
+      const headLength = Math.max(26 * Math.max(1, getDynamicScaleFactor(annotationCtx)), lineWidth * 7);
+      renderAnnotations(textAnnotations, arrowAnnotations, selectedTextId, {
+        id: 'preview',
+        startX: arrowStartRef.current.x,
+        startY: arrowStartRef.current.y,
+        endX: x,
+        endY: y,
+        color: brushColor,
+        lineWidth,
+        headLength
+      });
+      return;
+    }
 
-    if (ctx && canvas) {
+    const region = getActiveRegion();
+    if (!region) return;
+    const regionCanvas = regionCanvasesRef.current.get(region.id);
+    const ctx = regionCanvas?.getContext('2d');
+
+    if (ctx && regionCanvas) {
       if (activeTool === 'brush' || activeTool === 'eraser') {
         ctx.lineTo(x, y);
         ctx.stroke();
+        renderMaskPreview();
       } else if (activeTool === 'rect' && dragStartRef.current && snapshotRef.current) {
         // Restore "pre-drag" state to avoid trails
         ctx.putImageData(snapshotRef.current, 0, 0);
@@ -304,52 +1018,96 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ imageUrl, onSave, on
 
         // Stroke
         ctx.strokeStyle = brushColor;
-        ctx.lineWidth = Math.max(4, canvas.width * 0.003);
+        ctx.lineWidth = Math.max(4, regionCanvas.width * 0.003);
         ctx.strokeRect(startX, startY, width, height);
+        renderMaskPreview();
       }
     }
   };
 
   const stopDrawing = () => {
-    if (isDrawing) {
+    if (activeTool === 'arrow') {
       setIsDrawing(false);
-      const ctx = canvasRef.current?.getContext('2d');
-      const newLabelIndex = nextLabelIndex + 1;
-
-      if (activeTool === 'brush' || activeTool === 'eraser') {
-        ctx?.closePath();
-        // Reset composite to default just in case
-        if (ctx) ctx.globalCompositeOperation = 'source-over';
-        saveState(nextLabelIndex);
-      } else if (activeTool === 'rect') {
-        if (ctx && dragStartRef.current) {
-          // FIX: Null check for lastMouseEventRef to prevent crash when clicking without moving
-          let endX = dragStartRef.current.x;
-          let endY = dragStartRef.current.y;
-
-          if (lastMouseEventRef.current) {
-            const coords = getCanvasCoordinates(lastMouseEventRef.current);
-            endX = coords.x;
-            endY = coords.y;
-          }
-
-          // Re-calculate final box to draw label
-          const x = Math.min(dragStartRef.current.x, endX);
-          const y = Math.min(dragStartRef.current.y, endY);
-
-          drawRectLabel(ctx, x, y, nextLabelIndex);
-          setNextLabelIndex(newLabelIndex);
-          saveState(newLabelIndex);
-        }
-        dragStartRef.current = null;
-        snapshotRef.current = null;
+      const annotationCanvas = annotationCanvasRef.current;
+      const annotationCtx = annotationCanvas?.getContext('2d');
+      if (!annotationCanvas || !annotationCtx || !arrowStartRef.current) {
+        arrowStartRef.current = null;
+        return;
       }
+
+      const endPoint = lastMouseEventRef.current
+        ? getCanvasCoordinates(lastMouseEventRef.current)
+        : arrowStartRef.current;
+
+      const lineWidth = Math.max(2, brushSize * 0.2);
+      const headLength = Math.max(26 * Math.max(1, getDynamicScaleFactor(annotationCtx)), lineWidth * 7);
+      const next = arrowAnnotations.concat([{
+        id: crypto.randomUUID(),
+        startX: arrowStartRef.current!.x,
+        startY: arrowStartRef.current!.y,
+        endX: endPoint.x,
+        endY: endPoint.y,
+        color: brushColor,
+        lineWidth,
+        headLength
+      }]);
+      setArrowAnnotations(next);
+      saveState(nextLabelIndex, regions, activeRegionId ?? null, undefined, next);
+      arrowStartRef.current = null;
+      return;
+    }
+
+    if (activeTool === 'text' && (isDraggingText || isResizingText)) {
+      setIsDraggingText(false);
+      setIsResizingText(false);
+      dragOffsetRef.current = null;
+      resizeStartRef.current = null;
+      saveState(nextLabelIndex, regions, activeRegionId ?? null);
+      return;
+    }
+
+    if (!isDrawing) return;
+
+    setIsDrawing(false);
+    const region = activeRegionId ? regions.find(r => r.id === activeRegionId) : undefined;
+    const regionCanvas = region ? regionCanvasesRef.current.get(region.id) : undefined;
+    const regionCtx = regionCanvas?.getContext('2d');
+
+    if (activeTool === 'brush' || activeTool === 'eraser') {
+      regionCtx?.closePath();
+      if (regionCtx) regionCtx.globalCompositeOperation = 'source-over';
+      renderMaskPreview();
+      saveState(nextLabelIndex);
+    } else if (activeTool === 'rect') {
+      if (region && regionCtx && dragStartRef.current) {
+        // FIX: Null check for lastMouseEventRef to prevent crash when clicking without moving
+        let endX = dragStartRef.current.x;
+        let endY = dragStartRef.current.y;
+
+        if (lastMouseEventRef.current) {
+          const coords = getCanvasCoordinates(lastMouseEventRef.current);
+          endX = coords.x;
+          endY = coords.y;
+        }
+
+        const x = Math.min(dragStartRef.current.x, endX);
+        const y = Math.min(dragStartRef.current.y, endY);
+
+        const updatedRegions = regions.map(r =>
+          r.id === region.id ? { ...r, rectLabelPosition: { x: x + 6, y: y + 6 } } : r
+        );
+        setRegions(updatedRegions);
+        renderMarkerLayer(updatedRegions);
+        saveState(nextLabelIndex, updatedRegions, region.id);
+      }
+      dragStartRef.current = null;
+      snapshotRef.current = null;
     }
   };
 
   const lastMouseEventRef = useRef<React.MouseEvent | React.TouchEvent | null>(null);
 
-  const generateMask = (drawingCanvas: HTMLCanvasElement): string => {
+  const exportMaskDataUrl = (drawingCanvas: HTMLCanvasElement): string => {
     const maskCanvas = document.createElement('canvas');
     maskCanvas.width = drawingCanvas.width;
     maskCanvas.height = drawingCanvas.height;
@@ -393,41 +1151,94 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ imageUrl, onSave, on
   };
 
   const handleSave = () => {
-    if (canvasRef.current && bgImageRef.current) {
-      // 1. COMPOSITE IMAGE (Visual Preview)
-      const tempCanvas = document.createElement('canvas');
-      tempCanvas.width = canvasRef.current.width;
-      tempCanvas.height = canvasRef.current.height;
-      const tCtx = tempCanvas.getContext('2d');
-
-      let compositeUrl = '';
-      let maskUrl = '';
-
-      if (tCtx) {
-        // Draw Original Image
-        tCtx.drawImage(bgImageRef.current, 0, 0);
-        // Draw Annotations on top
-        tCtx.drawImage(canvasRef.current, 0, 0);
-        compositeUrl = tempCanvas.toDataURL('image/png');
-      }
-
-      // 2. MASK IMAGE (For AI Inpainting)
-      maskUrl = generateMask(canvasRef.current);
-
-      // 3. EXPORT
-      onSave(compositeUrl, maskUrl);
-      onClose();
+    if (!bgImageRef.current || !maskPreviewCanvasRef.current || !markerCanvasRef.current || !annotationCanvasRef.current) return;
+    const selectionId = selectedTextId;
+    if (selectionId) {
+      renderAnnotations(textAnnotations, arrowAnnotations, null);
     }
+
+    const baseCanvas = document.createElement('canvas');
+    baseCanvas.width = maskPreviewCanvasRef.current.width;
+    baseCanvas.height = maskPreviewCanvasRef.current.height;
+    const baseCtx = baseCanvas.getContext('2d');
+
+    const previewCanvas = document.createElement('canvas');
+    previewCanvas.width = maskPreviewCanvasRef.current.width;
+    previewCanvas.height = maskPreviewCanvasRef.current.height;
+    const previewCtx = previewCanvas.getContext('2d');
+
+    const mergedMaskCanvas = document.createElement('canvas');
+    mergedMaskCanvas.width = maskPreviewCanvasRef.current.width;
+    mergedMaskCanvas.height = maskPreviewCanvasRef.current.height;
+    const mergedCtx = mergedMaskCanvas.getContext('2d');
+
+    if (!baseCtx || !previewCtx || !mergedCtx) return;
+
+    // Base image
+    baseCtx.drawImage(bgImageRef.current, 0, 0);
+    const baseImageDataUrl = baseCanvas.toDataURL('image/png');
+
+    // Preview (base + mask preview + annotations)
+    previewCtx.drawImage(bgImageRef.current, 0, 0);
+    previewCtx.drawImage(maskPreviewCanvasRef.current, 0, 0);
+    previewCtx.drawImage(markerCanvasRef.current, 0, 0);
+    previewCtx.drawImage(annotationCanvasRef.current, 0, 0);
+    const previewDataUrl = previewCanvas.toDataURL('image/png');
+
+    // Merged mask (union)
+    mergedCtx.fillStyle = 'black';
+    mergedCtx.fillRect(0, 0, mergedMaskCanvas.width, mergedMaskCanvas.height);
+    regions.forEach(region => {
+      const regionCanvas = regionCanvasesRef.current.get(region.id);
+      if (regionCanvas) {
+        mergedCtx.drawImage(regionCanvas, 0, 0);
+      }
+    });
+    const mergedMaskDataUrl = exportMaskDataUrl(mergedMaskCanvas);
+
+    const regionExports: CanvasEditRegionExport[] = regions.map(region => {
+      const regionCanvas = regionCanvasesRef.current.get(region.id);
+      const maskDataUrl = regionCanvas ? exportMaskDataUrl(regionCanvas) : '';
+      return {
+        id: region.id,
+        color: region.color,
+        instruction: region.instruction,
+        maskDataUrl
+      };
+    });
+
+    onSave({
+      baseImageDataUrl,
+      previewDataUrl,
+      mergedMaskDataUrl,
+      regions: regionExports
+    });
+    if (selectionId) {
+      renderAnnotations(textAnnotations, arrowAnnotations, selectionId);
+    }
+    onClose();
   };
 
   const handleClear = () => {
-    const canvas = canvasRef.current;
-    const ctx = canvas?.getContext('2d');
-    if (canvas && ctx) {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      setNextLabelIndex(1);
-      saveState(1);
+    regionCanvasesRef.current.clear();
+    setRegions([]);
+    setActiveRegionId(null);
+    setNextLabelIndex(1);
+    setTextEntry(null);
+    setTextAnnotations([]);
+    setArrowAnnotations([]);
+    setSelectedTextId(null);
+    setIsDraggingText(false);
+    setIsResizingText(false);
+    const annotationCanvas = annotationCanvasRef.current;
+    const annotationCtx = annotationCanvas?.getContext('2d');
+    if (annotationCanvas && annotationCtx) {
+      annotationCtx.clearRect(0, 0, annotationCanvas.width, annotationCanvas.height);
     }
+    renderMaskPreview([]);
+    renderMarkerLayer([]);
+    renderAnnotations([], [], null);
+    saveState(1, [], null);
   };
 
   return (
@@ -440,6 +1251,8 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ imageUrl, onSave, on
             {activeTool === 'eraser' && <Eraser size={20} className="text-brand-500" />}
             {activeTool === 'rect' && <Square size={20} className="text-brand-500" />}
             {activeTool === 'marker' && <MousePointer2 size={20} className="text-brand-500" />}
+            {activeTool === 'arrow' && <ArrowUpRight size={20} className="text-brand-500" />}
+            {activeTool === 'text' && <Type size={20} className="text-brand-500" />}
           </div>
           <div>
             <h2 className="text-lg font-bold text-white">{t('editor.title')}</h2>
@@ -479,6 +1292,12 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ imageUrl, onSave, on
           <button onClick={() => setActiveTool('marker')} className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-bold transition-all ${activeTool === 'marker' ? 'bg-brand-600 text-white shadow-lg' : 'text-gray-400 hover:text-white hover:bg-white/5'}`}>
             <MousePointer2 size={14} /> Markers
           </button>
+          <button onClick={() => setActiveTool('arrow')} className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-bold transition-all ${activeTool === 'arrow' ? 'bg-brand-600 text-white shadow-lg' : 'text-gray-400 hover:text-white hover:bg-white/5'}`}>
+            <ArrowUpRight size={14} /> {t('editor.arrow')}
+          </button>
+          <button onClick={() => setActiveTool('text')} className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-bold transition-all ${activeTool === 'text' ? 'bg-brand-600 text-white shadow-lg' : 'text-gray-400 hover:text-white hover:bg-white/5'}`}>
+            <Type size={14} /> {t('editor.text')}
+          </button>
           <button onClick={() => setActiveTool('brush')} className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-bold transition-all ${activeTool === 'brush' ? 'bg-brand-600 text-white shadow-lg' : 'text-gray-400 hover:text-white hover:bg-white/5'}`}>
             <Brush size={14} /> {t('editor.brush')}
           </button>
@@ -491,7 +1310,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ imageUrl, onSave, on
         </div>
 
         {/* Brush Settings */}
-        {(activeTool === 'brush' || activeTool === 'rect' || activeTool === 'marker') && (
+        {(activeTool === 'brush' || activeTool === 'rect' || activeTool === 'marker' || activeTool === 'arrow' || activeTool === 'text') && (
           <div className="flex items-center gap-4 border-l border-dark-border pl-6 animate-in slide-in-from-left-2 fade-in">
             {/* Color Picker */}
             <div className="flex items-center gap-2">
@@ -529,6 +1348,44 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ imageUrl, onSave, on
         )}
       </div>
 
+      {/* Regions Panel */}
+      <div className="absolute right-6 top-28 w-72 bg-dark-panel/95 border border-dark-border rounded-xl shadow-xl p-4 z-40">
+        <div className="flex items-center justify-between mb-3">
+          <div className="text-xs font-bold text-gray-400 uppercase">Regions</div>
+          {activeRegionId && (
+            <div className="text-[10px] text-brand-400 font-bold">Active #{activeRegionId}</div>
+          )}
+        </div>
+        {regions.length === 0 ? (
+          <div className="text-xs text-gray-500 leading-relaxed">
+            Add a marker or draw to create an edit region.
+          </div>
+        ) : (
+          <div className="space-y-3 max-h-64 overflow-y-auto pr-1 custom-scrollbar">
+            {regions.map(region => (
+              <div key={region.id} className={`rounded-lg border p-2 ${activeRegionId === region.id ? 'border-brand-500/60 bg-white/5' : 'border-white/5'}`}>
+                <button
+                  onClick={() => handleSelectRegion(region.id)}
+                  className="w-full flex items-center gap-2 text-left"
+                >
+                  <span className="w-5 h-5 rounded-full text-[10px] font-bold flex items-center justify-center text-white" style={{ backgroundColor: region.color }}>
+                    {region.id}
+                  </span>
+                  <span className="text-xs font-semibold text-gray-300">Region {region.id}</span>
+                </button>
+                <textarea
+                  value={region.instruction}
+                  onChange={(e) => updateRegionInstruction(region.id, e.target.value)}
+                  placeholder={`Describe edit for region ${region.id}...`}
+                  className="mt-2 w-full bg-black/30 border border-white/5 rounded-md p-2 text-[11px] text-gray-200 placeholder-gray-500 resize-none focus:outline-none focus:ring-1 focus:ring-brand-500/60"
+                  rows={2}
+                />
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
       {/* Main Content Area */}
       <div
         ref={containerRef}
@@ -537,12 +1394,81 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ imageUrl, onSave, on
         onMouseMove={(e) => { lastMouseEventRef.current = e; handleMouseMove(e); }}
         onMouseUp={handleMouseUp}
         onMouseLeave={handleMouseUp}
+        onClick={handleClick}
+        onDoubleClick={handleDoubleClick}
         onTouchStart={(e) => { lastMouseEventRef.current = e; startDrawing(e); }}
         onTouchMove={(e) => { lastMouseEventRef.current = e; draw(e); }}
         onTouchEnd={stopDrawing}
         onWheel={handleWheel}
-        style={{ cursor: isPanning ? 'grabbing' : activeTool === 'brush' || activeTool === 'eraser' ? 'crosshair' : activeTool === 'marker' ? MARKER_CURSOR : 'crosshair' }}
+        style={{
+          cursor: isPanning
+            ? 'grabbing'
+            : activeTool === 'marker'
+            ? MARKER_CURSOR
+            : activeTool === 'text'
+            ? isResizingText || textHoverState === 'handle'
+              ? 'crosshair'
+              : textHoverState === 'body' || isDraggingText
+              ? 'move'
+              : 'text'
+            : 'crosshair'
+        }}
       >
+        {textEntry && (
+          <div
+            className="absolute z-50"
+            style={{
+              left: textEntry.screenX,
+              top: textEntry.screenY,
+              width: textEntry.width + TEXT_BOX_PADDING * 2,
+              height: textEntry.height + TEXT_BOX_PADDING * 2
+            }}
+            onMouseDown={(e) => e.stopPropagation()}
+            onMouseUp={(e) => e.stopPropagation()}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="absolute inset-0 border border-dashed border-white/70 pointer-events-none" />
+            <div
+              className="absolute pointer-events-none"
+              style={{
+                width: Math.max(10, textEntry.fontSize * 0.4),
+                height: Math.max(10, textEntry.fontSize * 0.4),
+                right: 2,
+                bottom: 2,
+                border: '1px solid rgba(0,0,0,0.45)',
+                background: 'rgba(255,255,255,0.9)'
+              }}
+            />
+            <input
+              ref={textInputRef}
+              value={textEntry.value}
+              onChange={(e) => {
+                const value = e.target.value;
+                setTextEntry(prev => prev ? { ...prev, value } : prev);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  handleTextCommit();
+                } else if (e.key === 'Escape') {
+                  e.preventDefault();
+                  handleTextCancel();
+                }
+              }}
+              onBlur={handleTextCommit}
+              className="absolute left-0 top-0 bg-transparent text-white focus:outline-none select-text"
+              style={{
+                width: textEntry.width,
+                height: textEntry.height,
+                transform: `translate(${TEXT_BOX_PADDING}px, ${TEXT_BOX_PADDING}px)`,
+                fontSize: textEntry.fontSize,
+                color: textEntry.color,
+                lineHeight: 1.2
+              }}
+              placeholder={t('editor.text_placeholder')}
+            />
+          </div>
+        )}
         {/* Checkboard Pattern for Transparency */}
         <div className="absolute inset-0 pointer-events-none"
           style={{
@@ -576,7 +1502,17 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ imageUrl, onSave, on
 
           {/* 2. Drawing Layer */}
           <canvas
-            ref={canvasRef}
+            ref={maskPreviewCanvasRef}
+            className="absolute inset-0 pointer-events-none" // Events handled by container
+            style={{ width: '100%', height: '100%' }}
+          />
+          <canvas
+            ref={markerCanvasRef}
+            className="absolute inset-0 pointer-events-none"
+            style={{ width: '100%', height: '100%' }}
+          />
+          <canvas
+            ref={annotationCanvasRef}
             className="absolute inset-0 pointer-events-none" // Events handled by container
             style={{ width: '100%', height: '100%' }}
           />
@@ -584,9 +1520,12 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ imageUrl, onSave, on
 
         {/* Toast Hint */}
         <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex flex-col items-center gap-2 pointer-events-none">
-          {(activeTool === 'marker' || activeTool === 'rect') && (
+          {(activeTool === 'marker' || activeTool === 'rect' || activeTool === 'arrow' || activeTool === 'text') && (
             <div className="bg-black/60 backdrop-blur px-4 py-2 rounded-full text-xs text-white border border-white/10">
-              {activeTool === 'marker' ? "Click objects to add numbered markers" : "Draw boxes to define numbered regions"}
+              {activeTool === 'marker' && "Click objects to add numbered markers"}
+              {activeTool === 'rect' && "Draw boxes to define numbered regions"}
+              {activeTool === 'arrow' && "Drag to draw an arrow annotation"}
+              {activeTool === 'text' && "Click to place text annotations"}
             </div>
           )}
           <div className="text-[10px] text-gray-500 bg-black/40 px-2 py-1 rounded">Scale: {Math.round(scale * 100)}%</div>
