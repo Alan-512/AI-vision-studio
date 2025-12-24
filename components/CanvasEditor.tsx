@@ -1,6 +1,6 @@
 
 import React, { useEffect, useRef, useState } from 'react';
-import { Save, Undo, Brush, Eraser, Square, MousePointer2, ArrowUpRight, Type } from 'lucide-react';
+import { Save, Undo, Brush, Eraser, Square, MousePointer2, ArrowUpRight, Type, Settings, MessageCircle } from 'lucide-react';
 import { useLanguage } from '../contexts/LanguageContext';
 
 interface CanvasEditRegionExport {
@@ -19,7 +19,8 @@ interface CanvasEditorExportPayload {
 
 interface CanvasEditorProps {
   imageUrl: string;
-  onSave: (payload: CanvasEditorExportPayload) => void;
+  onSaveToConfig: (payload: CanvasEditorExportPayload) => void;
+  onSaveToChat: (payload: CanvasEditorExportPayload) => void;
   onClose: () => void;
 }
 
@@ -91,9 +92,10 @@ interface HistoryItem {
 }
 
 const MARKER_CURSOR = `crosshair`;
-const TEXT_BOX_PADDING = 6;
+const TEXT_BOX_PADDING = 3;
+const TEXT_LINE_HEIGHT = 1.1;
 
-export const CanvasEditor: React.FC<CanvasEditorProps> = ({ imageUrl, onSave, onClose }) => {
+export const CanvasEditor: React.FC<CanvasEditorProps> = ({ imageUrl, onSaveToConfig, onSaveToChat, onClose }) => {
   const { t } = useLanguage();
 
   // Refs
@@ -109,6 +111,8 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ imageUrl, onSave, on
   const [activeTool, setActiveTool] = useState<ToolType>('brush');
   const [brushSize, setBrushSize] = useState(15);
   const [brushColor, setBrushColor] = useState('#ef4444'); // Region color (UI only)
+  const [textSize, setTextSize] = useState(22);
+  const [textSizeInput, setTextSizeInput] = useState('22');
 
   // State
   const [isDrawing, setIsDrawing] = useState(false);
@@ -125,6 +129,8 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ imageUrl, onSave, on
   const [isDraggingText, setIsDraggingText] = useState(false);
   const [isResizingText, setIsResizingText] = useState(false);
   const [textHoverState, setTextHoverState] = useState<'none' | 'body' | 'handle'>('none');
+  const [entryHoverState, setEntryHoverState] = useState<'none' | 'handle' | 'body'>('none');
+  const [isResizingEntry, setIsResizingEntry] = useState(false);
 
   // Viewport Transform State
   const [scale, setScale] = useState(1);
@@ -138,12 +144,84 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ imageUrl, onSave, on
     )));
   };
 
+  const applyBrushColor = (color: string) => {
+    setBrushColor(color);
+    if (activeTool !== 'text') return;
+    if (textEntry) {
+      setTextEntry(prev => (prev ? { ...prev, color } : prev));
+    }
+    if (selectedTextId && (!textEntry || textEntry.id !== selectedTextId)) {
+      const next = textAnnotations.map(item => (
+        item.id === selectedTextId ? { ...item, color } : item
+      ));
+      setTextAnnotations(next);
+      saveState(nextLabelIndex, regions, activeRegionId ?? null, next);
+    }
+  };
+
+  const getBaseTextSize = (fontSize: number) => {
+    const annotationCanvas = annotationCanvasRef.current;
+    const annotationCtx = annotationCanvas?.getContext('2d');
+    const scaleFactor = annotationCtx ? Math.max(1, getDynamicScaleFactor(annotationCtx)) : 1;
+    return Math.max(8, Math.round(fontSize / scaleFactor));
+  };
+
+  const selectTextAnnotation = (annotation: TextAnnotation) => {
+    setSelectedTextId(annotation.id);
+    setTextSize(getBaseTextSize(annotation.fontSize));
+  };
+
   const handleSelectRegion = (id: string) => {
     setActiveRegionId(id);
     const region = regions.find(r => r.id === id);
     if (region) {
       setBrushColor(region.color);
     }
+  };
+
+  const clampTextSize = (value: number) => Math.min(96, Math.max(12, Math.round(value)));
+
+  const applyTextSize = (value: number) => {
+    const nextValue = clampTextSize(value);
+    setTextSize(nextValue);
+    if (activeTool !== 'text') return;
+    const annotationCanvas = annotationCanvasRef.current;
+    const annotationCtx = annotationCanvas?.getContext('2d');
+    const scaleFactor = annotationCtx ? Math.max(1, getDynamicScaleFactor(annotationCtx)) : 1;
+    const nextFontSize = Math.round(nextValue * scaleFactor);
+
+    if (textEntry) {
+      const layout = annotationCtx
+        ? getTextLayout(annotationCtx, textEntry.value, nextFontSize, textEntry.width)
+        : null;
+      setTextEntry(prev => prev
+        ? {
+          ...prev,
+          fontSize: nextFontSize,
+          height: Math.max(prev.height, layout?.height ?? prev.height)
+        }
+        : prev);
+    }
+
+    if (selectedTextId && (!textEntry || textEntry.id !== selectedTextId)) {
+      const next = textAnnotations.map(item => {
+        if (item.id !== selectedTextId) return item;
+        const layout = annotationCtx ? getTextLayout(annotationCtx, item.text, nextFontSize, item.width) : null;
+        return {
+          ...item,
+          fontSize: nextFontSize,
+          height: Math.max(item.height, layout?.height ?? item.height)
+        };
+      });
+      setTextAnnotations(next);
+      saveState(nextLabelIndex, regions, activeRegionId ?? null, next);
+    }
+  };
+
+  const stopEntryResize = () => {
+    setIsResizingEntry(false);
+    entryResizeStartRef.current = null;
+    setEntryHoverState('none');
   };
 
   useEffect(() => {
@@ -158,6 +236,10 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ imageUrl, onSave, on
   }, [textEntry]);
 
   useEffect(() => {
+    setTextSizeInput(String(textSize));
+  }, [textSize]);
+
+  useEffect(() => {
     if (activeTool !== 'text' && textEntry) {
       setTextEntry(null);
     }
@@ -167,20 +249,80 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ imageUrl, onSave, on
     if (activeTool !== 'text' && textHoverState !== 'none') {
       setTextHoverState('none');
     }
-  }, [activeTool, textEntry, selectedTextId, textHoverState]);
+    if (activeTool !== 'text' && entryHoverState !== 'none') {
+      setEntryHoverState('none');
+    }
+  }, [activeTool, textEntry, selectedTextId, textHoverState, entryHoverState]);
 
   useEffect(() => {
     renderAnnotations(textAnnotations, arrowAnnotations, textEntry ? null : selectedTextId);
   }, [textAnnotations, arrowAnnotations, selectedTextId, textEntry]);
 
+  useEffect(() => {
+    if (!textEntry && entryHoverState !== 'none') {
+      setEntryHoverState('none');
+    }
+  }, [textEntry, entryHoverState]);
+
+  useEffect(() => {
+    if (!isResizingEntry || !textEntry) return;
+
+    const handleMove = (event: MouseEvent) => {
+      const start = entryResizeStartRef.current;
+      if (!start) return;
+      const point = getCanvasPointFromClient(event.clientX, event.clientY);
+      if (!point.inBounds) return;
+
+      setTextEntry(prev => {
+        if (!prev) return prev;
+        const annotationCanvas = annotationCanvasRef.current;
+        const annotationCtx = annotationCanvas?.getContext('2d');
+        const minWidth = Math.max(72, Math.round(prev.fontSize * 3.2));
+        const minHeight = Math.max(16, prev.fontSize * TEXT_LINE_HEIGHT);
+        const maxWidth = annotationCanvas ? Math.max(minWidth, annotationCanvas.width - prev.x) : Infinity;
+        const maxHeight = annotationCanvas ? Math.max(minHeight, annotationCanvas.height - prev.y) : Infinity;
+
+        let nextWidth = start.width + (point.x - start.x);
+        let nextHeight = start.height + (point.y - start.y);
+        nextWidth = Math.min(maxWidth, Math.max(minWidth, nextWidth));
+        nextHeight = Math.min(maxHeight, Math.max(minHeight, nextHeight));
+
+        if (annotationCtx) {
+          const layout = getTextLayout(annotationCtx, prev.value, prev.fontSize, nextWidth);
+          nextHeight = Math.min(maxHeight, Math.max(nextHeight, layout.height));
+        }
+
+        return { ...prev, width: nextWidth, height: nextHeight };
+      });
+    };
+
+    const handleUp = () => {
+      stopEntryResize();
+    };
+
+    const handleBlur = () => {
+      stopEntryResize();
+    };
+
+    window.addEventListener('mousemove', handleMove);
+    window.addEventListener('mouseup', handleUp);
+    window.addEventListener('blur', handleBlur);
+    return () => {
+      window.removeEventListener('mousemove', handleMove);
+      window.removeEventListener('mouseup', handleUp);
+      window.removeEventListener('blur', handleBlur);
+    };
+  }, [isResizingEntry, textEntry]);
+
   // Rect Drawing Temp State
   const dragStartRef = useRef<{ x: number, y: number } | null>(null);
   const snapshotRef = useRef<ImageData | null>(null);
   const arrowStartRef = useRef<{ x: number; y: number } | null>(null);
-  const textInputRef = useRef<HTMLInputElement>(null);
+  const textInputRef = useRef<HTMLTextAreaElement>(null);
   const textFocusRef = useRef(false);
   const dragOffsetRef = useRef<{ x: number; y: number } | null>(null);
-  const resizeStartRef = useRef<{ x: number; y: number; fontSize: number } | null>(null);
+  const resizeStartRef = useRef<{ x: number; y: number; width: number; height: number } | null>(null);
+  const entryResizeStartRef = useRef<{ x: number; y: number; width: number; height: number } | null>(null);
 
   // Initialize Canvas Sizing once image loads
   const handleImageLoad = (e: React.SyntheticEvent<HTMLImageElement>) => {
@@ -333,6 +475,27 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ imageUrl, onSave, on
     return { x: clampedX, y: clampedY, inBounds };
   };
 
+  const getCanvasPointFromClient = (clientX: number, clientY: number) => {
+    const canvas = maskPreviewCanvasRef.current;
+    const image = bgImageRef.current;
+    const target = image || canvas;
+    if (!target) return { x: 0, y: 0, inBounds: false };
+
+    const rect = target.getBoundingClientRect();
+    const inBounds = clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom;
+
+    const width = canvas?.width || image?.naturalWidth || rect.width;
+    const height = canvas?.height || image?.naturalHeight || rect.height;
+
+    const x = (clientX - rect.left) * (width / rect.width);
+    const y = (clientY - rect.top) * (height / rect.height);
+
+    const clampedX = Math.min(Math.max(x, 0), width);
+    const clampedY = Math.min(Math.max(y, 0), height);
+
+    return { x: clampedX, y: clampedY, inBounds };
+  };
+
   const getClientPoint = (e: React.MouseEvent | React.TouchEvent) => {
     if ('touches' in e) {
       if (e.touches.length > 0) {
@@ -360,18 +523,34 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ imageUrl, onSave, on
     };
   };
 
+  const getCanvasScale = () => {
+    const canvas = maskPreviewCanvasRef.current;
+    const image = bgImageRef.current;
+    const target = image || canvas;
+    if (!target) return { x: 1, y: 1 };
+    const rect = target.getBoundingClientRect();
+    const width = canvas?.width || image?.naturalWidth || rect.width;
+    const height = canvas?.height || image?.naturalHeight || rect.height;
+    return {
+      x: rect.width / width,
+      y: rect.height / height
+    };
+  };
+
   const measureEntryBox = (text: string, fontSize: number) => {
     const annotationCanvas = annotationCanvasRef.current;
     const annotationCtx = annotationCanvas?.getContext('2d');
     if (!annotationCtx) {
-      return { width: 56, height: Math.max(18, fontSize * 1.1) };
+      return { width: 140, height: Math.max(16, fontSize * TEXT_LINE_HEIGHT) };
     }
-    const sample = text && text.length > 0 ? text : ' ';
+    const trimmed = text.trim();
+    const sample = trimmed.length > 0 ? trimmed : ' ';
     const metrics = measureTextBox(annotationCtx, sample, fontSize);
-    const minWidth = Math.max(32, Math.round(fontSize * 1.1));
+    const defaultWidth = Math.max(140, Math.round(fontSize * 6));
+    const minWidth = Math.max(72, Math.round(fontSize * 3.2));
     return {
-      width: Math.max(minWidth, metrics.width),
-      height: Math.max(18, metrics.height)
+      width: trimmed.length > 0 ? Math.max(minWidth, metrics.width) : defaultWidth,
+      height: Math.max(16, metrics.height)
     };
   };
 
@@ -385,7 +564,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ imageUrl, onSave, on
     const annotationCanvas = annotationCanvasRef.current;
     const annotationCtx = annotationCanvas?.getContext('2d');
     const scaleFactor = annotationCtx ? Math.max(1, getDynamicScaleFactor(annotationCtx)) : 1;
-    const fontSize = annotation?.fontSize ?? Math.round(22 * scaleFactor);
+    const fontSize = annotation?.fontSize ?? Math.round(textSize * scaleFactor);
     const color = annotation?.color ?? brushColor;
     const { width, height } = measureEntryBox(annotation?.text ?? '', fontSize);
 
@@ -447,7 +626,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ imageUrl, onSave, on
     if (!inBounds) return;
     const hit = getTextHit(x, y);
     if (hit) {
-      setSelectedTextId(hit.annotation.id);
+      selectTextAnnotation(hit.annotation);
       return;
     }
     setSelectedTextId(null);
@@ -460,8 +639,54 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ imageUrl, onSave, on
     if (!inBounds) return;
     const hit = getTextHit(x, y);
     if (!hit) return;
-    setSelectedTextId(hit.annotation.id);
+    selectTextAnnotation(hit.annotation);
     openTextEntry(e, hit.annotation);
+  };
+
+  const handleTextEntryMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!textEntry || !textEntryOverlay) return;
+    if (isResizingEntry) return;
+    e.stopPropagation();
+    const rect = e.currentTarget.getBoundingClientRect();
+    const handleSize = textEntryOverlay.handleSize;
+    const onHandle =
+      e.clientX >= rect.right - handleSize - 2 &&
+      e.clientY >= rect.bottom - handleSize - 2;
+    setEntryHoverState(onHandle ? 'handle' : 'body');
+  };
+
+  const handleTextEntryMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!textEntry || !textEntryOverlay) return;
+    if (e.target === textInputRef.current) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const handleSize = textEntryOverlay.handleSize;
+    const onHandle =
+      e.clientX >= rect.right - handleSize - 2 &&
+      e.clientY >= rect.bottom - handleSize - 2;
+    if (!onHandle) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const point = getCanvasPointFromClient(e.clientX, e.clientY);
+    entryResizeStartRef.current = {
+      x: point.x,
+      y: point.y,
+      width: textEntry.width,
+      height: textEntry.height
+    };
+    setIsResizingEntry(true);
+    setEntryHoverState('handle');
+  };
+
+  const handleTextEntryMouseLeave = () => {
+    if (!isResizingEntry) {
+      setEntryHoverState('none');
+    }
+  };
+
+  const handleTextEntryMouseUp = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!isResizingEntry) return;
+    e.stopPropagation();
+    stopEntryResize();
   };
 
   const handleWheel = (e: React.WheelEvent) => {
@@ -584,9 +809,65 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ imageUrl, onSave, on
 
   const measureTextBox = (ctx: CanvasRenderingContext2D, text: string, fontSize: number) => {
     ctx.font = `600 ${fontSize}px "Inter", sans-serif`;
-    const width = ctx.measureText(text).width;
-    const height = fontSize * 1.2;
+    const lines = text.split('\n');
+    const width = lines.reduce((max, line) => Math.max(max, ctx.measureText(line).width), 0);
+    const height = Math.max(1, lines.length) * fontSize * TEXT_LINE_HEIGHT;
     return { width, height };
+  };
+
+  const wrapTextLines = (ctx: CanvasRenderingContext2D, text: string, maxWidth: number) => {
+    if (!text) return [''];
+    if (maxWidth <= 0) return [text];
+    const paragraphs = text.split('\n');
+    const lines: string[] = [];
+
+    paragraphs.forEach((paragraph) => {
+      if (paragraph.length === 0) {
+        lines.push('');
+        return;
+      }
+
+      let current = '';
+      let lastSpaceIndex = -1;
+
+      for (let i = 0; i < paragraph.length; i += 1) {
+        const char = paragraph[i];
+        current += char;
+        if (char === ' ') {
+          lastSpaceIndex = current.length - 1;
+        }
+
+        if (ctx.measureText(current).width > maxWidth && current.length > 1) {
+          if (lastSpaceIndex > -1) {
+            const line = current.slice(0, lastSpaceIndex);
+            lines.push(line);
+            current = current.slice(lastSpaceIndex + 1);
+            lastSpaceIndex = current.lastIndexOf(' ');
+          } else {
+            lines.push(current.slice(0, -1));
+            current = char;
+            lastSpaceIndex = char === ' ' ? 0 : -1;
+          }
+        }
+      }
+
+      lines.push(current);
+    });
+
+    return lines;
+  };
+
+  const getTextLayout = (
+    ctx: CanvasRenderingContext2D,
+    text: string,
+    fontSize: number,
+    maxWidth: number
+  ) => {
+    ctx.font = `600 ${fontSize}px "Inter", sans-serif`;
+    const lines = wrapTextLines(ctx, text, maxWidth);
+    const lineHeight = fontSize * TEXT_LINE_HEIGHT;
+    const height = Math.max(1, lines.length) * lineHeight;
+    return { lines, lineHeight, height };
   };
 
   const drawTextAnnotation = (ctx: CanvasRenderingContext2D, annotation: TextAnnotation) => {
@@ -597,8 +878,13 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ imageUrl, onSave, on
     ctx.lineWidth = Math.max(2, annotation.fontSize * 0.12);
     ctx.textAlign = 'left';
     ctx.textBaseline = 'top';
-    ctx.strokeText(annotation.text, annotation.x, annotation.y);
-    ctx.fillText(annotation.text, annotation.x, annotation.y);
+    const { lines, lineHeight } = getTextLayout(ctx, annotation.text, annotation.fontSize, annotation.width);
+    const maxLines = Math.max(1, Math.floor(annotation.height / lineHeight));
+    lines.slice(0, maxLines).forEach((line, index) => {
+      const lineY = annotation.y + index * lineHeight;
+      ctx.strokeText(line, annotation.x, lineY);
+      ctx.fillText(line, annotation.x, lineY);
+    });
     ctx.restore();
   };
 
@@ -666,7 +952,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ imageUrl, onSave, on
   const getTextHit = (x: number, y: number) => {
     for (let i = textAnnotations.length - 1; i >= 0; i -= 1) {
       const annotation = textAnnotations[i];
-    const padding = TEXT_BOX_PADDING;
+      const padding = TEXT_BOX_PADDING;
       const boxX = annotation.x - padding;
       const boxY = annotation.y - padding;
       const boxWidth = annotation.width + padding * 2;
@@ -725,15 +1011,19 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ imageUrl, onSave, on
       let updatedRegions = regions;
       const next = textAnnotations.map(item => {
         if (item.id !== editingId) return item;
+        const nextWidth = options?.width ?? item.width;
+        const nextFontSize = options?.fontSize ?? item.fontSize;
+        const layout = getTextLayout(annotationCtx, trimmed, nextFontSize, nextWidth);
+        const nextHeight = Math.max(options?.height ?? item.height, layout.height);
         if (item.regionId) {
           updatedRegions = updateRegionInstructionLine(item.regionId, item.instructionText, trimmed);
         }
         return {
           ...item,
           text: trimmed,
-          width: options?.width ?? item.width,
-          height: options?.height ?? item.height,
-          fontSize: options?.fontSize ?? item.fontSize,
+          width: nextWidth,
+          height: nextHeight,
+          fontSize: nextFontSize,
           color: options?.color ?? item.color,
           instructionText: item.regionId ? trimmed : item.instructionText
         };
@@ -745,11 +1035,10 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ imageUrl, onSave, on
     }
 
     const scaleFactor = Math.max(1, getDynamicScaleFactor(annotationCtx));
-    const fontSize = options?.fontSize ?? Math.round(22 * scaleFactor);
-    const metrics = {
-      width: options?.width ?? measureEntryBox(trimmed, fontSize).width,
-      height: options?.height ?? measureEntryBox(trimmed, fontSize).height
-    };
+    const fontSize = options?.fontSize ?? Math.round(textSize * scaleFactor);
+    const width = options?.width ?? measureEntryBox(trimmed, fontSize).width;
+    const layout = getTextLayout(annotationCtx, trimmed, fontSize, width);
+    const height = Math.max(options?.height ?? measureEntryBox(trimmed, fontSize).height, layout.height);
     const regionId = activeRegionId || undefined;
     const updatedRegions = regionId ? updateRegionInstructionLine(regionId, undefined, trimmed) : regions;
 
@@ -761,8 +1050,8 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ imageUrl, onSave, on
       text: trimmed,
       color: options?.color ?? brushColor,
       fontSize,
-      width: metrics.width,
-      height: metrics.height,
+      width,
+      height,
       regionId,
       instructionText: regionId ? trimmed : undefined
     }]);
@@ -797,10 +1086,10 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ imageUrl, onSave, on
     if (activeTool === 'text') {
       const hit = getTextHit(x, y);
       if (hit) {
-        setSelectedTextId(hit.annotation.id);
+        selectTextAnnotation(hit.annotation);
         if (hit.onHandle) {
           setIsResizingText(true);
-          resizeStartRef.current = { x, y, fontSize: hit.annotation.fontSize };
+          resizeStartRef.current = { x, y, width: hit.annotation.width, height: hit.annotation.height };
         } else {
           setIsDraggingText(true);
           dragOffsetRef.current = { x: x - hit.annotation.x, y: y - hit.annotation.y };
@@ -951,13 +1240,23 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ imageUrl, onSave, on
           return { ...item, x: newX, y: newY };
         }
         if (isResizingText && resizeStartRef.current) {
-          const delta = (x - resizeStartRef.current.x + (y - resizeStartRef.current.y)) * 0.15;
-          const nextFontSize = Math.max(12, Math.round(resizeStartRef.current.fontSize + delta));
           const annotationCanvas = annotationCanvasRef.current;
           const annotationCtx = annotationCanvas?.getContext('2d');
           if (!annotationCtx) return item;
-          const metrics = measureEntryBox(item.text, nextFontSize);
-          return { ...item, fontSize: nextFontSize, width: metrics.width, height: metrics.height };
+          const minWidth = Math.max(72, Math.round(item.fontSize * 3.2));
+          const minHeight = Math.max(16, item.fontSize * TEXT_LINE_HEIGHT);
+          const maxWidth = annotationCanvas ? Math.max(minWidth, annotationCanvas.width - item.x) : Infinity;
+          const maxHeight = annotationCanvas ? Math.max(minHeight, annotationCanvas.height - item.y) : Infinity;
+
+          let nextWidth = resizeStartRef.current.width + (x - resizeStartRef.current.x);
+          let nextHeight = resizeStartRef.current.height + (y - resizeStartRef.current.y);
+          nextWidth = Math.min(maxWidth, Math.max(minWidth, nextWidth));
+          nextHeight = Math.min(maxHeight, Math.max(minHeight, nextHeight));
+
+          const layout = getTextLayout(annotationCtx, item.text, item.fontSize, nextWidth);
+          nextHeight = Math.min(maxHeight, Math.max(nextHeight, layout.height));
+
+          return { ...item, width: nextWidth, height: nextHeight };
         }
         return item;
       }));
@@ -1150,8 +1449,8 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ imageUrl, onSave, on
     return maskCanvas.toDataURL('image/png');
   };
 
-  const handleSave = () => {
-    if (!bgImageRef.current || !maskPreviewCanvasRef.current || !markerCanvasRef.current || !annotationCanvasRef.current) return;
+  const buildSavePayload = (): CanvasEditorExportPayload | null => {
+    if (!bgImageRef.current || !maskPreviewCanvasRef.current || !markerCanvasRef.current || !annotationCanvasRef.current) return null;
     const selectionId = selectedTextId;
     if (selectionId) {
       renderAnnotations(textAnnotations, arrowAnnotations, null);
@@ -1172,7 +1471,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ imageUrl, onSave, on
     mergedMaskCanvas.height = maskPreviewCanvasRef.current.height;
     const mergedCtx = mergedMaskCanvas.getContext('2d');
 
-    if (!baseCtx || !previewCtx || !mergedCtx) return;
+    if (!baseCtx || !previewCtx || !mergedCtx) return null;
 
     // Base image
     baseCtx.drawImage(bgImageRef.current, 0, 0);
@@ -1207,16 +1506,32 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ imageUrl, onSave, on
       };
     });
 
-    onSave({
+    if (selectionId) {
+      renderAnnotations(textAnnotations, arrowAnnotations, selectionId);
+    }
+
+    return {
       baseImageDataUrl,
       previewDataUrl,
       mergedMaskDataUrl,
       regions: regionExports
-    });
-    if (selectionId) {
-      renderAnnotations(textAnnotations, arrowAnnotations, selectionId);
+    };
+  };
+
+  const handleSaveToConfig = () => {
+    const payload = buildSavePayload();
+    if (payload) {
+      onSaveToConfig(payload);
+      onClose();
     }
-    onClose();
+  };
+
+  const handleSaveToChat = () => {
+    const payload = buildSavePayload();
+    if (payload) {
+      onSaveToChat(payload);
+      onClose();
+    }
   };
 
   const handleClear = () => {
@@ -1240,6 +1555,21 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ imageUrl, onSave, on
     renderAnnotations([], [], null);
     saveState(1, [], null);
   };
+
+  const textEntryScale = textEntry ? getCanvasScale() : { x: 1, y: 1 };
+  const textEntryScaleFactor = Math.min(textEntryScale.x, textEntryScale.y);
+  const textEntryOverlay = textEntry
+    ? {
+      width: (textEntry.width + TEXT_BOX_PADDING * 2) * textEntryScale.x,
+      height: (textEntry.height + TEXT_BOX_PADDING * 2) * textEntryScale.y,
+      inputWidth: textEntry.width * textEntryScale.x,
+      inputHeight: textEntry.height * textEntryScale.y,
+      paddingX: TEXT_BOX_PADDING * textEntryScale.x,
+      paddingY: TEXT_BOX_PADDING * textEntryScale.y,
+      fontSize: textEntry.fontSize * textEntryScaleFactor,
+      handleSize: Math.max(10, textEntry.fontSize * 0.4) * textEntryScaleFactor
+    }
+    : null;
 
   return (
     <div className="fixed inset-0 z-[60] bg-black/95 backdrop-blur-md flex flex-col animate-in fade-in duration-200">
@@ -1265,20 +1595,29 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ imageUrl, onSave, on
             {t('editor.cancel')}
           </button>
           <button
-            onClick={handleSave}
-            className="px-4 py-2 bg-brand-600 hover:bg-brand-500 text-white font-bold rounded-lg shadow-lg flex items-center gap-2 transition-all"
+            onClick={handleSaveToConfig}
+            className="px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white font-bold rounded-lg shadow-lg flex items-center gap-2 transition-all"
+            title="添加到参数配置页的重绘编辑区"
           >
-            <Save size={16} />
-            {t('editor.use')}
+            <Settings size={16} />
+            参数配置
+          </button>
+          <button
+            onClick={handleSaveToChat}
+            className="px-4 py-2 bg-brand-600 hover:bg-brand-500 text-white font-bold rounded-lg shadow-lg flex items-center gap-2 transition-all"
+            title="添加到AI对话作为参考图片"
+          >
+            <MessageCircle size={16} />
+            AI 对话
           </button>
         </div>
       </div>
 
       {/* Toolbar */}
-      <div className="h-14 border-b border-dark-border bg-dark-surface flex items-center justify-center gap-6 shrink-0 z-20">
+      <div className="h-14 border-b border-dark-border bg-dark-surface flex flex-nowrap items-center justify-start gap-6 px-6 shrink-0 z-20 overflow-x-auto overflow-y-hidden">
 
         {/* Undo/Reset */}
-        <div className="flex items-center gap-2 border-r border-dark-border pr-6">
+        <div className="flex items-center gap-2 border-r border-dark-border pr-6 shrink-0">
           <button onClick={handleUndo} disabled={history.length <= 1} className="p-2 rounded-lg hover:bg-white/10 text-gray-400 hover:text-white disabled:opacity-30 transition-colors" title={t('editor.undo')}>
             <Undo size={18} />
           </button>
@@ -1288,7 +1627,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ imageUrl, onSave, on
         </div>
 
         {/* Tools */}
-        <div className="flex items-center gap-2 p-1 bg-black/20 rounded-lg border border-white/5">
+        <div className="flex flex-nowrap items-center gap-2 p-1 bg-black/20 rounded-lg border border-white/5 shrink-0">
           <button onClick={() => setActiveTool('marker')} className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-bold transition-all ${activeTool === 'marker' ? 'bg-brand-600 text-white shadow-lg' : 'text-gray-400 hover:text-white hover:bg-white/5'}`}>
             <MousePointer2 size={14} /> Markers
           </button>
@@ -1311,22 +1650,22 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ imageUrl, onSave, on
 
         {/* Brush Settings */}
         {(activeTool === 'brush' || activeTool === 'rect' || activeTool === 'marker' || activeTool === 'arrow' || activeTool === 'text') && (
-          <div className="flex items-center gap-4 border-l border-dark-border pl-6 animate-in slide-in-from-left-2 fade-in">
+          <div className="flex flex-nowrap items-center gap-4 border-l border-dark-border pl-6 animate-in slide-in-from-left-2 fade-in shrink-0">
             {/* Color Picker */}
             <div className="flex items-center gap-2">
-              <label className="text-xs font-bold text-gray-500 uppercase">{t('editor.color')}</label>
+              <label className="text-xs font-bold text-gray-500 uppercase whitespace-nowrap">{t('editor.color')}</label>
               <div className="flex gap-1">
                 {['#ef4444', '#3b82f6', '#10b981', '#f59e0b', '#ffffff', '#000000'].map(c => (
                   <button
                     key={c}
-                    onClick={() => setBrushColor(c)}
+                    onClick={() => applyBrushColor(c)}
                     className={`w-5 h-5 rounded-full border border-white/20 transition-transform hover:scale-110 ${brushColor === c ? 'ring-2 ring-white scale-110' : ''}`}
                     style={{ backgroundColor: c }}
                   />
                 ))}
               </div>
               {/* Custom Color Input Hidden but accessible if needed */}
-              <input type="color" value={brushColor} onChange={(e) => setBrushColor(e.target.value)} className="w-0 h-0 opacity-0" id="color-input" />
+              <input type="color" value={brushColor} onChange={(e) => applyBrushColor(e.target.value)} className="w-0 h-0 opacity-0" id="color-input" />
               <label htmlFor="color-input" className="p-1 rounded bg-white/10 hover:bg-white/20 cursor-pointer"><PaletteIcon /></label>
             </div>
 
@@ -1334,12 +1673,52 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ imageUrl, onSave, on
               <>
                 <div className="w-px h-6 bg-dark-border" />
                 <div className="flex items-center gap-2">
-                  <span className="text-xs font-bold text-gray-500 uppercase">{t('editor.size')}</span>
+                  <span className="text-xs font-bold text-gray-500 uppercase whitespace-nowrap">{t('editor.size')}</span>
                   <input
                     type="range" min="5" max="100"
                     value={brushSize}
                     onChange={(e) => setBrushSize(parseInt(e.target.value))}
                     className="w-20 h-1.5 bg-gray-600 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:bg-white [&::-webkit-slider-thumb]:rounded-full"
+                  />
+                </div>
+              </>
+            )}
+            {activeTool === 'text' && (
+              <>
+                <div className="w-px h-6 bg-dark-border" />
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-bold text-gray-500 uppercase whitespace-nowrap">{t('editor.font_size')}</span>
+                  <input
+                    type="range"
+                    min="12"
+                    max="96"
+                    value={textSize}
+                    onChange={(e) => applyTextSize(parseInt(e.target.value, 10))}
+                    className="w-20 h-1.5 bg-gray-600 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:bg-white [&::-webkit-slider-thumb]:rounded-full"
+                  />
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    value={textSizeInput}
+                    onChange={(e) => {
+                      const next = e.target.value.replace(/[^0-9]/g, '');
+                      setTextSizeInput(next);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.currentTarget.blur();
+                      }
+                    }}
+                    onBlur={() => {
+                      const nextValue = textSizeInput.trim();
+                      if (nextValue.length === 0) {
+                        setTextSizeInput(String(textSize));
+                        return;
+                      }
+                      applyTextSize(Number(nextValue));
+                    }}
+                    className="w-12 h-6 bg-black/40 border border-white/10 rounded text-[10px] text-gray-200 text-center focus:outline-none focus:ring-1 focus:ring-brand-500/60"
                   />
                 </div>
               </>
@@ -1404,14 +1783,14 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ imageUrl, onSave, on
           cursor: isPanning
             ? 'grabbing'
             : activeTool === 'marker'
-            ? MARKER_CURSOR
-            : activeTool === 'text'
-            ? isResizingText || textHoverState === 'handle'
-              ? 'crosshair'
-              : textHoverState === 'body' || isDraggingText
-              ? 'move'
-              : 'text'
-            : 'crosshair'
+              ? MARKER_CURSOR
+              : activeTool === 'text'
+                ? isResizingText || textHoverState === 'handle' || isResizingEntry || entryHoverState === 'handle'
+                  ? 'crosshair'
+                  : textHoverState === 'body' || isDraggingText
+                    ? 'move'
+                    : 'text'
+                : 'crosshair'
         }}
       >
         {textEntry && (
@@ -1420,34 +1799,50 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ imageUrl, onSave, on
             style={{
               left: textEntry.screenX,
               top: textEntry.screenY,
-              width: textEntry.width + TEXT_BOX_PADDING * 2,
-              height: textEntry.height + TEXT_BOX_PADDING * 2
+              width: textEntryOverlay?.width ?? textEntry.width + TEXT_BOX_PADDING * 2,
+              height: textEntryOverlay?.height ?? textEntry.height + TEXT_BOX_PADDING * 2,
+              cursor: isResizingEntry || entryHoverState === 'handle' ? 'crosshair' : 'text'
             }}
             onMouseDown={(e) => e.stopPropagation()}
-            onMouseUp={(e) => e.stopPropagation()}
+            onMouseUp={handleTextEntryMouseUp}
             onClick={(e) => e.stopPropagation()}
+            onMouseMove={handleTextEntryMouseMove}
+            onMouseDownCapture={handleTextEntryMouseDown}
+            onMouseLeave={handleTextEntryMouseLeave}
           >
             <div className="absolute inset-0 border border-dashed border-white/70 pointer-events-none" />
             <div
               className="absolute pointer-events-none"
               style={{
-                width: Math.max(10, textEntry.fontSize * 0.4),
-                height: Math.max(10, textEntry.fontSize * 0.4),
+                width: textEntryOverlay?.handleSize ?? Math.max(10, textEntry.fontSize * 0.4),
+                height: textEntryOverlay?.handleSize ?? Math.max(10, textEntry.fontSize * 0.4),
                 right: 2,
                 bottom: 2,
                 border: '1px solid rgba(0,0,0,0.45)',
                 background: 'rgba(255,255,255,0.9)'
               }}
             />
-            <input
+            <textarea
               ref={textInputRef}
               value={textEntry.value}
               onChange={(e) => {
                 const value = e.target.value;
-                setTextEntry(prev => prev ? { ...prev, value } : prev);
+                const annotationCtx = annotationCanvasRef.current?.getContext('2d');
+                setTextEntry(prev => {
+                  if (!prev) return prev;
+                  if (!annotationCtx) {
+                    return { ...prev, value };
+                  }
+                  const layout = getTextLayout(annotationCtx, value, prev.fontSize, prev.width);
+                  return {
+                    ...prev,
+                    value,
+                    height: Math.max(prev.height, layout.height)
+                  };
+                });
               }}
               onKeyDown={(e) => {
-                if (e.key === 'Enter') {
+                if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
                   e.preventDefault();
                   handleTextCommit();
                 } else if (e.key === 'Escape') {
@@ -1458,14 +1853,19 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ imageUrl, onSave, on
               onBlur={handleTextCommit}
               className="absolute left-0 top-0 bg-transparent text-white focus:outline-none select-text"
               style={{
-                width: textEntry.width,
-                height: textEntry.height,
-                transform: `translate(${TEXT_BOX_PADDING}px, ${TEXT_BOX_PADDING}px)`,
-                fontSize: textEntry.fontSize,
+                width: textEntryOverlay?.inputWidth ?? textEntry.width,
+                height: textEntryOverlay?.inputHeight ?? textEntry.height,
+                transform: `translate(${textEntryOverlay?.paddingX ?? TEXT_BOX_PADDING}px, ${textEntryOverlay?.paddingY ?? TEXT_BOX_PADDING}px)`,
+                fontSize: textEntryOverlay?.fontSize ?? textEntry.fontSize,
                 color: textEntry.color,
-                lineHeight: 1.2
+                lineHeight: TEXT_LINE_HEIGHT,
+                resize: 'none',
+                overflow: 'hidden',
+                wordBreak: 'break-word',
+                padding: 0
               }}
               placeholder={t('editor.text_placeholder')}
+              spellCheck={false}
             />
           </div>
         )}

@@ -245,6 +245,7 @@ export interface Project {
   name: string;
   createdAt: number;
   updatedAt: number;
+  deletedAt?: number; // Timestamp when moved to trash
   savedParams?: GenerationParams;
   savedMode?: AppMode;
   chatHistory?: ChatMessage[];

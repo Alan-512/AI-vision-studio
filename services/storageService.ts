@@ -1,10 +1,11 @@
 
-import { Project, AssetItem, AppMode } from '../types';
+import { Project, AssetItem, AppMode, BackgroundTask } from '../types';
 
 const DB_NAME = 'LuminaDB';
-const DB_VERSION = 2; // Bumped version to ensure schema upgrade runs
+const DB_VERSION = 3; // Added tasks store // Bumped version to ensure schema upgrade runs
 const STORE_PROJECTS = 'projects';
 const STORE_ASSETS = 'assets';
+const STORE_TASKS = 'tasks';
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 
@@ -83,6 +84,11 @@ const getDB = (): Promise<IDBDatabase> => {
       // CRITICAL FIX: Check if index exists before creating, regardless of store creation time
       if (!assetStore.indexNames.contains('projectId')) {
         assetStore.createIndex('projectId', 'projectId', { unique: false });
+      }
+
+      // Tasks store (new in v3) - persist background task state
+      if (!db.objectStoreNames.contains(STORE_TASKS)) {
+        db.createObjectStore(STORE_TASKS, { keyPath: 'id' });
       }
     };
   });
@@ -620,6 +626,86 @@ export const bulkSoftDeleteAssets = async (assets: AssetItem[]): Promise<void> =
           const record = cursor.value;
           record.deletedAt = Date.now();
           cursor.update(record);
+        }
+        cursor.continue();
+      }
+    };
+
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error);
+  });
+};
+
+// --- Tasks (Background Task Persistence) ---
+
+export const saveTask = async (task: BackgroundTask): Promise<void> => {
+  try {
+    const transaction = await getTransaction(STORE_TASKS, 'readwrite');
+    return new Promise((resolve, reject) => {
+      const store = transaction.objectStore(STORE_TASKS);
+      const request = store.put(task);
+      request.onsuccess = () => resolve();
+      request.onerror = () => reject(request.error);
+    });
+  } catch (err: any) {
+    // Silently fail if tasks store doesn't exist - will work after refresh
+    if (err.name === 'NotFoundError' || err.message?.includes('not found')) {
+      console.warn('[Storage] Tasks store not found - save skipped');
+      return;
+    }
+    throw err;
+  }
+};
+
+export const loadTasks = async (): Promise<BackgroundTask[]> => {
+  try {
+    const transaction = await getTransaction(STORE_TASKS, 'readonly');
+    return new Promise((resolve, reject) => {
+      const store = transaction.objectStore(STORE_TASKS);
+      const request = store.getAll();
+      request.onsuccess = () => resolve(request.result || []);
+      request.onerror = () => reject(request.error);
+    });
+  } catch (err: any) {
+    // Handle case where tasks store doesn't exist (older DB version)
+    if (err.name === 'NotFoundError' || err.message?.includes('not found')) {
+      console.warn('[Storage] Tasks store not found - returning empty array. Please refresh to trigger DB upgrade.');
+      return [];
+    }
+    throw err;
+  }
+};
+
+export const deleteTask = async (taskId: string): Promise<void> => {
+  try {
+    const transaction = await getTransaction(STORE_TASKS, 'readwrite');
+    return new Promise((resolve, reject) => {
+      const store = transaction.objectStore(STORE_TASKS);
+      const request = store.delete(taskId);
+      request.onsuccess = () => resolve();
+      request.onerror = () => reject(request.error);
+    });
+  } catch (err: any) {
+    if (err.name === 'NotFoundError' || err.message?.includes('not found')) {
+      console.warn('[Storage] Tasks store not found - delete skipped');
+      return;
+    }
+    throw err;
+  }
+};
+
+export const clearCompletedTasks = async (): Promise<void> => {
+  const transaction = await getTransaction(STORE_TASKS, 'readwrite');
+  return new Promise((resolve, reject) => {
+    const store = transaction.objectStore(STORE_TASKS);
+    const cursorRequest = store.openCursor();
+
+    cursorRequest.onsuccess = (e: any) => {
+      const cursor = e.target.result;
+      if (cursor) {
+        const task = cursor.value as BackgroundTask;
+        if (task.status === 'COMPLETED' || task.status === 'FAILED') {
+          cursor.delete();
         }
         cursor.continue();
       }

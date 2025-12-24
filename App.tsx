@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
-import { Image as ImageIcon, Video, LayoutGrid, Folder, Sparkles, Settings, Star, CheckSquare, MoveHorizontal, X, Languages, Trash2, Recycle, Download } from 'lucide-react';
+import { Image as ImageIcon, Video, LayoutGrid, Folder, Sparkles, Settings, Star, CheckSquare, MoveHorizontal, X, Languages, Trash2, Recycle, Download, RotateCcw, ZoomIn } from 'lucide-react';
 import { AppMode, AspectRatio, GenerationParams, AssetItem, ImageResolution, VideoResolution, ImageModel, VideoModel, ImageStyle, Project, ChatMessage, BackgroundTask, SmartAsset, VideoDuration, VideoStyle, AgentAction, SearchPolicy, EditRegion } from './types';
 import { GenerationForm } from './components/GenerationForm';
 import { AssetCard } from './components/AssetCard';
@@ -16,7 +16,7 @@ import {
     initDB, loadProjects, saveProject, saveAsset, loadAssets, updateAsset,
     deleteProjectFromDB, softDeleteAssetInDB, restoreAssetInDB,
     permanentlyDeleteAssetFromDB, bulkPermanentlyDeleteAssets, recoverOrphanedProjects,
-    releaseBlobUrl
+    releaseBlobUrl, saveTask, loadTasks, deleteTask
 } from './services/storageService';
 import { useLanguage } from './contexts/LanguageContext';
 import { StorageStatusBanner } from './components/StorageStatusBanner';
@@ -179,6 +179,7 @@ export function App() {
     const [trashAssets, setTrashAssets] = useState<AssetItem[]>([]);
     const assetBlobUrlsRef = useRef<Set<string>>(new Set());
     const [projects, setProjects] = useState<Project[]>([]);
+    const [trashProjects, setTrashProjects] = useState<Project[]>([]);
     const [activeProjectId, setActiveProjectId] = useState<string>('');
     const [toasts, setToasts] = useState<ToastMessage[]>([]);
     const [tasks, setTasks] = useState<BackgroundTask[]>([]);
@@ -243,7 +244,7 @@ export function App() {
     useEffect(() => {
         initDB().then(async () => {
             await recoverOrphanedProjects();
-            const loadedProjects = await loadProjects();
+            const loadedProjects = await loadProjects().then(p => p.filter(proj => !proj.deletedAt));
             // Initial sort: Newest modification first
             loadedProjects.sort((a, b) => b.updatedAt - a.updatedAt);
 
@@ -259,6 +260,19 @@ export function App() {
                 setProjects(loadedProjects);
                 setActiveProjectId(loadedProjects[0].id);
             }
+
+            // Load persisted tasks and recover any that were interrupted
+            const persistedTasks = await loadTasks();
+            const recoveredTasks = persistedTasks.map(task => {
+                // Mark interrupted tasks as FAILED (they can't be resumed after refresh)
+                if (task.status === 'GENERATING' || task.status === 'QUEUED') {
+                    const failedTask = { ...task, status: 'FAILED' as const, error: 'Task interrupted by page refresh' };
+                    saveTask(failedTask); // Persist the updated status
+                    return failedTask;
+                }
+                return task;
+            });
+            setTasks(recoveredTasks);
             setIsLoaded(true);
         });
     }, []);
@@ -329,10 +343,19 @@ export function App() {
                 assetLoadAbortRef.current = new AbortController();
                 const currentLoadId = activeProjectId;
 
-                loadAssets(activeProjectId).then(loadedAssets => {
+                loadAssets(activeProjectId).then(async loadedAssets => {
                     // Only update if this is still the active project
                     if (activeProjectIdRef.current === currentLoadId) {
-                        setAssets(loadedAssets);
+                        // Clean up interrupted assets (GENERATING/PENDING) - delete from DB, don't show
+                        const interruptedAssets = loadedAssets.filter(a => a.status === 'GENERATING' || a.status === 'PENDING');
+                        const validAssets = loadedAssets.filter(a => a.status !== 'GENERATING' && a.status !== 'PENDING');
+
+                        // Delete interrupted assets from DB silently
+                        for (const asset of interruptedAssets) {
+                            permanentlyDeleteAssetFromDB(asset.id).catch(console.debug);
+                        }
+
+                        setAssets(validAssets);
                     }
                 });
                 if (project.savedParams) {
@@ -359,6 +382,15 @@ export function App() {
         }
     }, [activeProjectId]);
 
+
+    // Load deleted projects when entering trash mode
+    useEffect(() => {
+        if (rightPanelMode === 'TRASH') {
+            loadProjects().then(allProjects => {
+                setTrashProjects(allProjects.filter(p => p.deletedAt !== undefined));
+            });
+        }
+    }, [rightPanelMode]);
     // Project Auto-Save Logic
     useEffect(() => {
         if (!isLoaded || !activeProjectId) return;
@@ -581,9 +613,9 @@ export function App() {
                 numberOfImages: resolvedNumberOfImages,
                 useGrounding: effectiveGrounding,
                 smartAssets: [...agentContextAssets],
-                editBaseImage: params.editBaseImage,
-                editMask: params.editMask,
-                editRegions: params.editRegions,
+                // NOTE: Do NOT include editBaseImage/editMask/editRegions here!
+                // Edit mode params should only be used in Parameter Config page, not in Chat.
+                // This prevents edit mode data from leaking into AI Assistant.
                 continuousMode: false
             };
             // === SEMANTIC REFERENCE MODE SELECTION ===
@@ -615,17 +647,20 @@ export function App() {
                     // Pure text-to-image, no references
                     break;
 
-                case 'USER_UPLOADED_ONLY':
-                    // Only user-uploaded images (role === 'user' AND has image)
-                    messagesWithImages
-                        .filter(m => m.role === 'user')
-                        .forEach(m => {
-                            extractImages(m).forEach((img, idx) => {
-                                const asset = toSmartAsset(img, `user-${m.timestamp}-${idx}`);
-                                if (asset) selectedReferences.push(asset);
-                            });
+                case 'USER_UPLOADED_ONLY': {
+                    // Only LATEST user-uploaded images (not all historical user images)
+                    // This ensures the most recent reference takes priority
+                    const latestUserWithImages = [...messagesWithImages]
+                        .reverse()
+                        .find(m => m.role === 'user');
+                    if (latestUserWithImages) {
+                        extractImages(latestUserWithImages).forEach((img, idx) => {
+                            const asset = toSmartAsset(img, `user-${latestUserWithImages.timestamp}-${idx}`);
+                            if (asset) selectedReferences.push(asset);
                         });
+                    }
                     break;
+                }
 
                 case 'LAST_GENERATED': {
                     // Last AI-generated image (role === 'assistant' or model)
@@ -721,6 +756,8 @@ export function App() {
                 }
             };
             await handleGenerate(executionParams, AppMode.IMAGE, onComplete, chatHistory);
+            // Clear context assets from UI after generation starts (they've been used)
+            setAgentContextAssets([]);
         }
     };
 
@@ -788,15 +825,19 @@ export function App() {
             const taskId = crypto.randomUUID();
             const controller = new AbortController();
             taskControllers.current[taskId] = controller;
-            setTasks(prev => [...prev, {
+            const newTask: BackgroundTask = {
                 id: taskId, projectId: currentProjectId, projectName: projects.find(p => p.id === currentProjectId)?.name || 'Project',
                 type: currentMode === AppMode.IMAGE ? 'IMAGE' : 'VIDEO', status: 'QUEUED', startTime: Date.now(), prompt: activeParams.prompt
-            }]);
+            };
+            setTasks(prev => [...prev, newTask]);
+            saveTask(newTask); // Persist to IndexedDB
 
             try {
                 const onStart = () => {
                     updateAsset(taskId, { status: 'GENERATING' }).catch(console.error);
-                    setTasks(prev => prev.map(t => t.id === taskId ? { ...t, status: 'GENERATING', executionStartTime: Date.now() } : t));
+                    const updatedTask = { ...newTask, status: 'GENERATING' as const, executionStartTime: Date.now() };
+                    setTasks(prev => prev.map(t => t.id === taskId ? updatedTask : t));
+                    saveTask(updatedTask); // Persist status change
                     if (activeProjectIdRef.current === currentProjectId) {
                         setAssets(prev => prev.map(a => a.id === taskId ? { ...a, status: 'GENERATING' } : a));
                     }
@@ -844,6 +885,7 @@ export function App() {
                     if (controller.signal.aborted) throw new Error("Cancelled");
                     if (activeProjectIdRef.current === currentProjectId) setAssets(prev => prev.map(a => a.id === taskId ? asset : a));
                     setTasks(prev => prev.map(t => t.id === taskId ? { ...t, status: 'COMPLETED' } : t));
+                    saveTask({ ...newTask, status: 'COMPLETED' }); // Persist completion
                     if (onSuccess) onSuccess(asset);
                 } else {
                     const videoUrl = await generateVideo(genParams, async (operationName) => {
@@ -855,6 +897,7 @@ export function App() {
                     await updateAsset(taskId, updates);
                     if (activeProjectIdRef.current === currentProjectId) setAssets(prev => prev.map(a => a.id === taskId ? { ...a, ...updates } : a));
                     setTasks(prev => prev.map(t => t.id === taskId ? { ...t, status: 'COMPLETED' } : t));
+                    saveTask({ ...newTask, status: 'COMPLETED' }); // Persist completion
                     asset = { ...tempAsset, ...updates };
                 }
                 playSuccessSound();
@@ -862,6 +905,7 @@ export function App() {
             } catch (error: any) {
                 if (error.message === 'Cancelled' || error.name === 'AbortError') {
                     setTasks(prev => prev.filter(t => t.id !== taskId));
+                    deleteTask(taskId); // Remove from DB
                     try {
                         await permanentlyDeleteAssetFromDB(taskId);
                         if (activeProjectIdRef.current === currentProjectId) setAssets(prev => prev.filter(a => a.id !== taskId));
@@ -871,7 +915,9 @@ export function App() {
                 } else {
                     const errorText = error.message || "";
                     const friendlyError = getFriendlyError(errorText);
-                    setTasks(prev => prev.map(t => t.id === taskId ? { ...t, status: 'FAILED', error: errorText } : t));
+                    const failedTask = { ...newTask, status: 'FAILED' as const, error: errorText };
+                    setTasks(prev => prev.map(t => t.id === taskId ? failedTask : t));
+                    saveTask(failedTask); // Persist failure
                     try {
                         await permanentlyDeleteAssetFromDB(taskId);
                         if (activeProjectIdRef.current === currentProjectId) setAssets(prev => prev.filter(a => a.id !== taskId));
@@ -896,6 +942,7 @@ export function App() {
 
     const handleCancelTask = (taskId: string) => {
         setTasks(prev => prev.filter(t => t.id !== taskId));
+        deleteTask(taskId); // Remove from DB
         if (taskControllers.current[taskId]) {
             taskControllers.current[taskId].abort();
             permanentlyDeleteAssetFromDB(taskId).catch(console.error);
@@ -903,7 +950,12 @@ export function App() {
         }
     };
 
-    const handleClearCompletedTasks = () => { setTasks(prev => prev.filter(t => t.status === 'GENERATING' || t.status === 'QUEUED')); };
+    const handleClearCompletedTasks = () => {
+        setTasks(prev => {
+            prev.filter(t => t.status === 'COMPLETED' || t.status === 'FAILED').forEach(t => deleteTask(t.id));
+            return prev.filter(t => t.status === 'GENERATING' || t.status === 'QUEUED');
+        });
+    };
     const openConfirmDeleteProject = (projectId: string) => {
         const project = projects.find(p => p.id === projectId);
         setConfirmDialog({
@@ -914,8 +966,11 @@ export function App() {
             cancelLabel: t('btn.cancel') || 'Cancel',
             isDestructive: true,
             action: async () => {
-                // Soft delete: just remove from list for now (could add deletedAt to Project type later)
-                await deleteProjectFromDB(projectId);
+                // Soft delete: set deletedAt timestamp
+                if (project) {
+                    const deletedProject = { ...project, deletedAt: Date.now() };
+                    await saveProject(deletedProject);
+                }
                 setProjects(prev => prev.filter(p => p.id !== projectId));
                 setConfirmDialog(prev => ({ ...prev, isOpen: false }));
                 if (activeProjectId === projectId) {
@@ -930,6 +985,32 @@ export function App() {
     const handleRestoreAsset = async (assetId: string) => { const asset = trashAssets.find(a => a.id === assetId) || assets.find(a => a.id === assetId); if (asset) { await restoreAssetInDB(asset); setAssets(prev => prev.map(a => a.id === assetId ? { ...a, deletedAt: undefined } : a)); setTrashAssets(prev => prev.filter(a => a.id !== assetId)); } };
     const openConfirmDeleteForever = (assetId: string) => { setConfirmDialog({ isOpen: true, title: t('confirm.delete_forever.title'), message: t('confirm.delete_forever.desc'), confirmLabel: t('btn.delete_forever'), cancelLabel: t('btn.cancel'), isDestructive: true, action: async () => { await permanentlyDeleteAssetFromDB(assetId); setAssets(prev => prev.filter(a => a.id !== assetId)); setTrashAssets(prev => prev.filter(a => a.id !== assetId)); setConfirmDialog(prev => ({ ...prev, isOpen: false })); } }); };
     const openConfirmEmptyTrash = () => { setConfirmDialog({ isOpen: true, title: t('confirm.empty_trash.title'), message: t('confirm.empty_trash.desc'), confirmLabel: t('btn.empty_trash'), cancelLabel: t('btn.cancel'), isDestructive: true, action: async () => { const trashIds = trashAssets.map(a => a.id); if (trashIds.length > 0) { await bulkPermanentlyDeleteAssets(trashIds); setAssets(prev => prev.filter(a => a.deletedAt === undefined)); setTrashAssets([]); } setConfirmDialog(prev => ({ ...prev, isOpen: false })); } }); };
+    // Project restore and permanent delete
+    const handleRestoreProject = async (projectId: string) => {
+        const project = trashProjects.find(p => p.id === projectId);
+        if (project) {
+            const restoredProject = { ...project, deletedAt: undefined };
+            await saveProject(restoredProject);
+            setProjects(prev => [...prev, restoredProject]);
+            setTrashProjects(prev => prev.filter(p => p.id !== projectId));
+        }
+    };
+    const openConfirmDeleteProjectForever = (projectId: string) => {
+        const project = trashProjects.find(p => p.id === projectId);
+        setConfirmDialog({
+            isOpen: true,
+            title: t('confirm.delete_forever.title'),
+            message: `"${project?.name || 'Project'}" - ${t('confirm.delete_forever.desc')}`,
+            confirmLabel: t('btn.delete_forever'),
+            cancelLabel: t('btn.cancel'),
+            isDestructive: true,
+            action: async () => {
+                await deleteProjectFromDB(projectId);
+                setTrashProjects(prev => prev.filter(p => p.id !== projectId));
+                setConfirmDialog(prev => ({ ...prev, isOpen: false }));
+            }
+        });
+    };
     const handleBulkDelete = () => { if (selectedAssetIds.size === 0) return; setConfirmDialog({ isOpen: true, title: t('confirm.delete_bulk.title'), message: `${selectedAssetIds.size} items`, confirmLabel: t('btn.delete'), cancelLabel: t('btn.cancel'), isDestructive: true, action: async () => { const ids = Array.from(selectedAssetIds) as string[]; await bulkPermanentlyDeleteAssets(ids); setAssets(prev => prev.filter(a => !selectedAssetIds.has(a.id))); setSelectedAssetIds(new Set()); setConfirmDialog(prev => ({ ...prev, isOpen: false })); setIsSelectionMode(false); } }); };
     const handleBulkDownload = () => { selectedAssetIds.forEach(id => { const asset = assets.find(a => a.id === id); if (asset) { const link = document.createElement('a'); link.href = asset.url; link.download = `lumina-export-${asset.id}.${asset.type === 'IMAGE' ? 'png' : 'mp4'}`; link.click(); } }); };
     const toggleAssetSelection = (asset: AssetItem) => { const newSet = new Set(selectedAssetIds); if (newSet.has(asset.id)) newSet.delete(asset.id); else newSet.add(asset.id); setSelectedAssetIds(newSet); };
@@ -946,7 +1027,7 @@ export function App() {
     };
     const handleVideoContinue = (data: string, mimeType: string) => { setParams(prev => ({ ...prev, inputVideoData: data, inputVideoMimeType: mimeType })); setMode(AppMode.VIDEO); setActiveTab('studio'); setRightPanelMode('GALLERY'); addToast('info', 'Video Extension', t('help.extend_desc')); };
     const handleRemix = (asset: AssetItem) => { setParams(prev => ({ ...prev, prompt: asset.prompt })); if (asset.type === 'IMAGE') handleUseAsReference(asset); };
-    const handleCanvasSave = async (payload: {
+    const handleCanvasSaveToConfig = async (payload: {
         baseImageDataUrl: string;
         previewDataUrl: string;
         mergedMaskDataUrl: string;
@@ -995,7 +1076,31 @@ export function App() {
         setRightPanelMode('GALLERY');
         setActiveTab('studio');
         setEditorAsset(null);
-        addToast('success', 'Edit Ready', 'Base image and mask saved for editing.');
+        addToast('success', '编辑已准备', '图片已添加到参数配置的重绘编辑区');
+    };
+
+    const handleCanvasSaveToChat = async (payload: {
+        baseImageDataUrl: string;
+        previewDataUrl: string;
+        mergedMaskDataUrl: string;
+        regions: Array<{ id: string; color: string; instruction: string; maskDataUrl: string }>;
+    }) => {
+        // Add the preview image (with annotations) to user's pending upload area
+        const previewMatch = payload.previewDataUrl.match(/^data:(.+);base64,(.+)$/);
+        if (!previewMatch) return;
+
+        const newAsset: SmartAsset = {
+            id: crypto.randomUUID(),
+            data: previewMatch[2],
+            mimeType: previewMatch[1]
+        };
+
+        // REPLACE (not append) - clear old context assets and add new one
+        // This ensures AI always uses the latest reference image
+        setAgentContextAssets([newAsset]);
+        setActiveTab('chat');
+        setEditorAsset(null);
+        addToast('success', '已添加', '编辑后的图片已添加到对话参考区，发送消息时将作为参考使用');
     };
 
     if (!isLoaded) return <div className="h-screen w-screen bg-dark-bg text-white flex items-center justify-center">Loading Studio...</div>;
@@ -1047,7 +1152,7 @@ export function App() {
             <ProjectSidebar isOpen={showProjects} onClose={() => setShowProjects(false)} projects={projects} activeProjectId={activeProjectId} generatingStates={generatingStates} onSelectProject={(id) => switchProject(id)} onCreateProject={() => createNewProject()} onRenameProject={(id, name) => { const p = projects.find(p => p.id === id); if (p) { const updated = { ...p, name }; setProjects(prev => prev.map(prj => prj.id === id ? updated : prj)); saveProject(updated); } }} onDeleteProject={openConfirmDeleteProject} />
 
             <div className="flex-1 flex overflow-hidden relative">
-                <GenerationForm mode={mode} params={params} setParams={setParams} chatParams={chatParams} setChatParams={setChatParams} isGenerating={tasks.some(t => t.projectId === activeProjectId && (t.status === 'GENERATING' || t.status === 'QUEUED'))} startTime={generatingStates[activeProjectId]} onGenerate={handleGenerate} onVerifyVeo={handleAuthVerify} veoVerified={veoVerified} chatHistory={chatHistory} setChatHistory={setChatHistory} activeTab={activeTab} onTabChange={setActiveTab} chatSelectedImages={chatSelectedImages} setChatSelectedImages={setChatSelectedImages} projectId={activeProjectId} cooldownEndTime={videoCooldownEndTime} thoughtImages={thoughtImages} setThoughtImages={setThoughtImages} {...({ projectContextSummary: contextSummary, projectSummaryCursor: summaryCursor, onUpdateProjectContext: (s: string, c: number) => { setContextSummary(s); setSummaryCursor(c); }, onToolCall: handleAgentToolCall, agentContextAssets: agentContextAssets } as any)} />
+                <GenerationForm mode={mode} params={params} setParams={setParams} chatParams={chatParams} setChatParams={setChatParams} isGenerating={tasks.some(t => t.projectId === activeProjectId && (t.status === 'GENERATING' || t.status === 'QUEUED'))} startTime={generatingStates[activeProjectId]} onGenerate={handleGenerate} onVerifyVeo={handleAuthVerify} veoVerified={veoVerified} chatHistory={chatHistory} setChatHistory={setChatHistory} activeTab={activeTab} onTabChange={setActiveTab} chatSelectedImages={chatSelectedImages} setChatSelectedImages={setChatSelectedImages} projectId={activeProjectId} cooldownEndTime={videoCooldownEndTime} thoughtImages={thoughtImages} setThoughtImages={setThoughtImages} {...({ projectContextSummary: contextSummary, projectSummaryCursor: summaryCursor, onUpdateProjectContext: (s: string, c: number) => { setContextSummary(s); setSummaryCursor(c); }, onToolCall: handleAgentToolCall, agentContextAssets: agentContextAssets, onRemoveContextAsset: (assetId: string) => setAgentContextAssets(prev => prev.filter(a => a.id !== assetId)), onClearContextAssets: () => setAgentContextAssets([]) } as any)} />
 
                 <div className="flex-1 bg-dark-bg flex flex-col min-w-0 relative">
                     {rightPanelMode === 'CANVAS' && activeCanvasAsset ? (
@@ -1067,7 +1172,7 @@ export function App() {
                                                 <span className="px-2 py-1 bg-brand-500/20 text-brand-400 text-xs font-bold rounded-lg border border-brand-500/30">{selectedAssetIds.size} {t('header.selected')}</span>
                                                 {selectedAssetIds.size === 2 && (<button onClick={handleCompare} className="flex items-center gap-1.5 px-3 py-1.5 bg-white/10 hover:bg-white/20 text-white rounded-lg text-xs font-medium transition-colors" title={t('header.compare')}><MoveHorizontal size={14} /></button>)}
                                                 {selectedAssetIds.size > 0 && (<><button onClick={handleBulkDownload} className="flex items-center gap-1.5 px-3 py-1.5 bg-white/10 hover:bg-white/20 text-white rounded-lg text-xs font-medium transition-colors" title={t('btn.download_selected')}><Download size={14} /></button><button onClick={handleBulkDelete} className="flex items-center gap-1.5 px-3 py-1.5 bg-red-500/20 hover:bg-red-500/30 text-red-400 rounded-lg text-xs font-medium transition-colors" title={t('btn.delete_selected')}><Trash2 size={14} /></button></>)}
-                                                <button onClick={() => { setIsSelectionMode(false); setSelectedAssetIds(new Set()); }} className="p-1.5 text-gray-400 hover:text-white"><X size={16} /></button>
+                                                <button onClick={() => { setIsSelectionMode(false); setSelectedAssetIds(new Set()); }} className="p-1.5 text-gray-400 hover:text-white"><Trash2 size={16} /></button>
                                             </div>
                                         ) : (
                                             <div className="flex items-center gap-2">
@@ -1078,28 +1183,41 @@ export function App() {
                                     )}
                                 </div>
                                 <div className="flex items-center gap-4">
-                                    {agentContextAssets.length > 0 && rightPanelMode !== 'TRASH' && (
-                                        <div className="flex items-center gap-2 bg-indigo-500/10 border border-indigo-500/30 px-3 py-1.5 rounded-full animate-in fade-in slide-in-from-top-2">
-                                            <div className="flex -space-x-2">{agentContextAssets.slice(0, 3).map((a, i) => (<img key={i} src={`data:${a.mimeType};base64,${a.data}`} className="w-5 h-5 rounded-full border border-dark-bg object-cover" alt="Context" />))}</div>
-                                            <span className="text-[10px] text-indigo-300 font-bold">Active Context</span>
-                                        </div>
-                                    )}
                                     <div className="text-xs text-gray-500 font-medium">{displayedAssets.length} {rightPanelMode === 'TRASH' ? t('header.trash_count') : t('header.assets')}</div>
                                     <button onClick={() => setLanguage(language === 'en' ? 'zh' : 'en')} className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-xs font-medium text-gray-400 hover:text-white hover:bg-white/5 transition-all" title={language === 'en' ? 'Switch to Chinese' : 'Switch to English'}><Languages size={16} />{language === 'en' ? 'EN' : 'CN'}</button>
                                 </div>
                             </div>
 
                             <div className="flex-1 overflow-y-auto p-6 custom-scrollbar">
-                                {displayedAssets.length === 0 ? (
+                                {rightPanelMode === 'TRASH' && (displayedAssets.length === 0 && trashProjects.length === 0) ? (
                                     <div className="h-full flex flex-col items-center justify-center text-gray-600 opacity-50">
-                                        {rightPanelMode === 'TRASH' ? (
-                                            <><Recycle size={48} className="mb-4 text-green-500/50" /><p className="text-lg font-medium">{t('msg.no_trash')}</p></>
-                                        ) : (
-                                            <><LayoutGrid size={48} className="mb-4" /><p className="text-lg font-medium">{t('msg.no_assets')}</p><p className="text-sm">{t('msg.generate_something')}</p></>
-                                        )}
+                                        <Recycle size={48} className="mb-4 text-green-500/50" /><p className="text-lg font-medium">{t('msg.no_trash')}</p>
+                                    </div>
+                                ) : displayedAssets.length === 0 && rightPanelMode !== 'TRASH' ? (
+                                    <div className="h-full flex flex-col items-center justify-center text-gray-600 opacity-50">
+                                        <LayoutGrid size={48} className="mb-4" /><p className="text-lg font-medium">{t('msg.no_assets')}</p><p className="text-sm">{t('msg.generate_something')}</p>
                                     </div>
                                 ) : (
                                     <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4 pb-20">
+                                        {rightPanelMode === 'TRASH' && trashProjects.map(project => (
+                                            <div key={project.id} className="group relative bg-dark-surface rounded-xl overflow-hidden border border-transparent hover:border-brand-500 transition-all duration-300 shadow-lg aspect-square opacity-80 hover:opacity-100 grayscale-[0.3] hover:grayscale-0 cursor-pointer">
+                                                <div className="w-full h-full flex flex-col items-center justify-center bg-gradient-to-br from-amber-500/10 to-orange-500/10 p-4">
+                                                    <Folder size={48} className="text-amber-500/70 mb-2" />
+                                                    <span className="text-sm text-white font-medium text-center truncate w-full px-2">{project.name}</span>
+                                                    <span className="text-[10px] text-gray-500 mt-1">{new Date(project.deletedAt || 0).toLocaleDateString()}</span>
+                                                </div>
+                                                <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col justify-end p-3 z-10">
+                                                    <p className="text-xs text-white line-clamp-2 mb-2 font-medium pointer-events-none">{project.name}</p>
+                                                    <div className="flex gap-2 justify-end z-20">
+                                                        <button onClick={() => handleRestoreProject(project.id)} className="p-1.5 bg-green-500/80 hover:bg-green-600 rounded-lg text-white backdrop-blur-md transition-colors" title="Restore"><RotateCcw size={16} /></button>
+                                                        <button onClick={() => openConfirmDeleteProjectForever(project.id)} className="p-1.5 bg-red-500/80 hover:bg-red-600 rounded-lg text-white backdrop-blur-md transition-colors" title="Delete Permanently"><Trash2 size={16} /></button>
+                                                    </div>
+                                                </div>
+                                                <div className="absolute top-2 left-2 flex gap-1 pointer-events-none">
+                                                    <div className="px-2 py-0.5 backdrop-blur-sm rounded text-[10px] font-bold text-white uppercase tracking-wider bg-black/50">PROJECT</div>
+                                                </div>
+                                            </div>
+                                        ))}
                                         {displayedAssets.map(asset => (
                                             <AssetCard key={asset.id} asset={asset} onClick={handleAssetClick} onUseAsReference={handleUseAsReference} onDelete={() => rightPanelMode === 'TRASH' ? openConfirmDeleteForever(asset.id) : openConfirmDelete(asset.id)} onAddToChat={(a) => { setActiveTab('chat'); setChatSelectedImages(prev => [...prev, a.url]); }} onToggleFavorite={(a) => { const updated = { ...a, isFavorite: !a.isFavorite }; setAssets(prev => prev.map(item => item.id === a.id ? updated : item)); saveAsset(updated); }} isSelectionMode={isSelectionMode} isSelected={selectedAssetIds.has(asset.id)} onToggleSelection={toggleAssetSelection} isTrashMode={rightPanelMode === 'TRASH'} onRestore={() => handleRestoreAsset(asset.id)} />
                                         ))}
@@ -1115,7 +1233,7 @@ export function App() {
             <SettingsDialog isOpen={showSettings} onClose={() => setShowSettings(false)} onApiKeyChange={() => setVeoVerified(!!getUserApiKey())} />
             <ConfirmDialog isOpen={confirmDialog.isOpen} title={confirmDialog.title} message={confirmDialog.message} onConfirm={confirmDialog.action} onCancel={() => setConfirmDialog(prev => ({ ...prev, isOpen: false }))} confirmLabel={confirmDialog.confirmLabel} cancelLabel={confirmDialog.cancelLabel} isDestructive={confirmDialog.isDestructive} />
             {comparisonAssets && <ComparisonView assetA={comparisonAssets[0]} assetB={comparisonAssets[1]} onClose={() => setComparisonAssets(null)} />}
-            {editorAsset && <CanvasEditor imageUrl={editorAsset.url} onSave={handleCanvasSave} onClose={() => setEditorAsset(null)} />}
+            {editorAsset && <CanvasEditor imageUrl={editorAsset.url} onSaveToConfig={handleCanvasSaveToConfig} onSaveToChat={handleCanvasSaveToChat} onClose={() => setEditorAsset(null)} />}
             <ToastContainer toasts={toasts} onDismiss={removeToast} />
             <StorageStatusBanner />
         </div>

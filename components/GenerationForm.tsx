@@ -31,6 +31,8 @@ interface GenerationFormProps {
   projectSummaryCursor?: number;
   onUpdateProjectContext?: (summary: string, cursor: number) => void;
   agentContextAssets?: SmartAsset[];
+  onRemoveContextAsset?: (assetId: string) => void;
+  onClearContextAssets?: () => void;
   // NEW: Draft images from image generation (构思图)
   thoughtImages?: Array<{ id: string; data: string; mimeType: string; isFinal: boolean; timestamp: number }>;
   setThoughtImages?: React.Dispatch<React.SetStateAction<Array<{ id: string; data: string; mimeType: string; isFinal: boolean; timestamp: number }>>>;
@@ -69,6 +71,8 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
   projectSummaryCursor,
   onUpdateProjectContext,
   agentContextAssets,
+  onRemoveContextAsset,
+  onClearContextAssets,
   thoughtImages,
   setThoughtImages
 }) => {
@@ -497,6 +501,8 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
             projectSummaryCursor={projectSummaryCursor}
             onUpdateProjectContext={onUpdateProjectContext}
             agentContextAssets={agentContextAssets}
+            onRemoveContextAsset={onRemoveContextAsset}
+            onClearContextAssets={onClearContextAssets}
             thoughtImages={thoughtImages}
             setThoughtImages={setThoughtImages}
           />

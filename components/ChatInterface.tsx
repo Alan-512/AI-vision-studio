@@ -22,6 +22,8 @@ interface ChatInterfaceProps {
   onUpdateProjectContext?: (summary: string, cursor: number) => void;
   onToolCall?: (action: AgentAction) => void;
   agentContextAssets?: SmartAsset[];
+  onRemoveContextAsset?: (assetId: string) => void;
+  onClearContextAssets?: () => void;
   // Draft images from generateImage (构思图)
   thoughtImages?: Array<{ id: string; data: string; mimeType: string; isFinal: boolean; timestamp: number }>;
   setThoughtImages?: React.Dispatch<React.SetStateAction<Array<{ id: string; data: string; mimeType: string; isFinal: boolean; timestamp: number }>>>;
@@ -215,6 +217,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   onUpdateProjectContext,
   onToolCall,
   agentContextAssets,
+  onRemoveContextAsset,
+  onClearContextAssets,
   // thoughtImages removed - not used in this component
   setThoughtImages
 }) => {
@@ -378,12 +382,18 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
     }
 
     const sendingProjectId = projectId;
-    const userMsg: ChatMessage = { role: 'user', content: textToSend, timestamp: Date.now(), images: selectedImages.length > 0 ? [...selectedImages] : undefined };
+    // Merge selectedImages with agentContextAssets (convert to data URLs)
+    const contextImageUrls = (agentContextAssets || []).map(a => `data:${a.mimeType};base64,${a.data}`);
+    const allImages = [...contextImageUrls, ...selectedImages];
+    const userMsg: ChatMessage = { role: 'user', content: textToSend, timestamp: Date.now(), images: allImages.length > 0 ? allImages : undefined };
     const newHistory = [...history, userMsg];
     setHistory(newHistory);
     setInput('');
     if (inputRef.current) inputRef.current.style.height = 'auto';
     setSelectedImages([]);
+    // NOTE: Do NOT clear agentContextAssets here! 
+    // They are needed later when generate_image tool is called (App.tsx line 615)
+    // Context assets will be cleared when user adds new ones from editor
     setThoughtImages?.([]); // Clear previous thought images
     setIsLoading(true);
 
@@ -594,8 +604,20 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
 
       <div className="p-4 bg-dark-panel border-t border-dark-border z-20">
         <div className="flex flex-col gap-2">
-          {selectedImages.length > 0 && (
+          {/* Preview area for uploaded images and context assets */}
+          {(selectedImages.length > 0 || (agentContextAssets && agentContextAssets.length > 0)) && (
             <div className="flex gap-2 overflow-x-auto pb-2">
+              {/* Context assets from editor (with edit badge) */}
+              {agentContextAssets?.map((asset) => (
+                <div key={asset.id} className="relative w-16 h-16 shrink-0 group">
+                  <img src={`data:${asset.mimeType};base64,${asset.data}`} alt="context" className="w-full h-full object-cover rounded-lg border-2 border-brand-500/50" />
+                  <div className="absolute top-0 left-0 bg-brand-500 text-white text-[8px] font-bold px-1 rounded-br rounded-tl">编辑</div>
+                  {onRemoveContextAsset && (
+                    <button onClick={() => onRemoveContextAsset(asset.id)} className="absolute -top-1 -right-1 bg-red-500 text-white rounded-full p-0.5 shadow-md opacity-0 group-hover:opacity-100 transition-opacity"><X size={12} /></button>
+                  )}
+                </div>
+              ))}
+              {/* User uploaded images */}
               {selectedImages.map((img, idx) => (
                 <div key={idx} className="relative w-16 h-16 shrink-0 group">
                   <img src={img} alt="upload" className="w-full h-full object-cover rounded-lg border border-dark-border" />
@@ -780,7 +802,7 @@ const ChatBubble: React.FC<ChatBubbleProps> = ({
 
         {/* SEARCH SECTION - Shows during search phase */}
         {!isUser && !isSystem && searchContent && (
-          <div className={`w-full max-w-md mb-2 bg-gradient-to-r from-blue-500/10 to-purple-500/10 border border-blue-500/30 rounded-xl overflow-hidden transition-all duration-300 ${searchIsCollapsed ? 'max-h-10' : 'max-h-48'}`}>
+          <div className={`w-full min-w-full max-w-md mb-2 bg-gradient-to-r from-blue-500/10 to-purple-500/10 border border-blue-500/30 rounded-xl overflow-hidden transition-all duration-300 ${searchIsCollapsed ? 'max-h-10' : 'max-h-48'}`}>
             <button
               onClick={onSearchToggle}
               className="w-full flex items-center justify-between px-3 py-2 text-xs text-blue-300 hover:bg-white/5 transition-colors"
@@ -801,7 +823,7 @@ const ChatBubble: React.FC<ChatBubbleProps> = ({
 
         {/* COLLAPSIBLE THINKING SECTION - For streaming AI reasoning */}
         {!isUser && !isSystem && (message.isThinking || finalContent) && (
-          <div className="w-full max-w-md">
+          <div className="w-full min-w-full max-w-md">
             {/* Thinking toggle header - show if there's NATIVE thinking content (streaming or persisted) */}
             {((nativeThinkingText && nativeThinkingText.length > 0) || message.thinkingContent) && (
               <button
