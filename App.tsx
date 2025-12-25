@@ -625,6 +625,8 @@ export function App() {
                 negativePrompt: resolvedNegativePrompt,
                 numberOfImages: resolvedNumberOfImages,
                 useGrounding: effectiveGrounding,
+                // Required by GenerationParams type even for image generation
+                videoModel: chatParams.videoModel,
                 // Extract smartAssets from the LATEST user message in chatHistory
                 // (agentContextAssets may already be cleared from UI)
                 smartAssets: (() => {
@@ -648,22 +650,11 @@ export function App() {
                     });
                     return images;
                 })(),
-                // Use AI assistant's ISOLATED edit params (from chatEditParams, NOT from params config page)
+                // Use AI assistant's ISOLATED edit params (from chatEditParams)
                 editBaseImage: chatEditParams.editBaseImage,
                 editMask: chatEditParams.editMask,
                 editRegions: chatEditParams.editRegions,
-                // CRITICAL: Explicitly clear ALL legacy image reference fields to prevent params config leakage
-                referenceImage: undefined,
-                referenceImageMimeType: undefined,
-                originalReferenceImage: undefined,
-                originalReferenceImageMimeType: undefined,
-                maskImage: undefined,
-                maskImageMimeType: undefined,
-                subjectReferences: undefined,
-                styleReferences: undefined,
-                editPreviewImage: undefined,
-                editPreviewMimeType: undefined,
-                isAnnotatedReference: undefined,
+                // With useParamsAsBase: false, no need to override legacy fields - they won't be merged
                 continuousMode: false
             };
 
@@ -807,7 +798,12 @@ export function App() {
                     ]);
                 }
             };
-            await handleGenerate(executionParams, AppMode.IMAGE, onComplete, chatHistory);
+            await handleGenerate(executionParams as GenerationParams, {
+                modeOverride: AppMode.IMAGE,
+                onSuccess: onComplete,
+                historyOverride: chatHistory,
+                useParamsAsBase: false // CLEAN ISOLATION: Don't merge with params config page
+            });
             // Clear AI assistant's edit params after generation (don't reuse for next generation)
             setChatEditParams({});
         }
@@ -824,26 +820,41 @@ export function App() {
     };
 
     const buildEditPrompt = (basePrompt: string, regions?: EditRegion[]) => {
-        const normalizedBase = basePrompt && basePrompt.trim().length > 0
-            ? basePrompt.trim()
-            : 'Apply the edits described below.';
+        const normalizedBase = basePrompt?.trim() || '';
         const regionLines = (regions || [])
-            .filter(region => region.instruction && region.instruction.trim().length > 0)
-            .map(region => `${region.id}. ${region.instruction!.trim()}`);
+            .filter(r => r.instruction?.trim())
+            .map(r => `- Region ${r.id}: ${r.instruction!.trim()}`);
 
-        const editBlock = [
-            '[EDIT_SPEC]',
-            'Image 1 is the base image.',
-            'Image 2 is the mask (white=editable, black=locked).',
-            'Only modify white areas and keep the rest unchanged.',
-            ...(regionLines.length > 0 ? ['Region instructions:', ...regionLines] : []),
-            '[/EDIT_SPEC]'
-        ].join('\n');
+        return `
+[EDIT_SPEC]
+Image 1 = Base image
+Image 2 = Mask (WHITE = edit, BLACK = keep)
 
-        return `${normalizedBase}\n\n${editBlock}`.trim();
+Rules:
+1) Only edit WHITE areas; keep BLACK areas unchanged.
+2) Preserve overall composition, identity, lighting, and style.
+3) If instructions conflict with mask, mask wins.
+4) Ensure seamless blending at mask edges.
+
+Edits:
+${normalizedBase || 'Apply edits only within white areas.'}
+${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
+[/EDIT_SPEC]
+`.trim();
     };
 
-    const handleGenerate = async (overrideParams?: Partial<GenerationParams>, modeOverride?: AppMode, onSuccess?: (asset: AssetItem) => void, historyOverride?: ChatMessage[]) => {
+
+    const handleGenerate = async (
+        fullParams: GenerationParams,
+        options?: {
+            modeOverride?: AppMode;
+            onSuccess?: (asset: AssetItem) => void;
+            historyOverride?: ChatMessage[];
+            useParamsAsBase?: boolean; // Default false for isolation
+        }
+    ) => {
+        const { modeOverride, onSuccess, historyOverride, useParamsAsBase = false } = options || {};
+
         // RESUME AUDIO CONTEXT ON USER CLICK: Critical for browser audio policies
         const audioCtx = getAudioContext();
         if (audioCtx && audioCtx.state === 'suspended') {
@@ -861,7 +872,8 @@ export function App() {
         // Clear previous thought images for new generation (ensures isolation)
         setThoughtImages([]);
 
-        let activeParams = { ...params, ...overrideParams };
+        // CLEAN ISOLATION: Only merge with params if explicitly requested (params config page)
+        let activeParams = useParamsAsBase ? { ...params, ...fullParams } : fullParams;
         activeParams.imageModel = sanitizeImageModel(activeParams.imageModel);
         const currentProjectId = activeProjectId;
         const currentMode = modeOverride || mode;
@@ -990,6 +1002,13 @@ export function App() {
             tasksToLaunch.push(launchTask(i));
         }
         await Promise.all(tasksToLaunch);
+    };
+
+    // Wrapper for Params Config page - merges with params state (backward compatible)
+    const handleParamsGenerate = async (overrideParams?: Partial<GenerationParams>) => {
+        await handleGenerate({ ...params, ...overrideParams } as GenerationParams, {
+            useParamsAsBase: true
+        });
     };
 
     const handleCancelTask = (taskId: string) => {
@@ -1225,7 +1244,7 @@ export function App() {
             <ProjectSidebar isOpen={showProjects} onClose={() => setShowProjects(false)} projects={projects} activeProjectId={activeProjectId} generatingStates={generatingStates} onSelectProject={(id) => switchProject(id)} onCreateProject={() => createNewProject()} onRenameProject={(id, name) => { const p = projects.find(p => p.id === id); if (p) { const updated = { ...p, name }; setProjects(prev => prev.map(prj => prj.id === id ? updated : prj)); saveProject(updated); } }} onDeleteProject={openConfirmDeleteProject} />
 
             <div className="flex-1 flex overflow-hidden relative">
-                <GenerationForm mode={mode} params={params} setParams={setParams} chatParams={chatParams} setChatParams={setChatParams} isGenerating={tasks.some(t => t.projectId === activeProjectId && (t.status === 'GENERATING' || t.status === 'QUEUED'))} startTime={generatingStates[activeProjectId]} onGenerate={handleGenerate} onVerifyVeo={handleAuthVerify} veoVerified={veoVerified} chatHistory={chatHistory} setChatHistory={setChatHistory} activeTab={activeTab} onTabChange={setActiveTab} chatSelectedImages={chatSelectedImages} setChatSelectedImages={setChatSelectedImages} projectId={activeProjectId} cooldownEndTime={videoCooldownEndTime} thoughtImages={thoughtImages} setThoughtImages={setThoughtImages} {...({ projectContextSummary: contextSummary, projectSummaryCursor: summaryCursor, onUpdateProjectContext: (s: string, c: number) => { setContextSummary(s); setSummaryCursor(c); }, onToolCall: handleAgentToolCall, agentContextAssets: mode === AppMode.IMAGE ? agentContextAssets : [], onRemoveContextAsset: (assetId: string) => setAgentContextAssets(prev => prev.filter(a => a.id !== assetId)), onClearContextAssets: () => setAgentContextAssets([]) } as any)} />
+                <GenerationForm mode={mode} params={params} setParams={setParams} chatParams={chatParams} setChatParams={setChatParams} isGenerating={tasks.some(t => t.projectId === activeProjectId && (t.status === 'GENERATING' || t.status === 'QUEUED'))} startTime={generatingStates[activeProjectId]} onGenerate={handleParamsGenerate} onVerifyVeo={handleAuthVerify} veoVerified={veoVerified} chatHistory={chatHistory} setChatHistory={setChatHistory} activeTab={activeTab} onTabChange={setActiveTab} chatSelectedImages={chatSelectedImages} setChatSelectedImages={setChatSelectedImages} projectId={activeProjectId} cooldownEndTime={videoCooldownEndTime} thoughtImages={thoughtImages} setThoughtImages={setThoughtImages} {...({ projectContextSummary: contextSummary, projectSummaryCursor: summaryCursor, onUpdateProjectContext: (s: string, c: number) => { setContextSummary(s); setSummaryCursor(c); }, onToolCall: handleAgentToolCall, agentContextAssets: mode === AppMode.IMAGE ? agentContextAssets : [], onRemoveContextAsset: (assetId: string) => setAgentContextAssets(prev => prev.filter(a => a.id !== assetId)), onClearContextAssets: () => setAgentContextAssets([]) } as any)} />
 
                 <div className="flex-1 bg-dark-bg flex flex-col min-w-0 relative">
                     {rightPanelMode === 'CANVAS' && activeCanvasAsset ? (
@@ -1306,7 +1325,57 @@ export function App() {
             <SettingsDialog isOpen={showSettings} onClose={() => setShowSettings(false)} onApiKeyChange={() => setVeoVerified(!!getUserApiKey())} />
             <ConfirmDialog isOpen={confirmDialog.isOpen} title={confirmDialog.title} message={confirmDialog.message} onConfirm={confirmDialog.action} onCancel={() => setConfirmDialog(prev => ({ ...prev, isOpen: false }))} confirmLabel={confirmDialog.confirmLabel} cancelLabel={confirmDialog.cancelLabel} isDestructive={confirmDialog.isDestructive} />
             {comparisonAssets && <ComparisonView assetA={comparisonAssets[0]} assetB={comparisonAssets[1]} onClose={() => setComparisonAssets(null)} />}
-            {editorAsset && <CanvasEditor imageUrl={editorAsset.url} onSaveToConfig={handleCanvasSaveToConfig} onSaveToChat={handleCanvasSaveToChat} onClose={() => setEditorAsset(null)} />}
+            {editorAsset && <CanvasEditor
+                imageUrl={editorAsset.url}
+                onSaveToConfig={handleCanvasSaveToConfig}
+                onSaveToChat={handleCanvasSaveToChat}
+                onClose={() => setEditorAsset(null)}
+                originalMetadata={{
+                    model: editorAsset.metadata?.model,
+                    aspectRatio: editorAsset.metadata?.aspectRatio,
+                    resolution: editorAsset.metadata?.resolution
+                }}
+                onDirectGenerate={(payload, options) => {
+                    // Build edit params from payload
+                    const baseMatch = payload.baseImageDataUrl.match(/^data:(.+);base64,(.+)$/);
+                    const maskMatch = payload.mergedMaskDataUrl.match(/^data:(.+);base64,(.+)$/);
+                    if (!baseMatch || !maskMatch) return;
+
+                    const editBaseImage = { id: 'direct-base', mimeType: baseMatch[1], data: baseMatch[2] };
+                    const editMask = { id: 'direct-mask', mimeType: maskMatch[1], data: maskMatch[2] };
+                    const editRegions = payload.regions.map(r => {
+                        const regionMatch = r.maskDataUrl.match(/^data:(.+);base64,(.+)$/);
+                        return {
+                            id: r.id,
+                            color: r.color,
+                            instruction: r.instruction,
+                            maskData: regionMatch ? regionMatch[2] : '',
+                            maskMimeType: regionMatch ? regionMatch[1] : 'image/png'
+                        };
+                    });
+
+                    // Build prompt from region instructions
+                    const regionInstructions = editRegions
+                        .filter(r => r.instruction?.trim())
+                        .map(r => r.instruction.trim())
+                        .join('; ');
+                    const editPrompt = buildEditPrompt(regionInstructions || 'Apply edits to marked areas', editRegions);
+
+                    // Generate with full params
+                    handleGenerate({
+                        prompt: editPrompt,
+                        aspectRatio: options.aspectRatio,
+                        imageModel: options.imageModel,
+                        imageResolution: options.imageResolution,
+                        videoModel: params.videoModel,
+                        editBaseImage,
+                        editMask,
+                        editRegions,
+                        numberOfImages: 1,
+                        continuousMode: false
+                    } as GenerationParams, { useParamsAsBase: false });
+                }}
+            />}
             <ToastContainer toasts={toasts} onDismiss={removeToast} />
             <StorageStatusBanner />
         </div>

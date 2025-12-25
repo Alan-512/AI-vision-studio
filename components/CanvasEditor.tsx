@@ -1,7 +1,8 @@
 
 import React, { useEffect, useRef, useState } from 'react';
-import { Save, Undo, Brush, Eraser, Square, MousePointer2, ArrowUpRight, Type, Settings, MessageCircle } from 'lucide-react';
+import { Save, Undo, Brush, Eraser, Square, MousePointer2, ArrowUpRight, Type, Settings, MessageCircle, Share2, Sparkles, ChevronDown, X } from 'lucide-react';
 import { useLanguage } from '../contexts/LanguageContext';
+import type { AspectRatio, ImageModel, ImageResolution } from '../types';
 
 interface CanvasEditRegionExport {
   id: string;
@@ -17,11 +18,24 @@ interface CanvasEditorExportPayload {
   regions: CanvasEditRegionExport[];
 }
 
+interface DirectGenerateOptions {
+  imageModel: ImageModel;
+  aspectRatio: AspectRatio;
+  imageResolution: ImageResolution;
+}
+
 interface CanvasEditorProps {
   imageUrl: string;
   onSaveToConfig: (payload: CanvasEditorExportPayload) => void;
   onSaveToChat: (payload: CanvasEditorExportPayload) => void;
   onClose: () => void;
+  // New: Direct generation from editor
+  onDirectGenerate?: (payload: CanvasEditorExportPayload, options: DirectGenerateOptions) => void;
+  originalMetadata?: {
+    model?: string;
+    aspectRatio?: string;
+    resolution?: string;
+  };
 }
 
 type ToolType = 'brush' | 'rect' | 'marker' | 'eraser' | 'arrow' | 'text';
@@ -95,8 +109,36 @@ const MARKER_CURSOR = `crosshair`;
 const TEXT_BOX_PADDING = 3;
 const TEXT_LINE_HEIGHT = 1.1;
 
-export const CanvasEditor: React.FC<CanvasEditorProps> = ({ imageUrl, onSaveToConfig, onSaveToChat, onClose }) => {
+// Resolution options based on model
+const RESOLUTION_OPTIONS: Record<string, ImageResolution[]> = {
+  'gemini-2.0-flash-exp': ['1K'],
+  'gemini-2.5-pro-exp-03-25': ['1K', '2K', '4K']
+};
+
+export const CanvasEditor: React.FC<CanvasEditorProps> = ({
+  imageUrl,
+  onSaveToConfig,
+  onSaveToChat,
+  onClose,
+  onDirectGenerate,
+  originalMetadata
+}) => {
   const { t } = useLanguage();
+
+  // Dropdown states
+  const [showAddToMenu, setShowAddToMenu] = useState(false);
+  const [showGeneratePanel, setShowGeneratePanel] = useState(false);
+
+  // Generation options (default from originalMetadata)
+  const [selectedModel, setSelectedModel] = useState<ImageModel>(
+    (originalMetadata?.model as ImageModel) || 'gemini-2.5-pro-exp-03-25'
+  );
+  const [selectedAspectRatio, setSelectedAspectRatio] = useState<AspectRatio>(
+    (originalMetadata?.aspectRatio as AspectRatio) || '1:1'
+  );
+  const [selectedResolution, setSelectedResolution] = useState<ImageResolution>(
+    (originalMetadata?.resolution as ImageResolution) || '2K'
+  );
 
   // Refs
   const containerRef = useRef<HTMLDivElement>(null); // The scrollable/clippable viewport
@@ -1574,7 +1616,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ imageUrl, onSaveToCo
   return (
     <div className="fixed inset-0 z-[60] bg-black/95 backdrop-blur-md flex flex-col animate-in fade-in duration-200">
       {/* Header */}
-      <div className="h-16 border-b border-dark-border flex items-center justify-between px-6 bg-dark-panel z-10 shrink-0">
+      <div className="h-16 border-b border-dark-border flex items-center justify-between px-6 bg-dark-panel z-[100] shrink-0">
         <div className="flex items-center gap-2">
           <div className="p-2 bg-brand-500/20 rounded-lg">
             {activeTool === 'brush' && <Brush size={20} className="text-brand-500" />}
@@ -1590,26 +1632,131 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ imageUrl, onSaveToCo
           </div>
         </div>
 
-        <div className="flex items-center gap-3">
-          <button onClick={onClose} className="p-2 hover:bg-white/10 rounded-lg text-gray-400 hover:text-white transition-colors">
+        <div className="flex items-center gap-3 relative">
+          {/* Cancel Button */}
+          <button onClick={onClose} className="px-3 py-2 hover:bg-white/10 rounded-lg text-gray-400 hover:text-white transition-colors">
             {t('editor.cancel')}
           </button>
-          <button
-            onClick={handleSaveToConfig}
-            className="px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white font-bold rounded-lg shadow-lg flex items-center gap-2 transition-all"
-            title="添加到参数配置页的重绘编辑区"
-          >
-            <Settings size={16} />
-            参数配置
-          </button>
-          <button
-            onClick={handleSaveToChat}
-            className="px-4 py-2 bg-brand-600 hover:bg-brand-500 text-white font-bold rounded-lg shadow-lg flex items-center gap-2 transition-all"
-            title="添加到AI对话作为参考图片"
-          >
-            <MessageCircle size={16} />
-            AI 对话
-          </button>
+
+          {/* Add To Dropdown */}
+          <div className="relative">
+            <button
+              onClick={() => { setShowAddToMenu(!showAddToMenu); setShowGeneratePanel(false); }}
+              className="p-2.5 bg-dark-card border border-dark-border hover:border-brand-500/50 rounded-lg text-gray-300 hover:text-white transition-all"
+              title="添加到..."
+            >
+              <Share2 size={18} />
+            </button>
+            {showAddToMenu && (
+              <div className="absolute right-0 top-full mt-2 w-40 bg-[#1a1a2e] border border-dark-border rounded-lg shadow-2xl overflow-hidden z-[999]">
+                <button
+                  onClick={() => { handleSaveToConfig(); setShowAddToMenu(false); }}
+                  className="w-full px-4 py-3 text-left text-sm text-gray-300 hover:bg-white/10 hover:text-white flex items-center gap-2 transition-colors"
+                >
+                  <Settings size={16} />
+                  参数配置
+                </button>
+                <button
+                  onClick={() => { handleSaveToChat(); setShowAddToMenu(false); }}
+                  className="w-full px-4 py-3 text-left text-sm text-gray-300 hover:bg-white/10 hover:text-white flex items-center gap-2 transition-colors border-t border-dark-border"
+                >
+                  <MessageCircle size={16} />
+                  AI 对话
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Regenerate Dropdown */}
+          <div className="relative">
+            <button
+              onClick={() => { setShowGeneratePanel(!showGeneratePanel); setShowAddToMenu(false); }}
+              className="px-4 py-2 bg-brand-600 hover:bg-brand-500 text-white font-bold rounded-lg shadow-lg flex items-center gap-2 transition-all"
+            >
+              <Sparkles size={16} />
+              重新生成
+              <ChevronDown size={14} className={`transition-transform ${showGeneratePanel ? 'rotate-180' : ''}`} />
+            </button>
+            {showGeneratePanel && (
+              <div className="absolute right-0 top-full mt-2 w-80 bg-[#1a1a2e] border border-dark-border rounded-lg shadow-2xl p-4 z-[999]">
+                <div className="space-y-3">
+                  {/* Model Selection */}
+                  <div className="flex items-center gap-3">
+                    <label className="text-xs text-gray-400 w-12">模型</label>
+                    <select
+                      value={selectedModel}
+                      onChange={(e) => {
+                        const model = e.target.value as ImageModel;
+                        setSelectedModel(model);
+                        // Reset resolution if switching to Flash
+                        if (model === 'gemini-2.0-flash-exp') {
+                          setSelectedResolution('1K');
+                        }
+                      }}
+                      className="flex-1 px-3 py-1.5 bg-dark-surface border border-dark-border rounded-lg text-sm text-white focus:border-brand-500 outline-none"
+                    >
+                      <option value="gemini-2.0-flash-exp">Flash</option>
+                      <option value="gemini-2.5-pro-exp-03-25">Pro</option>
+                    </select>
+                  </div>
+
+                  {/* Aspect Ratio */}
+                  <div className="flex items-center gap-3">
+                    <label className="text-xs text-gray-400 w-12">比例</label>
+                    <select
+                      value={selectedAspectRatio}
+                      onChange={(e) => setSelectedAspectRatio(e.target.value as AspectRatio)}
+                      className="flex-1 px-3 py-1.5 bg-dark-surface border border-dark-border rounded-lg text-sm text-white focus:border-brand-500 outline-none"
+                    >
+                      <option value="1:1">1:1</option>
+                      <option value="16:9">16:9</option>
+                      <option value="9:16">9:16</option>
+                      <option value="4:3">4:3</option>
+                      <option value="3:4">3:4</option>
+                    </select>
+                  </div>
+
+                  {/* Resolution */}
+                  <div className="flex items-center gap-3">
+                    <label className="text-xs text-gray-400 w-12">分辨率</label>
+                    <select
+                      value={selectedResolution}
+                      onChange={(e) => setSelectedResolution(e.target.value as ImageResolution)}
+                      className="flex-1 px-3 py-1.5 bg-dark-surface border border-dark-border rounded-lg text-sm text-white focus:border-brand-500 outline-none"
+                      disabled={selectedModel === 'gemini-2.0-flash-exp'}
+                    >
+                      {(RESOLUTION_OPTIONS[selectedModel] || ['1K', '2K']).map(res => (
+                        <option key={res} value={res}>{res}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                {/* Generate Button */}
+                <button
+                  onClick={() => {
+                    if (onDirectGenerate) {
+                      const payload = buildSavePayload();
+                      if (payload) {
+                        onDirectGenerate(payload, {
+                          imageModel: selectedModel,
+                          aspectRatio: selectedAspectRatio,
+                          imageResolution: selectedResolution
+                        });
+                        onClose();
+                      }
+                    }
+                    setShowGeneratePanel(false);
+                  }}
+                  disabled={!onDirectGenerate}
+                  className="w-full mt-4 px-4 py-2.5 bg-brand-600 hover:bg-brand-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold rounded-lg flex items-center justify-center gap-2 transition-all"
+                >
+                  <Sparkles size={16} />
+                  开始生成
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
