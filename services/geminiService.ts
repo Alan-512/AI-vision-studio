@@ -673,6 +673,16 @@ export const generateImage = async (
         ? smartAssets.slice(-availableSlots)
         : [];
 
+    // DEBUG: Log image slot calculation
+    console.log('[generateImage] Image slots:', {
+        maxImages,
+        historyImageCount,
+        availableSlots,
+        smartAssetsCount: (params.smartAssets || []).length,
+        filteredCount: smartAssets.length,
+        toUseCount: smartAssetsToUse.length
+    });
+
     // Add images as "Image 1", "Image 2", etc. for easy reference in prompt
     smartAssetsToUse.forEach((asset, index) => {
         parts.push({ inlineData: { mimeType: asset.mimeType, data: asset.data } });

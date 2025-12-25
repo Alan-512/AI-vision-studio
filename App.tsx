@@ -207,6 +207,13 @@ export function App() {
     const [summaryCursor, setSummaryCursor] = useState<number>(0);
     const [agentContextAssets, setAgentContextAssets] = useState<SmartAsset[]>([]);
 
+    // AI Assistant's ISOLATED edit mode parameters (separate from params config page)
+    const [chatEditParams, setChatEditParams] = useState<{
+        editBaseImage?: SmartAsset;
+        editMask?: SmartAsset;
+        editRegions?: EditRegion[];
+    }>({});
+
     // NEW: Track draft images (构思图) from image generation
     const [thoughtImages, setThoughtImages] = useState<Array<{
         id: string;
@@ -602,6 +609,12 @@ export function App() {
             const parsedNumberOfImages = Number(numberOfImages);
             const resolvedNumberOfImages = Number.isFinite(parsedNumberOfImages) ? parsedNumberOfImages : 1;
 
+            // DEBUG: Log agentContextAssets to trace the issue
+            console.log('[DEBUG] generate_image called with agentContextAssets:', agentContextAssets.length, 'items');
+            if (agentContextAssets.length > 0) {
+                console.log('[DEBUG] First asset mimeType:', agentContextAssets[0].mimeType, 'data length:', agentContextAssets[0].data.length);
+            }
+
             const executionParams: Partial<GenerationParams> = {
                 prompt: normalizedPrompt,
                 aspectRatio: resolvedAspectRatio,
@@ -612,12 +625,48 @@ export function App() {
                 negativePrompt: resolvedNegativePrompt,
                 numberOfImages: resolvedNumberOfImages,
                 useGrounding: effectiveGrounding,
-                smartAssets: [...agentContextAssets],
-                // NOTE: Do NOT include editBaseImage/editMask/editRegions here!
-                // Edit mode params should only be used in Parameter Config page, not in Chat.
-                // This prevents edit mode data from leaking into AI Assistant.
+                // Extract smartAssets from the LATEST user message in chatHistory
+                // (agentContextAssets may already be cleared from UI)
+                smartAssets: (() => {
+                    const latestUserMsg = [...chatHistory].reverse().find(m => m.role === 'user' && (m.images?.length || m.image));
+                    const images: SmartAsset[] = [];
+                    if (latestUserMsg?.images) {
+                        latestUserMsg.images.forEach((img, idx) => {
+                            const match = img.match(/^data:(.+);base64,(.+)$/);
+                            if (match) images.push({ id: `latest-${idx}`, mimeType: match[1], data: match[2] });
+                        });
+                    } else if (latestUserMsg?.image) {
+                        const match = latestUserMsg.image.match(/^data:(.+);base64,(.+)$/);
+                        if (match) images.push({ id: 'latest-0', mimeType: match[1], data: match[2] });
+                    }
+                    // DEBUG: Log which user message and images are being used
+                    console.log('[DEBUG] smartAssets extraction:', {
+                        latestUserMsgContent: latestUserMsg?.content?.slice(0, 50),
+                        latestUserMsgTimestamp: latestUserMsg?.timestamp,
+                        imagesCount: images.length,
+                        totalUserMsgsWithImages: chatHistory.filter(m => m.role === 'user' && (m.images?.length || m.image)).length
+                    });
+                    return images;
+                })(),
+                // Use AI assistant's ISOLATED edit params (from chatEditParams, NOT from params config page)
+                editBaseImage: chatEditParams.editBaseImage,
+                editMask: chatEditParams.editMask,
+                editRegions: chatEditParams.editRegions,
+                // CRITICAL: Explicitly clear ALL legacy image reference fields to prevent params config leakage
+                referenceImage: undefined,
+                referenceImageMimeType: undefined,
+                originalReferenceImage: undefined,
+                originalReferenceImageMimeType: undefined,
+                maskImage: undefined,
+                maskImageMimeType: undefined,
+                subjectReferences: undefined,
+                styleReferences: undefined,
+                editPreviewImage: undefined,
+                editPreviewMimeType: undefined,
+                isAnnotatedReference: undefined,
                 continuousMode: false
             };
+
             // === SEMANTIC REFERENCE MODE SELECTION ===
             // AI chooses reference_mode based on user intent analysis
             // Smart default: if user uploaded images and AI didn't specify, use them
@@ -641,26 +690,29 @@ export function App() {
             const messagesWithImages = chatHistory.filter(m => m.image || (m.images && m.images.length > 0));
 
             // Select references based on mode
+            // SKIP if we already extracted images from latest user message
             let selectedReferences: SmartAsset[] = [];
-            switch (referenceMode) {
+            const skipHistoryExtraction = (executionParams.smartAssets?.length ?? 0) > 0;
+            if (skipHistoryExtraction) {
+                console.log('[Agent] Using latest user message images exclusively, skipping history extraction');
+            }
+
+            if (!skipHistoryExtraction) switch (referenceMode) {
                 case 'NONE':
                     // Pure text-to-image, no references
                     break;
 
-                case 'USER_UPLOADED_ONLY': {
-                    // Only LATEST user-uploaded images (not all historical user images)
-                    // This ensures the most recent reference takes priority
-                    const latestUserWithImages = [...messagesWithImages]
-                        .reverse()
-                        .find(m => m.role === 'user');
-                    if (latestUserWithImages) {
-                        extractImages(latestUserWithImages).forEach((img, idx) => {
-                            const asset = toSmartAsset(img, `user-${latestUserWithImages.timestamp}-${idx}`);
-                            if (asset) selectedReferences.push(asset);
+                case 'USER_UPLOADED_ONLY':
+                    // Only user-uploaded images (role === 'user' AND has image)
+                    messagesWithImages
+                        .filter(m => m.role === 'user')
+                        .forEach(m => {
+                            extractImages(m).forEach((img, idx) => {
+                                const asset = toSmartAsset(img, `user-${m.timestamp}-${idx}`);
+                                if (asset) selectedReferences.push(asset);
+                            });
                         });
-                    }
                     break;
-                }
 
                 case 'LAST_GENERATED': {
                     // Last AI-generated image (role === 'assistant' or model)
@@ -756,8 +808,8 @@ export function App() {
                 }
             };
             await handleGenerate(executionParams, AppMode.IMAGE, onComplete, chatHistory);
-            // Clear context assets from UI after generation starts (they've been used)
-            setAgentContextAssets([]);
+            // Clear AI assistant's edit params after generation (don't reuse for next generation)
+            setChatEditParams({});
         }
     };
 
@@ -1085,7 +1137,7 @@ export function App() {
         mergedMaskDataUrl: string;
         regions: Array<{ id: string; color: string; instruction: string; maskDataUrl: string }>;
     }) => {
-        // Add the preview image (with annotations) to user's pending upload area
+        // Add the preview image (with annotations) to user's pending upload area for display
         const previewMatch = payload.previewDataUrl.match(/^data:(.+);base64,(.+)$/);
         if (!previewMatch) return;
 
@@ -1095,12 +1147,33 @@ export function App() {
             mimeType: previewMatch[1]
         };
 
-        // REPLACE (not append) - clear old context assets and add new one
-        // This ensures AI always uses the latest reference image
+        // REPLACE (not append) - clear old context assets and add new preview for display
         setAgentContextAssets([newAsset]);
+
+        // Save FULL edit params to chatEditParams (isolated from params config page)
+        const baseMatch = payload.baseImageDataUrl.match(/^data:(.+);base64,(.+)$/);
+        const maskMatch = payload.mergedMaskDataUrl.match(/^data:(.+);base64,(.+)$/);
+
+        if (baseMatch && maskMatch) {
+            setChatEditParams({
+                editBaseImage: { id: 'chat-base', mimeType: baseMatch[1], data: baseMatch[2] },
+                editMask: { id: 'chat-mask', mimeType: maskMatch[1], data: maskMatch[2] },
+                editRegions: payload.regions.map(r => {
+                    const regionMaskMatch = r.maskDataUrl.match(/^data:(.+);base64,(.+)$/);
+                    return {
+                        id: r.id,
+                        color: r.color,
+                        instruction: r.instruction,
+                        maskData: regionMaskMatch ? regionMaskMatch[2] : '',
+                        maskMimeType: regionMaskMatch ? regionMaskMatch[1] : 'image/png'
+                    };
+                })
+            });
+        }
+
         setActiveTab('chat');
         setEditorAsset(null);
-        addToast('success', '已添加', '编辑后的图片已添加到对话参考区，发送消息时将作为参考使用');
+        addToast('success', '已添加', '编辑模式已启用，发送消息时将进行局部重绘');
     };
 
     if (!isLoaded) return <div className="h-screen w-screen bg-dark-bg text-white flex items-center justify-center">Loading Studio...</div>;
@@ -1152,7 +1225,7 @@ export function App() {
             <ProjectSidebar isOpen={showProjects} onClose={() => setShowProjects(false)} projects={projects} activeProjectId={activeProjectId} generatingStates={generatingStates} onSelectProject={(id) => switchProject(id)} onCreateProject={() => createNewProject()} onRenameProject={(id, name) => { const p = projects.find(p => p.id === id); if (p) { const updated = { ...p, name }; setProjects(prev => prev.map(prj => prj.id === id ? updated : prj)); saveProject(updated); } }} onDeleteProject={openConfirmDeleteProject} />
 
             <div className="flex-1 flex overflow-hidden relative">
-                <GenerationForm mode={mode} params={params} setParams={setParams} chatParams={chatParams} setChatParams={setChatParams} isGenerating={tasks.some(t => t.projectId === activeProjectId && (t.status === 'GENERATING' || t.status === 'QUEUED'))} startTime={generatingStates[activeProjectId]} onGenerate={handleGenerate} onVerifyVeo={handleAuthVerify} veoVerified={veoVerified} chatHistory={chatHistory} setChatHistory={setChatHistory} activeTab={activeTab} onTabChange={setActiveTab} chatSelectedImages={chatSelectedImages} setChatSelectedImages={setChatSelectedImages} projectId={activeProjectId} cooldownEndTime={videoCooldownEndTime} thoughtImages={thoughtImages} setThoughtImages={setThoughtImages} {...({ projectContextSummary: contextSummary, projectSummaryCursor: summaryCursor, onUpdateProjectContext: (s: string, c: number) => { setContextSummary(s); setSummaryCursor(c); }, onToolCall: handleAgentToolCall, agentContextAssets: agentContextAssets, onRemoveContextAsset: (assetId: string) => setAgentContextAssets(prev => prev.filter(a => a.id !== assetId)), onClearContextAssets: () => setAgentContextAssets([]) } as any)} />
+                <GenerationForm mode={mode} params={params} setParams={setParams} chatParams={chatParams} setChatParams={setChatParams} isGenerating={tasks.some(t => t.projectId === activeProjectId && (t.status === 'GENERATING' || t.status === 'QUEUED'))} startTime={generatingStates[activeProjectId]} onGenerate={handleGenerate} onVerifyVeo={handleAuthVerify} veoVerified={veoVerified} chatHistory={chatHistory} setChatHistory={setChatHistory} activeTab={activeTab} onTabChange={setActiveTab} chatSelectedImages={chatSelectedImages} setChatSelectedImages={setChatSelectedImages} projectId={activeProjectId} cooldownEndTime={videoCooldownEndTime} thoughtImages={thoughtImages} setThoughtImages={setThoughtImages} {...({ projectContextSummary: contextSummary, projectSummaryCursor: summaryCursor, onUpdateProjectContext: (s: string, c: number) => { setContextSummary(s); setSummaryCursor(c); }, onToolCall: handleAgentToolCall, agentContextAssets: mode === AppMode.IMAGE ? agentContextAssets : [], onRemoveContextAsset: (assetId: string) => setAgentContextAssets(prev => prev.filter(a => a.id !== assetId)), onClearContextAssets: () => setAgentContextAssets([]) } as any)} />
 
                 <div className="flex-1 bg-dark-bg flex flex-col min-w-0 relative">
                     {rightPanelMode === 'CANVAS' && activeCanvasAsset ? (

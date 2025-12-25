@@ -391,9 +391,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
     setInput('');
     if (inputRef.current) inputRef.current.style.height = 'auto';
     setSelectedImages([]);
-    // NOTE: Do NOT clear agentContextAssets here! 
-    // They are needed later when generate_image tool is called (App.tsx line 615)
-    // Context assets will be cleared when user adds new ones from editor
+    // Clear context assets from UI immediately after sending
+    // Images are already merged into userMsg.images and will be in chatHistory
+    onClearContextAssets?.();
     setThoughtImages?.([]); // Clear previous thought images
     setIsLoading(true);
 
