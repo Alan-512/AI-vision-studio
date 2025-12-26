@@ -1,8 +1,8 @@
 
 import React, { useEffect, useRef, useState } from 'react';
-import { Save, Undo, Brush, Eraser, Square, MousePointer2, ArrowUpRight, Type, Settings, MessageCircle, Share2, Sparkles, ChevronDown, X } from 'lucide-react';
+import { Undo, Brush, Eraser, Square, MousePointer2, ArrowUpRight, Type, Settings, MessageCircle, Share2, Sparkles, ChevronDown } from 'lucide-react';
 import { useLanguage } from '../contexts/LanguageContext';
-import type { AspectRatio, ImageModel, ImageResolution } from '../types';
+import { AspectRatio, ImageModel, ImageResolution } from '../types';
 
 interface CanvasEditRegionExport {
   id: string;
@@ -110,9 +110,10 @@ const TEXT_BOX_PADDING = 3;
 const TEXT_LINE_HEIGHT = 1.1;
 
 // Resolution options based on model
+// Resolution options based on model
 const RESOLUTION_OPTIONS: Record<string, ImageResolution[]> = {
-  'gemini-2.0-flash-exp': ['1K'],
-  'gemini-2.5-pro-exp-03-25': ['1K', '2K', '4K']
+  [ImageModel.FLASH]: [ImageResolution.RES_1K],
+  [ImageModel.PRO]: [ImageResolution.RES_1K, ImageResolution.RES_2K, ImageResolution.RES_4K]
 };
 
 export const CanvasEditor: React.FC<CanvasEditorProps> = ({
@@ -131,13 +132,13 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
 
   // Generation options (default from originalMetadata)
   const [selectedModel, setSelectedModel] = useState<ImageModel>(
-    (originalMetadata?.model as ImageModel) || 'gemini-2.5-pro-exp-03-25'
+    (originalMetadata?.model as ImageModel) || ImageModel.PRO
   );
   const [selectedAspectRatio, setSelectedAspectRatio] = useState<AspectRatio>(
-    (originalMetadata?.aspectRatio as AspectRatio) || '1:1'
+    (originalMetadata?.aspectRatio as AspectRatio) || AspectRatio.SQUARE
   );
   const [selectedResolution, setSelectedResolution] = useState<ImageResolution>(
-    (originalMetadata?.resolution as ImageResolution) || '2K'
+    (originalMetadata?.resolution as ImageResolution) || ImageResolution.RES_2K
   );
 
   // Refs
@@ -538,18 +539,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
     return { x: clampedX, y: clampedY, inBounds };
   };
 
-  const getClientPoint = (e: React.MouseEvent | React.TouchEvent) => {
-    if ('touches' in e) {
-      if (e.touches.length > 0) {
-        return { x: e.touches[0].clientX, y: e.touches[0].clientY };
-      }
-      const changed = (e as React.TouchEvent).changedTouches;
-      if (changed && changed.length > 0) {
-        return { x: changed[0].clientX, y: changed[0].clientY };
-      }
-    }
-    return { x: (e as React.MouseEvent).clientX, y: (e as React.MouseEvent).clientY };
-  };
+
 
   const getScreenCoordinates = (x: number, y: number) => {
     const canvas = maskPreviewCanvasRef.current;
@@ -1648,7 +1638,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
               <Share2 size={18} />
             </button>
             {showAddToMenu && (
-              <div className="absolute right-0 top-full mt-2 w-40 bg-[#1a1a2e] border border-dark-border rounded-lg shadow-2xl overflow-hidden z-[999]">
+              <div className="absolute right-0 top-full mt-2 w-40 bg-dark-surface border border-dark-border rounded-xl shadow-2xl overflow-hidden z-[999]">
                 <button
                   onClick={() => { handleSaveToConfig(); setShowAddToMenu(false); }}
                   className="w-full px-4 py-3 text-left text-sm text-gray-300 hover:bg-white/10 hover:text-white flex items-center gap-2 transition-colors"
@@ -1678,57 +1668,66 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
               <ChevronDown size={14} className={`transition-transform ${showGeneratePanel ? 'rotate-180' : ''}`} />
             </button>
             {showGeneratePanel && (
-              <div className="absolute right-0 top-full mt-2 w-80 bg-[#1a1a2e] border border-dark-border rounded-lg shadow-2xl p-4 z-[999]">
-                <div className="space-y-3">
+              <div className="absolute right-0 top-full mt-2 w-80 bg-dark-surface border border-dark-border rounded-xl shadow-2xl p-4 z-[999]">
+                <div className="space-y-4">
                   {/* Model Selection */}
-                  <div className="flex items-center gap-3">
-                    <label className="text-xs text-gray-400 w-12">模型</label>
-                    <select
-                      value={selectedModel}
-                      onChange={(e) => {
-                        const model = e.target.value as ImageModel;
-                        setSelectedModel(model);
-                        // Reset resolution if switching to Flash
-                        if (model === 'gemini-2.0-flash-exp') {
-                          setSelectedResolution('1K');
-                        }
-                      }}
-                      className="flex-1 px-3 py-1.5 bg-dark-surface border border-dark-border rounded-lg text-sm text-white focus:border-brand-500 outline-none"
-                    >
-                      <option value="gemini-2.0-flash-exp">Flash</option>
-                      <option value="gemini-2.5-pro-exp-03-25">Pro</option>
-                    </select>
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">模型</label>
+                    <div className="relative">
+                      <select
+                        value={selectedModel}
+                        onChange={(e) => {
+                          const model = e.target.value as ImageModel;
+                          setSelectedModel(model);
+                          // Reset resolution if switching to Flash
+                          if (model === ImageModel.FLASH) {
+                            setSelectedResolution(ImageResolution.RES_1K);
+                          }
+                        }}
+                        className="w-full bg-dark-bg border border-dark-border rounded-xl px-4 py-2.5 text-sm text-white appearance-none focus:border-brand-500 focus:outline-none transition-colors"
+                      >
+                        <option value={ImageModel.FLASH}>Flash</option>
+                        <option value={ImageModel.PRO}>Pro</option>
+                      </select>
+                      <ChevronDown className="absolute right-3 top-3 text-gray-500 pointer-events-none" size={16} />
+                    </div>
                   </div>
 
                   {/* Aspect Ratio */}
-                  <div className="flex items-center gap-3">
-                    <label className="text-xs text-gray-400 w-12">比例</label>
-                    <select
-                      value={selectedAspectRatio}
-                      onChange={(e) => setSelectedAspectRatio(e.target.value as AspectRatio)}
-                      className="flex-1 px-3 py-1.5 bg-dark-surface border border-dark-border rounded-lg text-sm text-white focus:border-brand-500 outline-none"
-                    >
-                      <option value="1:1">1:1</option>
-                      <option value="16:9">16:9</option>
-                      <option value="9:16">9:16</option>
-                      <option value="4:3">4:3</option>
-                      <option value="3:4">3:4</option>
-                    </select>
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">比例</label>
+                    <div className="relative">
+                      <select
+                        value={selectedAspectRatio}
+                        onChange={(e) => setSelectedAspectRatio(e.target.value as AspectRatio)}
+                        className="w-full bg-dark-bg border border-dark-border rounded-xl px-4 py-2.5 text-sm text-white appearance-none focus:border-brand-500 focus:outline-none transition-colors"
+                      >
+                        <option value="1:1">1:1</option>
+                        <option value="16:9">16:9</option>
+                        <option value="9:16">9:16</option>
+                        <option value="4:3">4:3</option>
+                        <option value="3:4">3:4</option>
+                      </select>
+                      <ChevronDown className="absolute right-3 top-3 text-gray-500 pointer-events-none" size={16} />
+                    </div>
                   </div>
 
                   {/* Resolution */}
-                  <div className="flex items-center gap-3">
-                    <label className="text-xs text-gray-400 w-12">分辨率</label>
-                    <select
-                      value={selectedResolution}
-                      onChange={(e) => setSelectedResolution(e.target.value as ImageResolution)}
-                      className="flex-1 px-3 py-1.5 bg-dark-surface border border-dark-border rounded-lg text-sm text-white focus:border-brand-500 outline-none"
-                      disabled={selectedModel === 'gemini-2.0-flash-exp'}
-                    >
-                      {(RESOLUTION_OPTIONS[selectedModel] || ['1K', '2K']).map(res => (
-                        <option key={res} value={res}>{res}</option>
-                      ))}
-                    </select>
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">分辨率</label>
+                    <div className="relative">
+                      <select
+                        value={selectedResolution}
+                        onChange={(e) => setSelectedResolution(e.target.value as ImageResolution)}
+                        className="w-full bg-dark-bg border border-dark-border rounded-xl px-4 py-2.5 text-sm text-white appearance-none focus:border-brand-500 focus:outline-none transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        disabled={selectedModel === ImageModel.FLASH}
+                      >
+                        {(RESOLUTION_OPTIONS[selectedModel] || [ImageResolution.RES_1K, ImageResolution.RES_2K]).map(res => (
+                          <option key={res} value={res}>{res}</option>
+                        ))}
+                      </select>
+                      <ChevronDown className="absolute right-3 top-3 text-gray-500 pointer-events-none" size={16} />
+                    </div>
                   </div>
                 </div>
 

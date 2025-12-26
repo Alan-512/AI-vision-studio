@@ -1,6 +1,6 @@
 
 import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { Send, User, Sparkles, ChevronDown, BrainCircuit, Zap, X, Box, Copy, Check, Plus, MonitorPlay, Palette, Film, Bot, Square, Crop, CheckCircle2, Globe, Brain, CircuitBoard, Wrench, Image as ImageIcon, CircleDashed, Terminal, Clapperboard, AudioWaveform, Move3d, RefreshCw, AlertCircle, Search } from 'lucide-react';
+import { Send, User, Sparkles, ChevronDown, BrainCircuit, Zap, X, Box, Copy, Check, Plus, MonitorPlay, Palette, Film, Bot, Square, Crop, CheckCircle2, Globe, Brain, CircuitBoard, Wrench, Image as ImageIcon, CircleDashed, Terminal, Clapperboard, AudioWaveform, Move3d, RefreshCw, AlertCircle, Search, Upload } from 'lucide-react';
 import { ChatMessage, GenerationParams, ImageStyle, ImageResolution, AppMode, ImageModel, VideoResolution, VideoModel, VideoStyle, AspectRatio, SmartAsset, APP_LIMITS, AgentAction, TextModel } from '../types';
 import { streamChatResponse } from '../services/geminiService';
 import { AgentStateMachine, AgentState, createInitialAgentState, PendingAction, createGenerateAction } from '../services/agentService';
@@ -244,6 +244,70 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   const [searchIsComplete, setSearchIsComplete] = useState(false);
   const [searchIsCollapsed, setSearchIsCollapsed] = useState(false);
   const searchScrollRef = useRef<HTMLDivElement>(null);
+
+  // NEW: Drag and Drop state
+  const [isDragging, setIsDragging] = useState(false);
+
+  const handleDragEnter = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    // Only enable if dragging files or lumina assets
+    const hasFiles = e.dataTransfer.types.includes('Files');
+    const hasLuminaAsset = e.dataTransfer.types.includes('application/lumina-asset');
+
+    if (!hasFiles && !hasLuminaAsset) return;
+
+    // Use relatedTarget to determine if we are genuinely entering the container from outside
+    if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+      setIsDragging(true);
+    }
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    // Use relatedTarget to determine if we are genuinely leaving the container
+    if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+      setIsDragging(false);
+    }
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+  };
+
+  const handleDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+
+    // Check for internal Lumina asset drop
+    const luminaAssetJson = e.dataTransfer.getData('application/lumina-asset');
+    if (luminaAssetJson) {
+      try {
+        const asset = JSON.parse(luminaAssetJson);
+        if (asset && asset.url && asset.type === 'IMAGE') {
+          if (selectedImages.length + 1 > APP_LIMITS.MAX_IMAGE_COUNT) {
+            alert(t('msg.upload_limit_count'));
+            return;
+          }
+          setSelectedImages(prev => [...prev, asset.url]);
+          return;
+        }
+      } catch (err) {
+        console.error('Failed to parse dropped asset', err);
+      }
+    }
+
+    // Handle file drop
+    const files = Array.from(e.dataTransfer.files).filter(file => file.type.startsWith('image/'));
+    if (files.length > 0) {
+      await processFiles(files);
+    }
+  };
 
   // NEW: Track active tool call status for UI display
   const [toolCallStatus, setToolCallStatus] = useState<{
@@ -510,7 +574,22 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   ];
 
   return (
-    <div className="flex flex-col h-full bg-dark-panel relative min-h-0">
+    <div
+      className="flex flex-col h-full bg-dark-panel relative min-h-0"
+      onDragEnter={handleDragEnter}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
+      {isDragging && (
+        <div className="absolute inset-0 z-50 bg-brand-500/20 backdrop-blur-sm border-2 border-brand-500 border-dashed rounded-xl flex flex-col items-center justify-center pointer-events-none animate-in fade-in duration-200">
+          <div className="bg-dark-panel p-6 rounded-full shadow-2xl mb-4 text-brand-400 animate-bounce">
+            <Upload size={48} />
+          </div>
+          <h3 className="text-xl font-bold text-white mb-2">{t('chat.drop_to_upload') || 'Release to Upload'}</h3>
+          <p className="text-sm text-gray-300">Supported formats: JPG, PNG, WEBP</p>
+        </div>
+      )}
       <div className="flex-1 overflow-y-auto p-4 space-y-6 min-h-0 scroll-smooth" ref={scrollRef}>
         {history.length === 0 ? (
           <div className="h-full flex flex-col items-center justify-center p-6 text-gray-500">
