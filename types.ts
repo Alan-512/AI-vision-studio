@@ -56,16 +56,15 @@ export enum TextModel {
 
 export enum ImageStyle {
   NONE = 'None',
-  MODERN_VECTOR = 'Modern Flat Vector (Google Style)',
-  PHOTOREALISTIC = 'Photorealistic',
-  ANIME = 'Anime & Manga',
-  DIGITAL_ART = 'Digital Art',
-  COMIC_BOOK = 'Comic Book',
-  WATERCOLOR = 'Watercolor',
-  THREE_D_RENDER = '3D Render',
-  CYBERPUNK = 'Cyberpunk',
-  PIXEL_ART = 'Pixel Art',
-  SKETCH = 'Sketch / Pencil'
+  PHOTOREALISTIC = 'photorealistic photograph style',
+  ANIME = 'anime illustration style',
+  DIGITAL_ART = 'digital art style',
+  COMIC_BOOK = 'comic book illustration style',
+  WATERCOLOR = 'watercolor painting style',
+  THREE_D_RENDER = '3D rendered CGI style',
+  CYBERPUNK = 'cyberpunk aesthetic',
+  PIXEL_ART = 'pixel art style',
+  SKETCH = 'pencil sketch drawing style'
 }
 
 export enum VideoStyle {

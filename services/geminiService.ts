@@ -603,7 +603,8 @@ Rules:
     }
 
     // DEFERRED TOOL CALL: Execute after stream completes so AI response is fully shown
-    if (pendingToolCall && onToolCall) {
+    // FIX [SUP-005]: Check abort signal before executing deferred tool call
+    if (pendingToolCall && onToolCall && !signal?.aborted) {
         console.log('[Stream] Executing deferred tool call:', pendingToolCall.toolName);
         const adjustedArgs = pendingToolCall.args && typeof pendingToolCall.args === 'object'
             ? { ...pendingToolCall.args }
@@ -697,6 +698,11 @@ export const generateImage = async (
         const now = new Date();
         const timeContext = `[Current Date: ${now.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}]\n`;
         mainPrompt = timeContext + mainPrompt;
+    }
+
+    // FIX [SUP-003]: Apply imageStyle to prompt if specified
+    if (params.imageStyle && params.imageStyle !== 'None') {
+        mainPrompt = `[Style: ${params.imageStyle}] ${mainPrompt}`;
     }
 
     if (params.negativePrompt) mainPrompt += `\nAvoid: ${params.negativePrompt}`;
@@ -851,10 +857,45 @@ export const generateVideo = async (
         imageInput = { imageBytes: params.videoStartImage, mimeType: params.videoStartImageMimeType };
     }
 
-    let operation = await ai.models.generateVideos({ model: params.videoModel, prompt: params.prompt, image: imageInput, config: config });
+    // FIX [SUP-003]: Apply videoStyle to prompt if specified
+    let videoPrompt = params.prompt;
+    if (params.videoStyle && params.videoStyle !== 'None') {
+        videoPrompt = `[Style: ${params.videoStyle}] ${videoPrompt}`;
+    }
+
+    // FIX [SUP-003 v2]: Add referenceImages to config with referenceType per Veo API
+    if (params.videoStyleReferences && params.videoStyleReferences.length > 0) {
+        config.referenceImages = params.videoStyleReferences.map(ref => ({
+            image: { imageBytes: ref.data, mimeType: ref.mimeType },
+            referenceType: 'ASSET' // Required: "ASSET" for subject consistency (uppercase per SDK)
+        }));
+    }
+
+    // FIX [SUP-003 v2]: Add lastFrame to config per Veo API (not as top-level param)
+    if (params.videoEndImage && params.videoEndImageMimeType) {
+        config.lastFrame = { imageBytes: params.videoEndImage, mimeType: params.videoEndImageMimeType };
+    }
+
+    let operation = await ai.models.generateVideos({
+        model: params.videoModel,
+        prompt: videoPrompt,
+        image: imageInput,
+        config: config
+    });
     if (operation.name) { await onUpdate(operation.name); }
+
+    // FIX [SUP-002]: Add max attempts to prevent infinite polling
+    const MAX_POLL_ATTEMPTS = 60; // 60 * 5s = 5 minutes max wait
+    let pollAttempts = 0;
+
     while (!operation.done) {
         if (signal.aborted) throw new Error("Cancelled");
+
+        pollAttempts++;
+        if (pollAttempts >= MAX_POLL_ATTEMPTS) {
+            throw new Error(`Video generation timed out after ${MAX_POLL_ATTEMPTS * 5} seconds. Please try again.`);
+        }
+
         await new Promise(resolve => setTimeout(resolve, 5000));
         operation = await ai.operations.getVideosOperation({ operation });
     }

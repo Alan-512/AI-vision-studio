@@ -6,6 +6,7 @@ import { streamChatResponse } from '../services/geminiService';
 import { AgentStateMachine, AgentState, createInitialAgentState, PendingAction, createGenerateAction } from '../services/agentService';
 import { useLanguage } from '../contexts/LanguageContext';
 import ReactMarkdown from 'react-markdown';
+import rehypeSanitize from 'rehype-sanitize';
 
 interface ChatInterfaceProps {
   history: ChatMessage[];
@@ -603,24 +604,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
               {mode === AppMode.VIDEO ? t('chat.desc_video') : t('chat.desc_image')}
             </p>
 
-            {mode === AppMode.VIDEO && (
-              <div className="grid grid-cols-1 gap-3 w-full max-w-sm animate-in fade-in slide-in-from-bottom-4 duration-500 delay-150">
-                <div className="text-[10px] font-bold text-gray-600 uppercase tracking-widest mb-1 text-center">Veo 3.1 Prompting Tips</div>
-                {VEO_TIPS.map((tip, i) => (
-                  <button
-                    key={i}
-                    onClick={() => handleSend(tip.prompt)}
-                    className="flex items-start gap-3 p-3 bg-dark-surface border border-dark-border rounded-xl hover:border-purple-500/50 hover:bg-white/5 transition-all text-left group"
-                  >
-                    <div className="mt-0.5 p-2 bg-purple-500/10 text-purple-400 rounded-lg group-hover:bg-purple-500/20">{tip.icon}</div>
-                    <div className="min-w-0">
-                      <div className="text-xs font-bold text-gray-300 mb-0.5">{tip.title}</div>
-                      <div className="text-[10px] text-gray-500 leading-tight">{tip.desc}</div>
-                    </div>
-                  </button>
-                ))}
-              </div>
-            )}
+
           </div>
         ) : (
           <>
@@ -927,7 +911,7 @@ const ChatBubble: React.FC<ChatBubbleProps> = ({
             {/* Uses streaming content OR persisted content from message */}
             {isThinkingExpanded && (nativeThinkingText || message.thinkingContent) && (
               <div className="mb-3 p-3 bg-gray-500/5 border border-gray-500/20 rounded-lg text-xs text-gray-300 font-mono max-h-60 overflow-y-auto custom-scrollbar animate-in fade-in slide-in-from-top-2">
-                <ReactMarkdown components={MarkdownComponents}>
+                <ReactMarkdown components={MarkdownComponents} rehypePlugins={[rehypeSanitize]}>
                   {nativeThinkingText || message.thinkingContent || ''}
                 </ReactMarkdown>
               </div>
@@ -937,7 +921,7 @@ const ChatBubble: React.FC<ChatBubbleProps> = ({
             {finalContent && !isFeedback && (
               <div className={`relative px-4 py-3 rounded-2xl text-sm leading-relaxed shadow-sm bg-transparent border border-dark-border text-gray-200 rounded-tl-none`}>
                 <div className="markdown-content w-full min-w-0 break-words">
-                  <ReactMarkdown components={MarkdownComponents}>
+                  <ReactMarkdown components={MarkdownComponents} rehypePlugins={[rehypeSanitize]}>
                     {finalContent}
                   </ReactMarkdown>
                   {/* Show streaming cursor when still thinking */}
@@ -995,7 +979,7 @@ const ChatBubble: React.FC<ChatBubbleProps> = ({
             : 'bg-dark-surface text-gray-100 rounded-tr-none'
             }`}>
             <div className="markdown-content w-full min-w-0 break-words">
-              <ReactMarkdown components={MarkdownComponents}>
+              <ReactMarkdown components={MarkdownComponents} rehypePlugins={[rehypeSanitize]}>
                 {finalContent || "..."}
               </ReactMarkdown>
             </div>

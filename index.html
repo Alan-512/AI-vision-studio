@@ -1,129 +1,145 @@
-
 <!DOCTYPE html>
 <html lang="zh">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-    <meta name="theme-color" content="#0f0f11" />
-    
-    <!-- Primary Meta Tags -->
-    <title>Lumina AI Creative Studio</title>
-    <meta name="title" content="Lumina AI Creative Studio" />
-    <meta name="description" content="A professional-grade AI creation suite for generating high-fidelity images and videos using Google Gemini and Veo models. Experience the future of creativity." />
 
-    <!-- Open Graph / Facebook -->
-    <meta property="og:type" content="website" />
-    <meta property="og:url" content="https://lumina-studio.com/" />
-    <meta property="og:title" content="Lumina AI Creative Studio" />
-    <meta property="og:description" content="Generate stunning 4K images and cinematic videos with Google's latest Gemini & Veo AI models. Professional controls, zero latency." />
-    <meta property="og:image" content="https://www.gstatic.com/lamda/images/gemini_sparkle_v002_d4735304ff6292a690345.svg" />
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="theme-color" content="#0f0f11" />
 
-    <!-- Twitter -->
-    <meta property="twitter:card" content="summary_large_image" />
-    <meta property="twitter:url" content="https://lumina-studio.com/" />
-    <meta property="twitter:title" content="Lumina AI Creative Studio" />
-    <meta property="twitter:description" content="Generate stunning 4K images and cinematic videos with Google's latest Gemini & Veo AI models." />
-    <meta property="twitter:image" content="https://www.gstatic.com/lamda/images/gemini_sparkle_v002_d4735304ff6292a690345.svg" />
+  <!-- Primary Meta Tags -->
+  <title>Lumina AI Creative Studio</title>
+  <meta name="title" content="Lumina AI Creative Studio" />
+  <meta name="description"
+    content="A professional-grade AI creation suite for generating high-fidelity images and videos using Google Gemini and Veo models. Experience the future of creativity." />
 
-    <!-- PWA -->
-    <link rel="manifest" href="/manifest.json" />
-    <link rel="apple-touch-icon" href="https://www.gstatic.com/lamda/images/gemini_sparkle_v002_d4735304ff6292a690345.svg" />
+  <!-- Open Graph / Facebook -->
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="https://lumina-studio.com/" />
+  <meta property="og:title" content="Lumina AI Creative Studio" />
+  <meta property="og:description"
+    content="Generate stunning 4K images and cinematic videos with Google's latest Gemini & Veo AI models. Professional controls, zero latency." />
+  <meta property="og:image"
+    content="https://www.gstatic.com/lamda/images/gemini_sparkle_v002_d4735304ff6292a690345.svg" />
 
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script>
-      tailwind.config = {
-        theme: {
-          extend: {
-            colors: {
-              brand: {
-                50: '#f0f9ff',
-                100: '#e0f2fe',
-                500: '#0ea5e9',
-                600: '#0284c7',
-                900: '#0c4a6e',
-              },
-              dark: {
-                bg: '#0a0a0c',
-                panel: '#111114',
-                surface: '#1c1c21',
-                border: '#2a2a32'
-              }
+  <!-- Twitter -->
+  <meta property="twitter:card" content="summary_large_image" />
+  <meta property="twitter:url" content="https://lumina-studio.com/" />
+  <meta property="twitter:title" content="Lumina AI Creative Studio" />
+  <meta property="twitter:description"
+    content="Generate stunning 4K images and cinematic videos with Google's latest Gemini & Veo AI models." />
+  <meta property="twitter:image"
+    content="https://www.gstatic.com/lamda/images/gemini_sparkle_v002_d4735304ff6292a690345.svg" />
+
+  <!-- PWA -->
+  <link rel="manifest" href="/manifest.json" />
+  <link rel="apple-touch-icon"
+    href="https://www.gstatic.com/lamda/images/gemini_sparkle_v002_d4735304ff6292a690345.svg" />
+
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              50: '#f0f9ff',
+              100: '#e0f2fe',
+              500: '#0ea5e9',
+              600: '#0284c7',
+              900: '#0c4a6e',
             },
-            fontFamily: {
-              sans: ['Inter', 'sans-serif'],
-            },
+            dark: {
+              bg: '#0a0a0c',
+              panel: '#111114',
+              surface: '#1c1c21',
+              border: '#2a2a32'
+            }
+          },
+          fontFamily: {
+            sans: ['Inter', 'sans-serif'],
           },
         },
-      }
-    </script>
-    <style>
-      @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
-      
-      :root {
-        --glass-bg: rgba(28, 28, 33, 0.7);
-        --glass-border: rgba(255, 255, 255, 0.1);
+      },
+    }
+  </script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+    :root {
+      --glass-bg: rgba(28, 28, 33, 0.7);
+      --glass-border: rgba(255, 255, 255, 0.1);
+    }
+
+    body {
+      background-color: #0a0a0c;
+      color: #e4e4e7;
+      overscroll-behavior-y: none;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+
+    /* Custom scrollbar */
+    ::-webkit-scrollbar {
+      width: 4px;
+      height: 4px;
+    }
+
+    ::-webkit-scrollbar-track {
+      background: transparent;
+    }
+
+    ::-webkit-scrollbar-thumb {
+      background: #3f3f46;
+      border-radius: 10px;
+    }
+
+    ::-webkit-scrollbar-thumb:hover {
+      background: #52525b;
+    }
+
+    .glass-panel {
+      background: var(--glass-bg);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border: 1px solid var(--glass-border);
+    }
+
+    @keyframes fade-in {
+      from {
+        opacity: 0;
+        transform: translateY(4px);
       }
 
-      body {
-        background-color: #0a0a0c;
-        color: #e4e4e7;
-        overscroll-behavior-y: none;
-        -webkit-font-smoothing: antialiased;
-        -moz-osx-font-smoothing: grayscale;
+      to {
+        opacity: 1;
+        transform: translateY(0);
       }
+    }
 
-      /* Custom scrollbar */
-      ::-webkit-scrollbar {
-        width: 4px;
-        height: 4px;
-      }
-      ::-webkit-scrollbar-track {
-        background: transparent;
-      }
-      ::-webkit-scrollbar-thumb {
-        background: #3f3f46;
-        border-radius: 10px;
-      }
-      ::-webkit-scrollbar-thumb:hover {
-        background: #52525b;
-      }
-
-      .glass-panel {
-        background: var(--glass-bg);
-        backdrop-filter: blur(12px);
-        -webkit-backdrop-filter: blur(12px);
-        border: 1px solid var(--glass-border);
-      }
-
-      @keyframes fade-in {
-        from { opacity: 0; transform: translateY(4px); }
-        to { opacity: 1; transform: translateY(0); }
-      }
-
-      .animate-fade-in {
-        animation: fade-in 0.3s ease-out forwards;
-      }
-    </style>
-<script type="importmap">
+    .animate-fade-in {
+      animation: fade-in 0.3s ease-out forwards;
+    }
+  </style>
+  <script type="importmap">
 {
   "imports": {
-    "react": "https://esm.sh/react@^19.2.3",
-    "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
-    "react/": "https://esm.sh/react@^19.2.3/",
-    "@google/genai": "https://esm.sh/@google/genai@^1.33.0",
-    "@ai-sdk/google": "https://esm.sh/@ai-sdk/google@^2.0.46",
-    "ai": "https://esm.sh/ai@^5.0.113",
-    "zod": "https://esm.sh/zod@^4.1.13",
-    "lucide-react": "https://esm.sh/lucide-react@^0.561.0",
-    "react-markdown": "https://esm.sh/react-markdown@^10.1.0",
-    "vite": "https://esm.sh/vite@^7.2.7",
-    "@vitejs/plugin-react": "https://esm.sh/@vitejs/plugin-react@^5.1.2"
+    "react": "https://esm.sh/react@^18.2.0",
+    "react-dom/": "https://esm.sh/react-dom@^18.2.0/",
+    "react/": "https://esm.sh/react@^18.2.0/",
+    "@google/genai": "https://esm.sh/@google/genai@^1.0.0",
+    "@ai-sdk/google": "https://esm.sh/@ai-sdk/google@^1.1.9",
+    "ai": "https://esm.sh/ai@^4.1.17",
+    "zod": "https://esm.sh/zod@^3.24.1",
+    "lucide-react": "https://esm.sh/lucide-react@^0.344.0",
+    "react-markdown": "https://esm.sh/react-markdown@^10.1.0"
   }
 }
 </script>
 </head>
-  <body>
-    <div id="root"></div>
-    <script type="module" src="/index.tsx"></script>
-  </body>
+
+<body>
+  <div id="root"></div>
+  <script type="module" src="/index.tsx"></script>
+</body>
+
 </html>

@@ -28,20 +28,18 @@ const ToastItem: React.FC<{ toast: ToastMessage, onDismiss: (id: string) => void
   useEffect(() => {
     const timer = setTimeout(() => {
       onDismiss(toast.id);
-    }, 5000); // Auto dismiss after 5s
+    }, 3000); // Auto dismiss after 3s (industry standard)
     return () => clearTimeout(timer);
   }, [toast.id, onDismiss]);
 
   return (
     <div className="pointer-events-auto bg-dark-panel border border-dark-border rounded-xl shadow-2xl shadow-black/50 p-4 w-80 animate-in slide-in-from-right-10 fade-in duration-300 flex gap-3 relative overflow-hidden">
       {/* Status Bar */}
-      <div className={`absolute left-0 top-0 bottom-0 w-1 ${
-        toast.type === 'success' ? 'bg-green-500' : toast.type === 'error' ? 'bg-red-500' : 'bg-blue-500'
-      }`} />
+      <div className={`absolute left-0 top-0 bottom-0 w-1 ${toast.type === 'success' ? 'bg-green-500' : toast.type === 'error' ? 'bg-red-500' : 'bg-blue-500'
+        }`} />
 
-      <div className={`mt-0.5 shrink-0 ${
-         toast.type === 'success' ? 'text-green-500' : toast.type === 'error' ? 'text-red-500' : 'text-blue-500'
-      }`}>
+      <div className={`mt-0.5 shrink-0 ${toast.type === 'success' ? 'text-green-500' : toast.type === 'error' ? 'text-red-500' : 'text-blue-500'
+        }`}>
         {toast.type === 'success' ? <CheckCircle size={20} /> : toast.type === 'error' ? <AlertCircle size={20} /> : <Info size={20} />}
       </div>
 
@@ -50,7 +48,7 @@ const ToastItem: React.FC<{ toast: ToastMessage, onDismiss: (id: string) => void
         <p className="text-xs text-gray-400 mt-1 leading-relaxed line-clamp-2">{toast.message}</p>
       </div>
 
-      <button 
+      <button
         onClick={() => onDismiss(toast.id)}
         className="text-gray-500 hover:text-white transition-colors shrink-0 self-start"
       >

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
-import { Image as ImageIcon, Video, LayoutGrid, Folder, Sparkles, Settings, Star, CheckSquare, MoveHorizontal, X, Languages, Trash2, Recycle, Download, RotateCcw, ZoomIn } from 'lucide-react';
+import { Image as ImageIcon, Video, LayoutGrid, Folder, Sparkles, Settings, Star, CheckSquare, MoveHorizontal, X, Languages, Trash2, Recycle, Download, RotateCcw, ZoomIn, ArrowRight, Key } from 'lucide-react';
 import { AppMode, AspectRatio, GenerationParams, AssetItem, ImageResolution, VideoResolution, ImageModel, VideoModel, ImageStyle, Project, ChatMessage, BackgroundTask, SmartAsset, VideoDuration, VideoStyle, AgentAction, SearchPolicy, EditRegion } from './types';
 import { GenerationForm } from './components/GenerationForm';
 import { AssetCard } from './components/AssetCard';
@@ -15,7 +15,7 @@ import { generateImage, generateVideo, getUserApiKey, generateTitle } from './se
 import {
     initDB, loadProjects, saveProject, saveAsset, loadAssets, updateAsset,
     deleteProjectFromDB, softDeleteAssetInDB, restoreAssetInDB,
-    permanentlyDeleteAssetFromDB, bulkPermanentlyDeleteAssets, recoverOrphanedProjects,
+    permanentlyDeleteAssetFromDB, bulkPermanentlyDeleteAssets, bulkSoftDeleteAssets, recoverOrphanedProjects,
     releaseBlobUrl, saveTask, loadTasks, deleteTask
 } from './services/storageService';
 import { useLanguage } from './contexts/LanguageContext';
@@ -1082,7 +1082,26 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
             }
         });
     };
-    const handleBulkDelete = () => { if (selectedAssetIds.size === 0) return; setConfirmDialog({ isOpen: true, title: t('confirm.delete_bulk.title'), message: `${selectedAssetIds.size} items`, confirmLabel: t('btn.delete'), cancelLabel: t('btn.cancel'), isDestructive: true, action: async () => { const ids = Array.from(selectedAssetIds) as string[]; await bulkPermanentlyDeleteAssets(ids); setAssets(prev => prev.filter(a => !selectedAssetIds.has(a.id))); setSelectedAssetIds(new Set()); setConfirmDialog(prev => ({ ...prev, isOpen: false })); setIsSelectionMode(false); } }); };
+    const handleBulkDelete = () => {
+        if (selectedAssetIds.size === 0) return;
+        setConfirmDialog({
+            isOpen: true,
+            title: t('confirm.delete_bulk.title'),
+            message: `${selectedAssetIds.size} items`,
+            confirmLabel: t('btn.delete'),
+            cancelLabel: t('btn.cancel'),
+            isDestructive: true,
+            action: async () => {
+                const assetsToDelete = assets.filter(a => selectedAssetIds.has(a.id));
+                await bulkSoftDeleteAssets(assetsToDelete);
+                const deletedAt = Date.now();
+                setAssets(prev => prev.map(a => selectedAssetIds.has(a.id) ? { ...a, deletedAt } : a));
+                setSelectedAssetIds(new Set());
+                setConfirmDialog(prev => ({ ...prev, isOpen: false }));
+                setIsSelectionMode(false);
+            }
+        });
+    };
     const handleBulkDownload = () => { selectedAssetIds.forEach(id => { const asset = assets.find(a => a.id === id); if (asset) { const link = document.createElement('a'); link.href = asset.url; link.download = `lumina-export-${asset.id}.${asset.type === 'IMAGE' ? 'png' : 'mp4'}`; link.click(); } }); };
     const toggleAssetSelection = (asset: AssetItem) => { const newSet = new Set(selectedAssetIds); if (newSet.has(asset.id)) newSet.delete(asset.id); else newSet.add(asset.id); setSelectedAssetIds(newSet); };
     // FIX: Only allow image comparison (ComparisonView doesn't support video)
@@ -1236,8 +1255,33 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
                         <span className="text-[10px] font-medium text-center">{t('nav.trash')}</span>
                     </button>
                 </div>
-                <div className="mt-auto flex flex-col gap-4 w-full px-2">
-                    <button onClick={() => setShowSettings(true)} className="flex flex-col items-center gap-1 p-3 rounded-xl text-gray-400 hover:text-white hover:bg-white/5 transition-all"><Settings size={24} /></button>
+                <div className="mt-auto flex flex-col gap-4 w-full px-2 relative">
+                    {/* API Key Reminder Tooltip */}
+                    {!getUserApiKey() && !showSettings && (
+                        <div className="absolute bottom-16 left-1/2 -translate-x-1/2 w-52 animate-in fade-in slide-in-from-bottom-2 duration-300">
+                            <div className="relative bg-dark-surface border border-dark-border rounded-xl p-3 shadow-xl">
+                                <div className="absolute -bottom-2 left-1/2 -translate-x-1/2 w-0 h-0 border-l-8 border-r-8 border-t-8 border-l-transparent border-r-transparent border-t-dark-border"></div>
+                                <div className="flex items-center gap-2 mb-2">
+                                    <Key size={14} className="text-brand-400" />
+                                    <span className="text-xs font-bold text-white">
+                                        {language === 'zh' ? '设置 API Key' : 'Set API Key'}
+                                    </span>
+                                </div>
+                                <p className="text-[11px] text-gray-400 leading-relaxed mb-3">
+                                    {language === 'zh' ? '请先设置您的 API Key 以开始创作' : 'Set your API Key to start creating'}
+                                </p>
+                                <button
+                                    onClick={() => setShowSettings(true)}
+                                    className="w-full py-2 bg-brand-500 hover:bg-brand-600 rounded-lg text-xs font-bold text-white transition-colors flex items-center justify-center gap-2"
+                                >
+                                    <Sparkles size={12} />
+                                    {language === 'zh' ? '去设置' : 'Set Now'}
+                                    <ArrowRight size={12} />
+                                </button>
+                            </div>
+                        </div>
+                    )}
+                    <button onClick={() => setShowSettings(true)} className={`flex flex-col items-center gap-1 p-3 rounded-xl transition-all ${!getUserApiKey() ? 'text-brand-400 animate-pulse' : 'text-gray-400 hover:text-white hover:bg-white/5'}`}><Settings size={24} /></button>
                 </div>
             </div>
 

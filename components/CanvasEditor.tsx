@@ -1,6 +1,6 @@
 
 import React, { useEffect, useRef, useState } from 'react';
-import { Undo, Brush, Eraser, Square, MousePointer2, ArrowUpRight, Type, Settings, MessageCircle, Share2, Sparkles, ChevronDown } from 'lucide-react';
+import { Undo, Brush, Eraser, Square, MousePointer2, ArrowUpRight, Type, Settings, MessageCircle, Forward, Sparkles, ChevronDown } from 'lucide-react';
 import { useLanguage } from '../contexts/LanguageContext';
 import { AspectRatio, ImageModel, ImageResolution } from '../types';
 
@@ -1635,7 +1635,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
               className="p-2.5 bg-dark-card border border-dark-border hover:border-brand-500/50 rounded-lg text-gray-300 hover:text-white transition-all"
               title="添加到..."
             >
-              <Share2 size={18} />
+              <Forward size={18} />
             </button>
             {showAddToMenu && (
               <div className="absolute right-0 top-full mt-2 w-40 bg-dark-surface border border-dark-border rounded-xl shadow-2xl overflow-hidden z-[999]">
