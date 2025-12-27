@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
-import { Image as ImageIcon, Video, LayoutGrid, Folder, Sparkles, Settings, Star, CheckSquare, MoveHorizontal, X, Languages, Trash2, Recycle, Download, RotateCcw, ZoomIn, ArrowRight, Key } from 'lucide-react';
-import { AppMode, AspectRatio, GenerationParams, AssetItem, ImageResolution, VideoResolution, ImageModel, VideoModel, ImageStyle, Project, ChatMessage, BackgroundTask, SmartAsset, VideoDuration, VideoStyle, AgentAction, SearchPolicy, EditRegion } from './types';
+import { Image as ImageIcon, Video, LayoutGrid, Folder, Sparkles, Settings, Star, CheckSquare, MoveHorizontal, Languages, Trash2, Recycle, Download, RotateCcw, ArrowRight, Key } from 'lucide-react';
+import { AppMode, AspectRatio, GenerationParams, AssetItem, ImageResolution, VideoResolution, ImageModel, VideoModel, ImageStyle, Project, ChatMessage, BackgroundTask, SmartAsset, VideoDuration, VideoStyle, AgentAction, EditRegion, SearchPolicy } from './types';
 import { GenerationForm } from './components/GenerationForm';
 import { AssetCard } from './components/AssetCard';
 import { ProjectSidebar } from './components/ProjectSidebar';
@@ -534,11 +534,12 @@ export function App() {
 
         if (action.toolName === 'generate_image') {
             const toolArgs = rawArgs && typeof rawArgs === 'object' ? rawArgs : {};
-            const { prompt, aspectRatio, style, resolution, negativePrompt, save_as_reference, numberOfImages, useGrounding } = toolArgs;
+            const { prompt, aspectRatio, style, resolution, negativePrompt, save_as_reference, numberOfImages } = toolArgs;
             setRightPanelMode('GALLERY');
             if (mode !== AppMode.IMAGE) handleModeSwitch(AppMode.IMAGE);
 
-            const isGroundingRequested = useGrounding === true || useGrounding === 'true';
+
+            // Note: isGroundingRequested not used in Chat mode (LLM handles search)
             const normalizedPrompt = typeof prompt === 'string' ? prompt.trim() : '';
             if (!normalizedPrompt) {
                 addToast('error', 'Prompt Missing', '对话生成未收到有效提示词，请重试或换句话描述。');
@@ -558,41 +559,26 @@ export function App() {
             // 3. searchPolicy=image_only/both + grounding requested → Pro
             // 4. Default to Flash
 
-            const isAutoMode = params.isAutoMode !== false; // Default true
-            const searchPolicy = params.searchPolicy || SearchPolicy.LLM_ONLY;
+            // FIX: Chat tool calls use Chat-specific defaults, NOT Studio params
+            // Chat is always in AI autonomous mode with LLM handling search
+            // searchPolicy is always LLM_ONLY for Chat, so grounding is never forced on image model
 
             let effectiveModel: ImageModel;
             let effectiveGrounding: boolean;
 
-            if (!isAutoMode) {
-                // User locked model - override AI selection
-                effectiveModel = params.imageModel;
-                // In non-auto mode, grounding follows user's explicit setting
-                effectiveGrounding = params.useGrounding === true;
-                console.log(`[Agent] Non-auto mode: using locked model ${effectiveModel}, grounding=${effectiveGrounding}`);
+            // Chat auto mode: AI can suggest model, grounding is always false (LLM handles search)
+            const aiModel = toolArgs.model;
+
+            if (aiModel && Object.values(ImageModel).includes(aiModel as ImageModel)) {
+                // AI explicitly selected a valid model
+                effectiveModel = aiModel as ImageModel;
             } else {
-                // Auto mode: AI can suggest, but searchPolicy controls grounding
-                const aiModel = toolArgs.model;
-
-                const shouldForceGrounding = isGroundingRequested &&
-                    (searchPolicy === SearchPolicy.IMAGE_ONLY || searchPolicy === SearchPolicy.BOTH);
-
-                if (shouldForceGrounding) {
-                    // image_only/both: Image model searches directly, must be Pro
-                    effectiveModel = ImageModel.PRO;
-                    effectiveGrounding = true;
-                } else if (aiModel && Object.values(ImageModel).includes(aiModel as ImageModel)) {
-                    // AI explicitly selected a valid model
-                    effectiveModel = aiModel as ImageModel;
-                    // llm_only or no grounding: never enable grounding (LLM already searched)
-                    effectiveGrounding = false;
-                } else {
-                    // Default to Flash
-                    effectiveModel = ImageModel.FLASH;
-                    effectiveGrounding = false;
-                }
-                console.log(`[Agent] Auto mode: model=${effectiveModel}, grounding=${effectiveGrounding}, policy=${searchPolicy}`);
+                // Default to Flash
+                effectiveModel = ImageModel.FLASH;
             }
+            // LLM_ONLY: LLM already handled search, so image model never uses grounding
+            effectiveGrounding = false;
+            console.log(`[Agent] Chat mode: model=${effectiveModel}, grounding=${effectiveGrounding}`);
 
             // Clear previous thought images for new generation
             setThoughtImages([]);
@@ -952,12 +938,13 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
                     saveTask({ ...newTask, status: 'COMPLETED' }); // Persist completion
                     if (onSuccess) onSuccess(asset);
                 } else {
-                    const videoUrl = await generateVideo(genParams, async (operationName) => {
+                    const videoResult = await generateVideo(genParams, async (operationName) => {
                         if (controller.signal.aborted) throw new Error("Cancelled");
                         await updateAsset(taskId, { operationName });
                     }, onStart, controller.signal);
                     if (controller.signal.aborted) throw new Error("Cancelled");
-                    const updates = { status: 'COMPLETED' as const, url: videoUrl, isNew: true };
+                    // FIX: Store videoUri for video extension support
+                    const updates = { status: 'COMPLETED' as const, url: videoResult.blobUrl, videoUri: videoResult.videoUri, isNew: true };
                     await updateAsset(taskId, updates);
                     if (activeProjectIdRef.current === currentProjectId) setAssets(prev => prev.map(a => a.id === taskId ? { ...a, ...updates } : a));
                     setTasks(prev => prev.map(t => t.id === taskId ? { ...t, status: 'COMPLETED' } : t));
@@ -1115,7 +1102,14 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
         }
         if (items.length === 2) setComparisonAssets([items[0], items[1]]);
     };
-    const handleVideoContinue = (data: string, mimeType: string) => { setParams(prev => ({ ...prev, inputVideoData: data, inputVideoMimeType: mimeType })); setMode(AppMode.VIDEO); setActiveTab('studio'); setRightPanelMode('GALLERY'); addToast('info', 'Video Extension', t('help.extend_desc')); };
+    // FIX: handleVideoContinue now accepts videoUri for Veo API video extension
+    const handleVideoContinue = (videoUri: string) => {
+        setParams(prev => ({ ...prev, inputVideoUri: videoUri }));
+        setMode(AppMode.VIDEO);
+        setActiveTab('studio');
+        setRightPanelMode('GALLERY');
+        addToast('info', 'Video Extension', t('help.extend_desc'));
+    };
     const handleRemix = (asset: AssetItem) => { setParams(prev => ({ ...prev, prompt: asset.prompt })); if (asset.type === 'IMAGE') handleUseAsReference(asset); };
     const handleCanvasSaveToConfig = async (payload: {
         baseImageDataUrl: string;

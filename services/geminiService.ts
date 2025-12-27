@@ -606,22 +606,37 @@ Rules:
     // FIX [SUP-005]: Check abort signal before executing deferred tool call
     if (pendingToolCall && onToolCall && !signal?.aborted) {
         console.log('[Stream] Executing deferred tool call:', pendingToolCall.toolName);
-        const adjustedArgs = pendingToolCall.args && typeof pendingToolCall.args === 'object'
-            ? { ...pendingToolCall.args }
+
+        // FIX: Handle both direct args and args wrapped in { parameters: {...} }
+        // App.tsx unwraps parameters, so we need to inject into the correct location
+        const rawArgs = pendingToolCall.args && typeof pendingToolCall.args === 'object'
+            ? pendingToolCall.args as Record<string, any>
             : {};
 
-        const basePrompt = typeof adjustedArgs.prompt === 'string'
-            ? adjustedArgs.prompt
+        // Check if args are wrapped in 'parameters' (some models do this)
+        const hasParametersWrapper = 'parameters' in rawArgs && typeof rawArgs.parameters === 'object';
+        const targetArgs = hasParametersWrapper ? rawArgs.parameters : rawArgs;
+
+        // Get base prompt from either location
+        const existingPrompt = targetArgs.prompt;
+        const basePrompt = typeof existingPrompt === 'string'
+            ? existingPrompt
             : (searchPromptDraft || _newMessage);
 
+        // Inject prompt and useGrounding into the correct location
         if (searchFacts.length > 0) {
-            adjustedArgs.prompt = buildPromptWithFacts(basePrompt, searchFacts);
-        } else if (basePrompt && !adjustedArgs.prompt) {
-            adjustedArgs.prompt = basePrompt;
+            targetArgs.prompt = buildPromptWithFacts(basePrompt, searchFacts);
+        } else if (basePrompt && !existingPrompt) {
+            targetArgs.prompt = basePrompt;
         }
 
         // LLM_ONLY mode: image model does NOT use grounding
-        adjustedArgs.useGrounding = false;
+        targetArgs.useGrounding = false;
+
+        // Return the properly structured args (App.tsx will unwrap if needed)
+        const adjustedArgs = hasParametersWrapper
+            ? { ...rawArgs, parameters: targetArgs }
+            : targetArgs;
 
         onToolCall({ toolName: pendingToolCall.toolName, args: adjustedArgs });
     }
@@ -837,7 +852,7 @@ export const generateVideo = async (
     onUpdate: (opName: string) => Promise<void>,
     onStart: () => void,
     signal: AbortSignal
-): Promise<string> => {
+): Promise<{ blobUrl: string; videoUri?: string }> => {
     onStart();
     const ai = getAIClient();
     if (params.videoModel.includes('veo') && window.aistudio && !await window.aistudio.hasSelectedApiKey()) {
@@ -876,12 +891,23 @@ export const generateVideo = async (
         config.lastFrame = { imageBytes: params.videoEndImage, mimeType: params.videoEndImageMimeType };
     }
 
-    let operation = await ai.models.generateVideos({
+    // Build generateVideos request
+    const generateRequest: any = {
         model: params.videoModel,
         prompt: videoPrompt,
         image: imageInput,
         config: config
-    });
+    };
+
+    // FIX: Add video extension support using inputVideoUri
+    if (params.inputVideoUri) {
+        generateRequest.video = { uri: params.inputVideoUri };
+        // Video extension requires 720p resolution
+        config.resolution = '720p';
+        console.log('[Video] Extension mode: using source video URI');
+    }
+
+    let operation = await ai.models.generateVideos(generateRequest);
     if (operation.name) { await onUpdate(operation.name); }
 
     // FIX [SUP-002]: Add max attempts to prevent infinite polling
@@ -920,7 +946,12 @@ export const generateVideo = async (
     }
 
     const blob = await response.blob();
-    return createTrackedBlobUrl(blob);
+    const blobUrl = createTrackedBlobUrl(blob);
+
+    // Return both blob URL for display and video URI for extension
+    // Extract the base URI without the key parameter for storage
+    const videoUri = downloadLink.split('&')[0]; // Remove key param
+    return { blobUrl, videoUri };
 };
 
 export const describeImage = async (base64: string, mimeType: string): Promise<string> => {

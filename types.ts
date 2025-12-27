@@ -5,6 +5,8 @@ export enum AppMode {
   GALLERY = 'GALLERY'
 }
 
+
+
 export const APP_LIMITS = {
   MAX_FILE_SIZE_BYTES: 20 * 1024 * 1024, // 20MB
   MAX_IMAGE_COUNT: 10,
@@ -57,14 +59,21 @@ export enum TextModel {
 export enum ImageStyle {
   NONE = 'None',
   PHOTOREALISTIC = 'photorealistic photograph style',
+  MINIMALIST = 'minimalist clean composition with ample white space',
+  LIFESTYLE = 'lifestyle photography in natural setting',
+  THREE_D_RENDER = '3D rendered product visualization style',
   ANIME = 'anime illustration style',
   DIGITAL_ART = 'digital art style',
   COMIC_BOOK = 'comic book illustration style',
   WATERCOLOR = 'watercolor painting style',
-  THREE_D_RENDER = '3D rendered CGI style',
-  CYBERPUNK = 'cyberpunk aesthetic',
-  PIXEL_ART = 'pixel art style',
-  SKETCH = 'pencil sketch drawing style'
+  CYBERPUNK = 'cyberpunk aesthetic with neon lights',
+  PIXEL_ART = 'pixel art retro game style',
+  SKETCH = 'pencil sketch drawing style',
+  RETRO = 'retro vintage aesthetic style',
+  NEON_GLOW = 'neon glow retrofuturistic style',
+  HAND_DRAWN = 'hand-drawn organic illustration style',
+  METALLIC = 'metallic chrome finish style',
+  MAXIMALIST = 'maximalist vibrant colorful illustration'
 }
 
 export enum VideoStyle {
@@ -167,9 +176,8 @@ export interface GenerationParams {
   // Video Style References (Veo HQ only, Mutually exclusive with Keyframes)
   videoStyleReferences?: { data: string; mimeType: string }[];
 
-  // New: Video Extension
-  inputVideoData?: string; // Base64 of video to extend
-  inputVideoMimeType?: string;
+  // New: Video Extension (Veo API requires URI, not base64)
+  inputVideoUri?: string; // Google File URI of video to extend
 }
 
 // --- ARCHITECTURE UPGRADE: JOB MODEL & EVENT STREAM ---
@@ -271,7 +279,8 @@ export interface AssetItem {
   isFavorite?: boolean; // New: Favorite status
   isNew?: boolean; // New: Indicator for newly generated assets
   deletedAt?: number; // New: Timestamp when moved to trash
-  operationName?: string; // New: Store the Google API Operation ID for long-running tasks
+  operationName?: string; // Store the Google API Operation ID for long-running tasks
+  videoUri?: string; // New: Google File URI for video extension support
 
   // Link to Job System
   jobId?: string; // Which job created this asset

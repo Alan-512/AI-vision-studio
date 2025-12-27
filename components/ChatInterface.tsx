@@ -1,6 +1,6 @@
 
 import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { Send, User, Sparkles, ChevronDown, BrainCircuit, Zap, X, Box, Copy, Check, Plus, MonitorPlay, Palette, Film, Bot, Square, Crop, CheckCircle2, Globe, Brain, CircuitBoard, Wrench, Image as ImageIcon, CircleDashed, Terminal, Clapperboard, AudioWaveform, Move3d, RefreshCw, AlertCircle, Search, Upload } from 'lucide-react';
+import { Send, User, Sparkles, ChevronDown, BrainCircuit, Zap, X, Box, Copy, Check, Plus, MonitorPlay, Palette, Film, Bot, Square, Crop, CheckCircle2, Globe, Brain, CircuitBoard, Wrench, Image as ImageIcon, CircleDashed, Terminal, RefreshCw, AlertCircle, Search, Upload } from 'lucide-react';
 import { ChatMessage, GenerationParams, ImageStyle, ImageResolution, AppMode, ImageModel, VideoResolution, VideoModel, VideoStyle, AspectRatio, SmartAsset, APP_LIMITS, AgentAction, TextModel } from '../types';
 import { streamChatResponse } from '../services/geminiService';
 import { AgentStateMachine, AgentState, createInitialAgentState, PendingAction, createGenerateAction } from '../services/agentService';
@@ -567,12 +567,6 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
     }
   };
   const handleKeyDown = (e: React.KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); } };
-
-  const VEO_TIPS = [
-    { icon: <Clapperboard size={12} />, title: language === 'zh' ? '时序动作' : 'Temporal Flow', desc: language === 'zh' ? '用“首先...然后...”描述动作变化' : 'Describe transitions with "First... then..."', prompt: language === 'zh' ? '教我如何描述一个角色的动作先后顺序' : 'Tell me how to describe a sequence of character actions' },
-    { icon: <AudioWaveform size={12} />, title: language === 'zh' ? '听觉锚点' : 'Sound Cues', desc: language === 'zh' ? '加入声音关键词增强材质真实感' : 'Add sound words to enhance physical realism', prompt: language === 'zh' ? '为什么提示词里要写声音？举几个例子' : 'Why include sounds in prompts? Give some examples' },
-    { icon: <Move3d size={12} />, title: language === 'zh' ? '专业运镜' : 'Pro Camera', desc: language === 'zh' ? '指定推拉摇移等电影级镜头语言' : 'Specify cinematic motions like Dolly Zoom', prompt: language === 'zh' ? '推荐几个适合科幻大片的运镜描述' : 'Suggest some cinematic camera movements for sci-fi' }
-  ];
 
   return (
     <div

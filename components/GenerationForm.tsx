@@ -140,7 +140,7 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
   // VEO API RESTRAINT LOGIC (DOCUMENTATION SYNC)
   useEffect(() => {
     if (mode === AppMode.VIDEO) {
-      const isVideoExtension = !!params.inputVideoData;
+      const isVideoExtension = !!(params.inputVideoUri || params.inputVideoData);
       const hasRefImages = (params.videoStyleReferences?.length || 0) > 0;
 
       setParams(prev => {
@@ -174,7 +174,7 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
         return prev;
       });
     }
-  }, [mode, params.inputVideoData, params.videoStyleReferences, params.videoResolution, params.videoDuration, params.aspectRatio]);
+  }, [mode, params.inputVideoUri, params.inputVideoData, params.videoStyleReferences, params.videoResolution, params.videoDuration, params.aspectRatio]);
 
   // Enforce valid Resolution for Image Flash Model
   useEffect(() => {
@@ -463,11 +463,18 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
   const isBtnDisabled = (activeTab === 'studio' ? !params.prompt.trim() : (chatHistory.length === 0 || isAnalyzing)) || isVideoGenerating || isCoolingDown;
   const displayedRatios = mode === AppMode.VIDEO ? [AspectRatio.LANDSCAPE, AspectRatio.PORTRAIT] : Object.values(AspectRatio);
   const isVeoHQ = params.videoModel === VideoModel.VEO_HQ;
-  const isVideoExtension = !!params.inputVideoData;
+  const isVideoExtension = !!(params.inputVideoUri || params.inputVideoData);
   const hasRefImages = (params.videoStyleReferences?.length || 0) > 0;
 
   const handleVideoTabSwitch = (tab: 'keyframes' | 'style') => { setActiveVideoTab(tab); if (tab === 'keyframes') { setParams(prev => ({ ...prev, videoStyleReferences: [] })); } else { setParams(prev => ({ ...prev, videoStartImage: undefined, videoStartImageMimeType: undefined, videoEndImage: undefined, videoEndImageMimeType: undefined })); } };
-  const cancelVideoExtension = () => { setParams(prev => ({ ...prev, inputVideoData: undefined, inputVideoMimeType: undefined })); };
+  const cancelVideoExtension = () => {
+    setParams(prev => ({
+      ...prev,
+      inputVideoData: undefined,
+      inputVideoMimeType: undefined,
+      inputVideoUri: undefined
+    }));
+  };
 
   return (
     <div className="w-[400px] flex-shrink-0 flex flex-col border-r border-dark-border bg-dark-panel z-20 h-full">
@@ -842,7 +849,7 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
       {activeTab === 'studio' && (
         <div className="p-4 bg-dark-panel border-t border-dark-border z-20 shrink-0">
           <button onClick={handleGenerateClick} disabled={isBtnDisabled} className={`w-full py-4 font-bold rounded-xl shadow-lg transition-all transform hover:-translate-y-0.5 flex flex-col items-center justify-center gap-1 ${isBtnDisabled ? 'bg-gray-700 text-gray-400 cursor-not-allowed transform-none' : 'bg-gradient-to-r from-brand-600 to-indigo-600 hover:from-brand-500 hover:to-indigo-500 text-white shadow-brand-900/20'}`}>
-            {isCoolingDown ? (<div className="flex items-center gap-2 text-yellow-400"><Clock size={20} className="animate-pulse" /><span>System Busy (Wait {cooldownRemaining}s)</span></div>) : isGenerating || isAnalyzing ? (<div className="flex items-center gap-2">{isAnalyzing ? (<><Sparkles size={20} className="animate-pulse" /><span>{t('btn.analyzing')}</span></>) : (mode === AppMode.VIDEO ? (<><Loader2 size={20} className="animate-spin" /><span>{t('nav.generating')}</span></>) : (<><Layers size={20} className="animate-pulse" /><span>{t('btn.queue')}</span></>))}</div>) : (<div className="flex items-center gap-2">{mode === AppMode.IMAGE ? <ImageIcon size={20} /> : <VideoIcon size={20} />}<span>{params.inputVideoData ? t('btn.extend') : t('btn.generate')} {mode === AppMode.IMAGE ? (params.numberOfImages || 1) : ''}</span></div>)}
+            {isCoolingDown ? (<div className="flex items-center gap-2 text-yellow-400"><Clock size={20} className="animate-pulse" /><span>System Busy (Wait {cooldownRemaining}s)</span></div>) : isGenerating || isAnalyzing ? (<div className="flex items-center gap-2">{isAnalyzing ? (<><Sparkles size={20} className="animate-pulse" /><span>{t('btn.analyzing')}</span></>) : (mode === AppMode.VIDEO ? (<><Loader2 size={20} className="animate-spin" /><span>{t('nav.generating')}</span></>) : (<><Layers size={20} className="animate-pulse" /><span>{t('btn.queue')}</span></>))}</div>) : (<div className="flex items-center gap-2">{mode === AppMode.IMAGE ? <ImageIcon size={20} /> : <VideoIcon size={20} />}<span>{(params.inputVideoUri || params.inputVideoData) ? t('btn.extend') : t('btn.generate')} {mode === AppMode.IMAGE ? (params.numberOfImages || 1) : ''}</span></div>)}
             {!isCoolingDown && <span className="text-[10px] font-normal opacity-70">{t('msg.cost_warning')}</span>}
           </button>
         </div>

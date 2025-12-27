@@ -9,7 +9,8 @@ interface CanvasViewProps {
   onClose: () => void; // "Back to Gallery"
   onAddToChat?: (asset: AssetItem) => void;
   onInpaint?: (asset: AssetItem) => void;
-  onExtendVideo?: (videoData: string, mimeType: string) => void;
+  // FIX: onExtendVideo now accepts videoUri (Veo API requires URI, not base64)
+  onExtendVideo?: (videoUri: string) => void;
   onRemix?: (asset: AssetItem) => void;
   onDelete?: () => void;
 }
@@ -20,7 +21,6 @@ export const CanvasView: React.FC<CanvasViewProps> = ({ asset, onClose, onDelete
   const [position, setPosition] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
-  const [isPreparingExtension, setIsPreparingExtension] = useState(false);
 
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -79,26 +79,10 @@ export const CanvasView: React.FC<CanvasViewProps> = ({ asset, onClose, onDelete
     document.body.removeChild(link);
   };
 
-  const handleExtendClick = async () => {
-    if (asset.type === 'VIDEO' && onExtendVideo && asset.url) {
-      setIsPreparingExtension(true);
-      try {
-        const response = await fetch(asset.url);
-        const blob = await response.blob();
-        const reader = new FileReader();
-        reader.onloadend = () => {
-          const base64data = reader.result as string;
-          const matches = base64data.match(/^data:(.+);base64,(.+)$/);
-          if (matches) {
-            onExtendVideo(matches[2], matches[1]);
-          }
-          setIsPreparingExtension(false);
-        };
-        reader.readAsDataURL(blob);
-      } catch (e) {
-        console.error("Extension prep failed", e);
-        setIsPreparingExtension(false);
-      }
+  // FIX: Use videoUri directly for video extension (Veo API requires URI)
+  const handleExtendClick = () => {
+    if (asset.type === 'VIDEO' && onExtendVideo && asset.videoUri) {
+      onExtendVideo(asset.videoUri);
     }
   };
 
@@ -228,14 +212,13 @@ export const CanvasView: React.FC<CanvasViewProps> = ({ asset, onClose, onDelete
               </button>
             )}
 
-            {/* Video Extend Action */}
-            {asset.type === 'VIDEO' && onExtendVideo && (
+            {/* Video Extend Action - only show if videoUri is available */}
+            {asset.type === 'VIDEO' && onExtendVideo && asset.videoUri && (
               <button
                 onClick={handleExtendClick}
-                disabled={isPreparingExtension}
-                className="flex items-center gap-2 px-3 py-2 bg-purple-600 hover:bg-purple-500 text-white rounded-lg text-xs font-bold transition-colors disabled:opacity-50"
+                className="flex items-center gap-2 px-3 py-2 bg-purple-600 hover:bg-purple-500 text-white rounded-lg text-xs font-bold transition-colors"
               >
-                {isPreparingExtension ? <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <Video size={14} />}
+                <Video size={14} />
                 {t('btn.extend')}
               </button>
             )}
