@@ -582,7 +582,7 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
                     )}
                   </div>
                 )}
-                {params.smartAssets && params.smartAssets.length > 0 && (
+                {mode === AppMode.IMAGE && params.smartAssets && params.smartAssets.length > 0 && (
                   <button onClick={handleDescribeImage} disabled={isDescribing} className="flex items-center gap-1.5 px-2.5 py-1.5 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 rounded-lg text-[10px] font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed border border-indigo-500/20">
                     {isDescribing ? <div className="w-3 h-3 rounded-full border-2 border-indigo-400 border-t-transparent animate-spin" /> : <Eye size={12} />} {isDescribing ? 'Analyzing...' : t('btn.describe')}
                   </button>

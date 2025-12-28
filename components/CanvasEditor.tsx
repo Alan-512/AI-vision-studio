@@ -1664,14 +1664,14 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
                   className="w-full px-4 py-3 text-left text-sm text-gray-300 hover:bg-white/10 hover:text-white flex items-center gap-2 transition-colors"
                 >
                   <Settings size={16} />
-                  参数配置
+                  快速生成
                 </button>
                 <button
                   onClick={() => { handleSaveToChat(); setShowAddToMenu(false); }}
                   className="w-full px-4 py-3 text-left text-sm text-gray-300 hover:bg-white/10 hover:text-white flex items-center gap-2 transition-colors border-t border-dark-border"
                 >
                   <MessageCircle size={16} />
-                  AI 对话
+                  AI 助手
                 </button>
               </div>
             )}

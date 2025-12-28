@@ -1128,7 +1128,7 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
         setRightPanelMode('GALLERY');
         setActiveTab('studio');
         setEditorAsset(null);
-        addToast('success', '编辑已准备', '图片已添加到参数配置的重绘编辑区');
+        addToast('success', '编辑已准备', '图片已添加到快速生成的重绘编辑区');
     };
 
     const handleCanvasSaveToChat = async (payload: {
