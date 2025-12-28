@@ -1,6 +1,6 @@
 
 import React, { useRef, useState, useEffect } from 'react';
-import { AppMode, AspectRatio, GenerationParams, ImageResolution, VideoResolution, ImageModel, VideoModel, ImageStyle, VideoStyle, VideoDuration, ChatMessage, AssetItem, SmartAsset, APP_LIMITS, AgentAction } from '../types';
+import { AppMode, AspectRatio, GenerationParams, ImageResolution, VideoResolution, ImageModel, VideoModel, ImageStyle, VideoStyle, VideoDuration, ChatMessage, AssetItem, SmartAsset, APP_LIMITS, AgentAction, SmartAssetRole } from '../types';
 import { Settings2, Sparkles, Image as ImageIcon, Video as VideoIcon, X, Palette, MessageSquare, Layers, ChevronDown, ChevronUp, SlidersHorizontal, Monitor, Eye, Lock, ScanFace, Frame, ArrowRight, Loader2, Clock, BookTemplate, Clapperboard, XCircle, Search, Briefcase } from 'lucide-react';
 import { ChatInterface } from './ChatInterface';
 import { extractPromptFromHistory, optimizePrompt, describeImage } from '../services/geminiService';
@@ -47,6 +47,25 @@ const VIDEO_TEMPLATES = [
   { label: 'Character Action', text: 'A knight in shining armor swinging a sword in slow motion, sparks flying, dramatic lighting.' }
 ];
 
+const DEFAULT_SMART_ASSET_ROLE = SmartAssetRole.SUBJECT;
+
+const resolveSmartAssetRole = (asset: SmartAsset): SmartAssetRole => {
+  if (asset.role && Object.values(SmartAssetRole).includes(asset.role)) return asset.role;
+  const legacyType = asset.type ? String(asset.type).toUpperCase() : '';
+  switch (legacyType) {
+    case 'STRUCTURE':
+      return SmartAssetRole.COMPOSITION;
+    case 'STYLE':
+      return SmartAssetRole.STYLE;
+    case 'SUBJECT':
+      return SmartAssetRole.SUBJECT;
+    case 'EDIT_BASE':
+      return SmartAssetRole.EDIT_BASE;
+    default:
+      return DEFAULT_SMART_ASSET_ROLE;
+  }
+};
+
 export const GenerationForm: React.FC<GenerationFormProps> = ({
   mode,
   params,
@@ -77,6 +96,12 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
   setThoughtImages
 }) => {
   const { t, language } = useLanguage();
+  const smartAssetRoleOptions = [
+    { value: SmartAssetRole.SUBJECT, label: t('role.subject') },
+    { value: SmartAssetRole.STYLE, label: t('role.style') },
+    { value: SmartAssetRole.COMPOSITION, label: t('role.composition') },
+    { value: SmartAssetRole.EDIT_BASE, label: t('role.edit_base') }
+  ];
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isOptimizing, setIsOptimizing] = useState(false);
   const [isDescribing, setIsDescribing] = useState(false);
@@ -111,17 +136,18 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
         migratedAssets.push({
           id: crypto.randomUUID(),
           data: params.referenceImage,
-          mimeType: params.referenceImageMimeType
+          mimeType: params.referenceImageMimeType,
+          role: SmartAssetRole.EDIT_BASE
         });
       }
       if (params.subjectReferences && params.subjectReferences.length > 0) {
         params.subjectReferences.forEach(ref => {
-          migratedAssets.push({ id: crypto.randomUUID(), data: ref.data, mimeType: ref.mimeType });
+          migratedAssets.push({ id: crypto.randomUUID(), data: ref.data, mimeType: ref.mimeType, role: SmartAssetRole.SUBJECT });
         });
       }
       if (params.styleReferences && params.styleReferences.length > 0) {
         params.styleReferences.forEach(ref => {
-          migratedAssets.push({ id: crypto.randomUUID(), data: ref.data, mimeType: ref.mimeType });
+          migratedAssets.push({ id: crypto.randomUUID(), data: ref.data, mimeType: ref.mimeType, role: SmartAssetRole.STYLE });
         });
       }
       if (migratedAssets.length > 0) {
@@ -136,6 +162,19 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
       }
     }
   }, [mode, projectId]);
+
+  useEffect(() => {
+    if (mode !== AppMode.IMAGE || !params.smartAssets || params.smartAssets.length === 0) return;
+    const needsNormalization = params.smartAssets.some(asset => !asset.role);
+    if (!needsNormalization) return;
+    setParams(prev => ({
+      ...prev,
+      smartAssets: prev.smartAssets?.map(asset => ({
+        ...asset,
+        role: resolveSmartAssetRole(asset)
+      }))
+    }));
+  }, [mode, params.smartAssets, setParams]);
 
   // VEO API RESTRAINT LOGIC (DOCUMENTATION SYNC)
   useEffect(() => {
@@ -324,7 +363,7 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
 
         if (successfulResults.length > 0) {
           setParams(prev => {
-            const newAssets: SmartAsset[] = successfulResults.map(r => ({ id: crypto.randomUUID(), data: r.data, mimeType: r.mimeType, type: 'STRUCTURE' }));
+            const newAssets: SmartAsset[] = successfulResults.map(r => ({ id: crypto.randomUUID(), data: r.data, mimeType: r.mimeType, role: DEFAULT_SMART_ASSET_ROLE }));
             return { ...prev, smartAssets: [...(prev.smartAssets || []), ...newAssets] };
           });
         }
@@ -358,6 +397,12 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
   const removeImage = (field: 'start' | 'end') => { setParams(prev => { if (field === 'start') return { ...prev, videoStartImage: undefined, videoStartImageMimeType: undefined }; if (field === 'end') return { ...prev, videoEndImage: undefined, videoEndImageMimeType: undefined }; return prev; }); };
   const removeVideoStyleRef = (index: number) => setParams(prev => ({ ...prev, videoStyleReferences: prev.videoStyleReferences?.filter((_, i) => i !== index) }));
   const removeSmartAsset = (id: string) => { setParams(prev => ({ ...prev, smartAssets: prev.smartAssets?.filter(a => a.id !== id) })); };
+  const updateSmartAssetRole = (id: string, role: SmartAssetRole) => {
+    setParams(prev => ({
+      ...prev,
+      smartAssets: prev.smartAssets?.map(asset => asset.id === id ? { ...asset, role } : asset)
+    }));
+  };
   const clearEditPreview = () => {
     setParams(prev => ({
       ...prev,
@@ -389,7 +434,7 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
               alert(`${params.imageModel === ImageModel.PRO ? 'Pro' : 'Flash'} 模型最多支持 ${maxAllowed} 张参考图`);
               return;
             }
-            setParams(prev => ({ ...prev, smartAssets: [...(prev.smartAssets || []), { id: crypto.randomUUID(), data, mimeType, type: 'STRUCTURE' }] }));
+            setParams(prev => ({ ...prev, smartAssets: [...(prev.smartAssets || []), { id: crypto.randomUUID(), data, mimeType, role: DEFAULT_SMART_ASSET_ROLE }] }));
           }
           else if (target === 'videoStyle') setParams(prev => ({ ...prev, videoStyleReferences: [...(prev.videoStyleReferences || []), newItem].slice(0, 3) }));
           else if (target === 'videoStart') setParams(prev => ({ ...prev, videoStartImage: data, videoStartImageMimeType: mimeType }));
@@ -423,7 +468,7 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
             .map(r => r.value);
 
           if (results.length > 0) {
-            if (target === 'smart') setParams(prev => ({ ...prev, smartAssets: [...(prev.smartAssets || []), ...results.map(r => ({ id: crypto.randomUUID(), data: r.data, mimeType: r.mimeType, type: 'STRUCTURE' as const }))] }));
+            if (target === 'smart') setParams(prev => ({ ...prev, smartAssets: [...(prev.smartAssets || []), ...results.map(r => ({ id: crypto.randomUUID(), data: r.data, mimeType: r.mimeType, role: DEFAULT_SMART_ASSET_ROLE }))] }));
             else if (target === 'videoStyle') setParams(prev => ({ ...prev, videoStyleReferences: [...(prev.videoStyleReferences || []), ...results].slice(0, 3) }));
             else if (target === 'videoStart' && results[0]) setParams(prev => ({ ...prev, videoStartImage: results[0].data, videoStartImageMimeType: results[0].mimeType }));
             else if (target === 'videoEnd' && results[0]) setParams(prev => ({ ...prev, videoEndImage: results[0].data, videoEndImageMimeType: results[0].mimeType }));
@@ -642,21 +687,32 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
               <p className="text-[10px] text-gray-500">{t('help.smart_assets')}</p>
               <div className="flex flex-wrap gap-2">
                 {params.smartAssets?.map((asset, index) => (
-                  <div key={asset.id} className="relative group animate-in fade-in zoom-in">
-                    <div className="w-16 h-16 rounded-lg overflow-hidden border border-dark-border bg-black">
-                      <img src={`data:${asset.mimeType};base64,${asset.data}`} alt={`Image ${index + 1}`} className="w-full h-full object-cover" />
+                  <div key={asset.id} className="flex flex-col items-center gap-1 animate-in fade-in zoom-in">
+                    <div className="relative group">
+                      <div className="w-16 h-16 rounded-lg overflow-hidden border border-dark-border bg-black">
+                        <img src={`data:${asset.mimeType};base64,${asset.data}`} alt={`Image ${index + 1}`} className="w-full h-full object-cover" />
+                      </div>
+                      {/* Image number badge */}
+                      <div className="absolute -top-1.5 -left-1.5 w-5 h-5 rounded-full bg-brand-500 text-white text-[10px] font-bold flex items-center justify-center shadow-lg">
+                        {index + 1}
+                      </div>
+                      {/* Delete button */}
+                      <button
+                        onClick={() => removeSmartAsset(asset.id)}
+                        className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-red-500 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity shadow-lg"
+                      >
+                        <X size={10} />
+                      </button>
                     </div>
-                    {/* Image number badge */}
-                    <div className="absolute -top-1.5 -left-1.5 w-5 h-5 rounded-full bg-brand-500 text-white text-[10px] font-bold flex items-center justify-center shadow-lg">
-                      {index + 1}
-                    </div>
-                    {/* Delete button */}
-                    <button
-                      onClick={() => removeSmartAsset(asset.id)}
-                      className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-red-500 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity shadow-lg"
+                    <select
+                      value={resolveSmartAssetRole(asset)}
+                      onChange={(e) => updateSmartAssetRole(asset.id, e.target.value as SmartAssetRole)}
+                      className="w-20 bg-dark-bg border border-dark-border rounded px-1 py-0.5 text-[9px] text-gray-300"
                     >
-                      <X size={10} />
-                    </button>
+                      {smartAssetRoleOptions.map(option => (
+                        <option key={option.value} value={option.value}>{option.label}</option>
+                      ))}
+                    </select>
                   </div>
                 ))}
               </div>

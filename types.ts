@@ -65,6 +65,13 @@ export enum AssistantMode {
   POSTER = 'POSTER'
 }
 
+export enum SmartAssetRole {
+  STYLE = 'STYLE',
+  SUBJECT = 'SUBJECT',
+  COMPOSITION = 'COMPOSITION',
+  EDIT_BASE = 'EDIT_BASE'
+}
+
 export enum ImageStyle {
   NONE = 'None',
   PHOTOREALISTIC = 'photorealistic photograph style',
@@ -115,6 +122,8 @@ export interface SmartAsset {
   id: string;
   data: string; // Base64
   mimeType: string;
+  role?: SmartAssetRole;
+  type?: string; // Legacy: older assets may store STRUCTURE/STYLE/SUBJECT
 }
 
 export interface EditRegion {

@@ -1,6 +1,6 @@
 
 import { GoogleGenAI, Part, Content, FunctionDeclaration, Type } from "@google/genai";
-import { ChatMessage, AppMode, SmartAsset, GenerationParams, ImageModel, AgentAction, AssetItem, AspectRatio, ImageResolution, TextModel, AssistantMode } from "../types";
+import { ChatMessage, AppMode, SmartAsset, GenerationParams, ImageModel, AgentAction, AssetItem, AspectRatio, ImageResolution, TextModel, AssistantMode, SmartAssetRole } from "../types";
 import { createTrackedBlobUrl } from "./storageService";
 
 // Key management
@@ -64,6 +64,39 @@ export const buildPromptWithFacts = (rawPrompt: string, factsBlock: StructuredFa
         'Reference Notes:',
         factsText
     ].join('\n');
+};
+
+const resolveSmartAssetRole = (asset: SmartAsset): SmartAssetRole | null => {
+    if (asset.role && Object.values(SmartAssetRole).includes(asset.role)) return asset.role;
+    const legacyType = asset.type ? String(asset.type).toUpperCase() : '';
+    switch (legacyType) {
+        case 'STRUCTURE':
+            return SmartAssetRole.COMPOSITION;
+        case 'STYLE':
+            return SmartAssetRole.STYLE;
+        case 'SUBJECT':
+            return SmartAssetRole.SUBJECT;
+        case 'EDIT_BASE':
+            return SmartAssetRole.EDIT_BASE;
+        default:
+            return null;
+    }
+};
+
+const getRoleInstruction = (role: SmartAssetRole, index: number): string => {
+    const label = `Image ${index + 1}`;
+    switch (role) {
+        case SmartAssetRole.STYLE:
+            return `${label} = STYLE reference. Match colors, lighting, textures, and rendering style.`;
+        case SmartAssetRole.SUBJECT:
+            return `${label} = SUBJECT reference. Preserve identity, face, proportions, outfit, and key details.`;
+        case SmartAssetRole.COMPOSITION:
+            return `${label} = COMPOSITION reference. Match camera angle, framing, pose, and layout.`;
+        case SmartAssetRole.EDIT_BASE:
+            return `${label} = EDIT BASE. Preserve everything unless the prompt requests changes.`;
+        default:
+            return `[Image ${index + 1}]`;
+    }
 };
 
 // --- OFFICIAL FUNCTION DECLARATIONS ---
@@ -726,7 +759,7 @@ export const generateImage = async (
         toUseCount: smartAssetsToUse.length
     });
 
-    // Add images as "Image 1", "Image 2", etc. for easy reference in prompt
+    // Add images with role hints for easy reference in prompt
     smartAssetsToUse.forEach((asset, index) => {
         console.log(`[generateImage] Adding reference image ${index + 1}:`, {
             mimeType: asset.mimeType,
@@ -734,7 +767,8 @@ export const generateImage = async (
             dataPrefix: asset.data?.slice(0, 30) || 'NO DATA'
         });
         parts.push({ inlineData: { mimeType: asset.mimeType, data: asset.data } });
-        parts.push({ text: `[Image ${index + 1}]` });
+        const role = resolveSmartAssetRole(asset);
+        parts.push({ text: role ? getRoleInstruction(role, index) : `[Image ${index + 1}]` });
     });
 
     // CRITICAL DEBUG: Show total parts being sent

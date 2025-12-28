@@ -277,6 +277,19 @@ export const saveAsset = async (asset: AssetItem): Promise<void> => {
         console.warn("Blob conversion failed for image", conversionError);
         // Fallback: Try saving string if small enough, otherwise this might fail Quota later
       }
+    } else if (asset.type === 'IMAGE' && asset.url.startsWith('blob:')) {
+      try {
+        const response = await fetch(asset.url);
+        const blob = await response.blob();
+        if (!blob || blob.size === 0) throw new Error("Empty blob received");
+        storageRecord.blob = blob;
+        storageRecord.url = 'blob';
+      } catch (conversionError: any) {
+        console.error("Critical: Failed to persist image blob", conversionError);
+        if (asset.status === 'COMPLETED') {
+          throw new Error("DATA_INTEGRITY_FAIL: Could not persist image data. " + conversionError.message);
+        }
+      }
     }
 
     // 2. Video Persistence (CRITICAL)
@@ -491,38 +504,61 @@ export const loadAssets = async (projectId?: string): Promise<AssetItem[]> => {
     }
 
     request.onsuccess = () => {
-      let rawAssets = request.result || [];
+      void (async () => {
+        let rawAssets = request.result || [];
 
-      // Manual filter fallback if we couldn't use index
-      if (projectId && !store.indexNames.contains('projectId')) {
-        rawAssets = rawAssets.filter((a: any) => a.projectId === projectId);
-      }
-
-      // Rehydrate Blobs to URLs with reference counting
-      const assets = rawAssets.map((record: any) => {
-        // Generic Blob Rehydration (Works for both IMAGE and VIDEO)
-        if (record.blob instanceof Blob) {
-          // STEP 1: Use reference-counted URL creation
-          const newUrl = createTrackedBlobUrl(record.blob);
-
-          // We do not modify the record in DB, just the returned object for the app
-          return { ...record, url: newUrl, blob: undefined };
+        // Manual filter fallback if we couldn't use index
+        if (projectId && !store.indexNames.contains('projectId')) {
+          rawAssets = rawAssets.filter((a: any) => a.projectId === projectId);
         }
 
-        // FALLBACK: If URL is 'blob' but blob data is missing (corruption check)
-        if (record.url === 'blob' && !record.blob) {
-          return { ...record, status: 'FAILED', url: '', metadata: { ...record.metadata, error: 'Storage Corruption: Data missing' } };
-        }
+        const markCorrupt = (record: any, reason: string) => ({
+          ...record,
+          status: record.status === 'COMPLETED' ? 'FAILED' : record.status,
+          url: '',
+          metadata: { ...record.metadata, error: reason }
+        });
 
-        return record;
-      });
-      // Sort by newest first
-      assets.sort((a: AssetItem, b: AssetItem) => b.createdAt - a.createdAt);
+        // Rehydrate Blobs to URLs with reference counting
+        const assets = await Promise.all(rawAssets.map(async (record: any) => {
+          // Generic Blob Rehydration (Works for both IMAGE and VIDEO)
+          if (record.blob instanceof Blob) {
+            const newUrl = createTrackedBlobUrl(record.blob);
+            return { ...record, url: newUrl, blob: undefined };
+          }
 
-      // STEP 2: Clean up any orphaned URLs (refCount=0) but never active ones
-      trimUnusedBlobUrls();
+          // FALLBACK: If URL is 'blob' but blob data is missing (corruption check)
+          if (record.url === 'blob' && !record.blob) {
+            return markCorrupt(record, 'Storage Corruption: Data missing');
+          }
 
-      resolve(assets);
+          // Legacy: Blob URL stored without blob data (attempt recovery)
+          if (typeof record.url === 'string' && record.url.startsWith('blob:')) {
+            try {
+              const response = await fetch(record.url);
+              if (!response.ok) throw new Error('Blob URL not found');
+              const blob = await response.blob();
+              if (!blob || blob.size === 0) throw new Error('Empty blob');
+              const newUrl = createTrackedBlobUrl(blob);
+              updateAsset(record.id, { blob, url: 'blob' }).catch(console.debug);
+              return { ...record, url: newUrl, blob: undefined };
+            } catch (error) {
+              console.warn('[Storage] Failed to recover legacy blob URL', error);
+              return markCorrupt(record, 'Storage Corruption: Legacy blob URL missing');
+            }
+          }
+
+          return record;
+        }));
+
+        // Sort by newest first
+        assets.sort((a: AssetItem, b: AssetItem) => b.createdAt - a.createdAt);
+
+        // STEP 2: Clean up any orphaned URLs (refCount=0) but never active ones
+        trimUnusedBlobUrls();
+
+        resolve(assets);
+      })().catch(reject);
     };
     request.onerror = () => reject(request.error);
   });

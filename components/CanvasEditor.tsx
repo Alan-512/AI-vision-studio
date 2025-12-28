@@ -38,7 +38,7 @@ interface CanvasEditorProps {
   };
 }
 
-type ToolType = 'brush' | 'rect' | 'marker' | 'eraser' | 'arrow' | 'text';
+type ToolType = 'brush' | 'rect' | 'eraser';
 
 interface RegionState {
   id: string;
@@ -1794,15 +1794,6 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
 
         {/* Tools */}
         <div className="flex flex-nowrap items-center gap-2 p-1 bg-black/20 rounded-lg border border-white/5 shrink-0">
-          <button onClick={() => setActiveTool('marker')} className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-bold transition-all ${activeTool === 'marker' ? 'bg-brand-600 text-white shadow-lg' : 'text-gray-400 hover:text-white hover:bg-white/5'}`}>
-            <MousePointer2 size={14} /> Markers
-          </button>
-          <button onClick={() => setActiveTool('arrow')} className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-bold transition-all ${activeTool === 'arrow' ? 'bg-brand-600 text-white shadow-lg' : 'text-gray-400 hover:text-white hover:bg-white/5'}`}>
-            <ArrowUpRight size={14} /> {t('editor.arrow')}
-          </button>
-          <button onClick={() => setActiveTool('text')} className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-bold transition-all ${activeTool === 'text' ? 'bg-brand-600 text-white shadow-lg' : 'text-gray-400 hover:text-white hover:bg-white/5'}`}>
-            <Type size={14} /> {t('editor.text')}
-          </button>
           <button onClick={() => setActiveTool('brush')} className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-bold transition-all ${activeTool === 'brush' ? 'bg-brand-600 text-white shadow-lg' : 'text-gray-400 hover:text-white hover:bg-white/5'}`}>
             <Brush size={14} /> {t('editor.brush')}
           </button>
@@ -1810,12 +1801,12 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
             <Square size={14} /> {t('editor.box')}
           </button>
           <button onClick={() => setActiveTool('eraser')} className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-bold transition-all ${activeTool === 'eraser' ? 'bg-white text-black shadow-lg' : 'text-gray-400 hover:text-white hover:bg-white/5'}`}>
-            <Eraser size={14} /> Eraser
+            <Eraser size={14} /> {t('editor.eraser')}
           </button>
         </div>
 
         {/* Brush Settings */}
-        {(activeTool === 'brush' || activeTool === 'rect' || activeTool === 'marker' || activeTool === 'arrow' || activeTool === 'text') && (
+        {(activeTool === 'brush' || activeTool === 'rect') && (
           <div className="flex flex-nowrap items-center gap-4 border-l border-dark-border pl-6 animate-in slide-in-from-left-2 fade-in shrink-0">
             {/* Color Picker */}
             <div className="flex items-center gap-2">
