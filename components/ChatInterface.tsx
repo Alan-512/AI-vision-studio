@@ -3,6 +3,7 @@ import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { Send, User, Sparkles, ChevronDown, BrainCircuit, Zap, X, Box, Copy, Check, Plus, MonitorPlay, Palette, Film, Bot, Square, Crop, CheckCircle2, Globe, Brain, CircuitBoard, Wrench, Image as ImageIcon, CircleDashed, Terminal, RefreshCw, AlertCircle, Search, Upload } from 'lucide-react';
 import { ChatMessage, GenerationParams, ImageStyle, ImageResolution, AppMode, ImageModel, VideoResolution, VideoModel, VideoStyle, AspectRatio, SmartAsset, APP_LIMITS, AgentAction, TextModel } from '../types';
 import { streamChatResponse } from '../services/geminiService';
+import { normalizeImageUrlForChat } from '../services/imageUtils';
 import { AgentStateMachine, AgentState, createInitialAgentState, PendingAction, createGenerateAction } from '../services/agentService';
 import { useLanguage } from '../contexts/LanguageContext';
 import ReactMarkdown from 'react-markdown';
@@ -295,7 +296,12 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
             alert(t('msg.upload_limit_count'));
             return;
           }
-          setSelectedImages(prev => [...prev, asset.url]);
+          const normalizedUrl = await normalizeImageUrlForChat(asset.url);
+          if (!normalizedUrl) {
+            alert(language === 'zh' ? '图片加载失败' : 'Failed to load image for chat.');
+            return;
+          }
+          setSelectedImages(prev => [...prev, normalizedUrl]);
           return;
         }
       } catch (err) {
@@ -417,7 +423,31 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
     setShowModelSelector(false);
     agentMachine.reset();
   }, [projectId, agentMachine]);
-  useEffect(() => { if (scrollRef.current) { scrollRef.current.scrollTop = scrollRef.current.scrollHeight; } }, [history, isLoading, selectedImages.length]);
+  // Smart auto-scroll logic
+  const prevHistoryLengthRef = useRef(history.length);
+
+  useEffect(() => {
+    const scrollContainer = scrollRef.current;
+    if (!scrollContainer) return;
+
+    const { scrollTop, scrollHeight, clientHeight } = scrollContainer;
+    // Threshold to consider "at bottom" (e.g., 100px)
+    const isNearBottom = scrollHeight - scrollTop - clientHeight < 150;
+    const isNewMessage = history.length > prevHistoryLengthRef.current;
+
+    // Scroll if it's a new message OR if the user was already near the bottom (stick-to-bottom)
+    if (isNewMessage || isNearBottom) {
+      // Use 'auto' (instant) for streaming updates to prevent jitter
+      // Use 'smooth' only for new messages
+      scrollContainer.scrollTo({
+        top: scrollHeight,
+        behavior: isNewMessage ? 'smooth' : 'auto'
+      });
+    }
+
+    prevHistoryLengthRef.current = history.length;
+  }, [history, isLoading, selectedImages.length]);
+
   useEffect(() => { if (inputRef.current) { inputRef.current.style.height = 'auto'; const maxHeight = 160; const newHeight = Math.min(inputRef.current.scrollHeight, maxHeight); inputRef.current.style.height = `${newHeight}px`; inputRef.current.style.overflowY = inputRef.current.scrollHeight > maxHeight ? 'auto' : 'hidden'; } }, [input]);
   useEffect(() => { const handleClickOutside = (event: MouseEvent) => { const target = event.target as HTMLElement; if (!target.closest('.settings-popover') && !target.closest('.settings-trigger')) { setShowSettings(false); } if (!target.closest('.model-popover') && !target.closest('.model-trigger')) { setShowModelSelector(false); } }; document.addEventListener('mousedown', handleClickOutside); return () => document.removeEventListener('mousedown', handleClickOutside); }, []);
 
@@ -585,7 +615,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
           <p className="text-sm text-gray-300">Supported formats: JPG, PNG, WEBP</p>
         </div>
       )}
-      <div className="flex-1 overflow-y-auto p-4 space-y-6 min-h-0 scroll-smooth" ref={scrollRef}>
+      <div className="flex-1 overflow-y-auto p-4 space-y-6 min-h-0" ref={scrollRef}>
         {history.length === 0 ? (
           <div className="h-full flex flex-col items-center justify-center p-6 text-gray-500">
             <div className={`w-16 h-16 rounded-full flex items-center justify-center mb-6 shadow-2xl ${mode === AppMode.VIDEO ? 'bg-purple-600/20 text-purple-400' : 'bg-brand-600/20 text-brand-400'}`}>

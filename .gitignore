@@ -22,3 +22,16 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Output/temp folders
+output/
+
+# Skill files
+*.skill
+gemini_js_skill.json
+metadata.json

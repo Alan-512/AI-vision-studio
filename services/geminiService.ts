@@ -238,6 +238,7 @@ const convertHistoryToNativeFormat = (history: ChatMessage[], modelName: string)
     });
 };
 
+
 export const optimizePrompt = async (prompt: string, mode: AppMode, _smartAssets?: SmartAsset[]): Promise<string> => {
     const ai = getAIClient();
     const isVideo = mode === AppMode.VIDEO;

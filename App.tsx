@@ -12,6 +12,7 @@ import { ComparisonView } from './components/ComparisonView';
 import { CanvasEditor } from './components/CanvasEditor';
 import { CanvasView } from './components/CanvasView';
 import { generateImage, generateVideo, getUserApiKey, generateTitle } from './services/geminiService';
+import { compressImageForContext, normalizeImageUrlForChat } from './services/imageUtils';
 import {
     initDB, loadProjects, saveProject, saveAsset, loadAssets, updateAsset,
     deleteProjectFromDB, softDeleteAssetInDB, restoreAssetInDB,
@@ -62,52 +63,6 @@ const sanitizeImageModel = (model: string | undefined): ImageModel => {
     return ImageModel.FLASH;
 };
 
-// Helper to compress images for AI Context
-const compressImageForContext = (blob: Blob): Promise<string> => {
-    return new Promise((resolve) => {
-        const img = new Image();
-        const url = URL.createObjectURL(blob);
-        img.src = url;
-        img.onload = () => {
-            const canvas = document.createElement('canvas');
-            const maxDim = 1024;
-            let width = img.width;
-            let height = img.height;
-
-            if (width > height) {
-                if (width > maxDim) {
-                    height *= maxDim / width;
-                    width = maxDim;
-                }
-            } else {
-                if (height > maxDim) {
-                    width *= maxDim / height;
-                    height = maxDim;
-                }
-            }
-
-            canvas.width = width;
-            canvas.height = height;
-
-            const ctx = canvas.getContext('2d');
-            if (ctx) {
-                ctx.fillStyle = '#FFFFFF';
-                ctx.fillRect(0, 0, width, height);
-                ctx.drawImage(img, 0, 0, width, height);
-                const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
-                resolve(dataUrl);
-            } else {
-                resolve('');
-            }
-
-            URL.revokeObjectURL(url);
-        };
-        img.onerror = () => {
-            URL.revokeObjectURL(url);
-            resolve('');
-        };
-    });
-};
 
 // --- SYNTHETIC SOUND EFFECTS (Web Audio API) ---
 
@@ -487,16 +442,9 @@ export function App() {
         if (asset.type !== 'IMAGE') return;
         try {
             let data = ''; let mimeType = '';
-            if (asset.url.startsWith('data:')) {
-                const matches = asset.url.match(/^data:(.+);base64,(.+)$/);
-                if (matches) { mimeType = matches[1]; data = matches[2]; }
-            } else {
-                const resp = await fetch(asset.url);
-                const blob = await resp.blob();
-                const compressed = await compressImageForContext(blob);
-                const matches = compressed.match(/^data:(.+);base64,(.+)$/);
-                if (matches) { mimeType = matches[1]; data = matches[2]; }
-            }
+            const normalizedUrl = await normalizeImageUrlForChat(asset.url);
+            const matches = normalizedUrl.match(/^data:(.+);base64,(.+)$/);
+            if (matches) { mimeType = matches[1]; data = matches[2]; }
             if (data && mimeType) {
                 const newSmartAsset: SmartAsset = {
                     id: crypto.randomUUID(), data, mimeType
@@ -504,11 +452,31 @@ export function App() {
                 setParams(prev => ({ ...prev, smartAssets: [...(prev.smartAssets || []), newSmartAsset] }));
                 if (navigateToStudio) setActiveTab('studio');
                 addToast('success', 'Reference Added', 'Image added to Smart Assets.');
+            } else {
+                addToast('error', 'Error', 'Failed to load asset as reference.');
             }
         } catch (e) {
             console.error(e);
             addToast('error', 'Error', 'Failed to load asset as reference.');
         }
+    };
+
+    const handleAddAssetToChat = (asset: AssetItem) => {
+        if (asset.type !== 'IMAGE') return;
+        setActiveTab('chat');
+        void (async () => {
+            try {
+                const normalizedUrl = await normalizeImageUrlForChat(asset.url);
+                if (!normalizedUrl) {
+                    addToast('error', 'Error', 'Failed to add image to chat.');
+                    return;
+                }
+                setChatSelectedImages(prev => [...prev, normalizedUrl]);
+            } catch (e) {
+                console.error(e);
+                addToast('error', 'Error', 'Failed to add image to chat.');
+            }
+        })();
     };
 
     const handleAgentToolCall = async (action: AgentAction) => {
@@ -1286,7 +1254,7 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
 
                 <div className="flex-1 bg-dark-bg flex flex-col min-w-0 relative">
                     {rightPanelMode === 'CANVAS' && activeCanvasAsset ? (
-                        <CanvasView asset={activeCanvasAsset} onClose={() => setRightPanelMode('GALLERY')} onAddToChat={(a) => { setActiveTab('chat'); setChatSelectedImages(prev => [...prev, a.url]); }} onInpaint={(asset) => setEditorAsset(asset)} onExtendVideo={handleVideoContinue} onRemix={handleRemix} onDelete={() => openConfirmDelete(activeCanvasAsset.id)} />
+                        <CanvasView asset={activeCanvasAsset} onClose={() => setRightPanelMode('GALLERY')} onAddToChat={handleAddAssetToChat} onInpaint={(asset) => setEditorAsset(asset)} onExtendVideo={handleVideoContinue} onRemix={handleRemix} onDelete={() => openConfirmDelete(activeCanvasAsset.id)} />
                     ) : (
                         <>
                             <div className={`h-16 border-b border-dark-border flex items-center justify-between px-6 shrink-0 bg-dark-bg/80 backdrop-blur z-10 ${rightPanelMode === 'TRASH' ? 'bg-red-950/20' : ''}`}>
@@ -1349,7 +1317,7 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
                                             </div>
                                         ))}
                                         {displayedAssets.map(asset => (
-                                            <AssetCard key={asset.id} asset={asset} onClick={handleAssetClick} onUseAsReference={handleUseAsReference} onDelete={() => rightPanelMode === 'TRASH' ? openConfirmDeleteForever(asset.id) : openConfirmDelete(asset.id)} onAddToChat={(a) => { setActiveTab('chat'); setChatSelectedImages(prev => [...prev, a.url]); }} onToggleFavorite={(a) => { const updated = { ...a, isFavorite: !a.isFavorite }; setAssets(prev => prev.map(item => item.id === a.id ? updated : item)); saveAsset(updated); }} isSelectionMode={isSelectionMode} isSelected={selectedAssetIds.has(asset.id)} onToggleSelection={toggleAssetSelection} isTrashMode={rightPanelMode === 'TRASH'} onRestore={() => handleRestoreAsset(asset.id)} />
+                                            <AssetCard key={asset.id} asset={asset} onClick={handleAssetClick} onUseAsReference={handleUseAsReference} onDelete={() => rightPanelMode === 'TRASH' ? openConfirmDeleteForever(asset.id) : openConfirmDelete(asset.id)} onAddToChat={handleAddAssetToChat} onToggleFavorite={(a) => { const updated = { ...a, isFavorite: !a.isFavorite }; setAssets(prev => prev.map(item => item.id === a.id ? updated : item)); saveAsset(updated); }} isSelectionMode={isSelectionMode} isSelected={selectedAssetIds.has(asset.id)} onToggleSelection={toggleAssetSelection} isTrashMode={rightPanelMode === 'TRASH'} onRestore={() => handleRestoreAsset(asset.id)} />
                                         ))}
                                     </div>
                                 )}

@@ -1603,6 +1603,26 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
     }
     : null;
 
+  // Click outside to close dropdowns
+  const addToContainerRef = useRef<HTMLDivElement>(null);
+  const generateContainerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (showAddToMenu && addToContainerRef.current && !addToContainerRef.current.contains(event.target as Node)) {
+        setShowAddToMenu(false);
+      }
+      if (showGeneratePanel && generateContainerRef.current && !generateContainerRef.current.contains(event.target as Node)) {
+        setShowGeneratePanel(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [showAddToMenu, showGeneratePanel]);
+
   return (
     <div className="fixed inset-0 z-[60] bg-black/95 backdrop-blur-md flex flex-col animate-in fade-in duration-200">
       {/* Header */}
@@ -1629,7 +1649,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
           </button>
 
           {/* Add To Dropdown */}
-          <div className="relative">
+          <div className="relative" ref={addToContainerRef}>
             <button
               onClick={() => { setShowAddToMenu(!showAddToMenu); setShowGeneratePanel(false); }}
               className="p-2.5 bg-dark-card border border-dark-border hover:border-brand-500/50 rounded-lg text-gray-300 hover:text-white transition-all"
@@ -1658,7 +1678,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
           </div>
 
           {/* Regenerate Dropdown */}
-          <div className="relative">
+          <div className="relative" ref={generateContainerRef}>
             <button
               onClick={() => { setShowGeneratePanel(!showGeneratePanel); setShowAddToMenu(false); }}
               className="px-4 py-2 bg-brand-600 hover:bg-brand-500 text-white font-bold rounded-lg shadow-lg flex items-center gap-2 transition-all"
