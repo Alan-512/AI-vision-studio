@@ -1,9 +1,9 @@
 <div align="center">
-<img width="1200" height="475" alt="Lumina Studio Banner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
+<img width="1200" height="475" alt="AI Vision Studio Banner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
 
-# Lumina AI Studio
+# AI Vision Studio (影像创意工坊)
 
-A next-generation AI Creative Studio powered by **Google Gemini 3** (Flash/Pro) and **Veo** models.  
+A next-generation AI Vision Studio powered by **Google Gemini 3** (Flash/Pro) and **Veo** models.  
 **Create, Edit, and Animate** with a professional, agentic workflow.
 
 [Online Demo (Coming Soon)] • [Report Bug] • [Request Feature]
@@ -74,7 +74,7 @@ On first launch, click the **Settings** (Gear icon) or follow the prompt to ente
 
 ## 📦 Deployment
 
-Lumina AI Studio is ready for **Cloudflare Pages** deployment.
+AI Vision Studio is ready for **Cloudflare Pages** deployment.
 
 1. Connect your repository to Cloudflare Pages.
 2. Set Build Command: `npm run build`

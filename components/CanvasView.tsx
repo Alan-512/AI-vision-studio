@@ -73,7 +73,7 @@ export const CanvasView: React.FC<CanvasViewProps> = ({ asset, onClose, onDelete
     e.preventDefault();
     const link = document.createElement('a');
     link.href = asset.url;
-    link.download = `lumina-${asset.type.toLowerCase()}-${asset.id}.${asset.type === 'IMAGE' ? 'png' : 'mp4'}`;
+    link.download = `ai-vision-studio-${asset.type.toLowerCase()}-${asset.id}.${asset.type === 'IMAGE' ? 'png' : 'mp4'}`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);

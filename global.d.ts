@@ -1,4 +1,4 @@
-// Global type declarations for the Lumina Studio project
+// Global type declarations for the AI Vision Studio project
 
 interface AIStudioAPI {
     hasSelectedApiKey: () => Promise<boolean>;

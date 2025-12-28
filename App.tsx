@@ -492,7 +492,7 @@ export function App() {
             if (matches) { mimeType = matches[1]; data = matches[2]; }
             if (data && mimeType) {
                 const newSmartAsset: SmartAsset = {
-                    id: crypto.randomUUID(), data, mimeType, role: SmartAssetRole.SUBJECT
+                    id: crypto.randomUUID(), data, mimeType, role: SmartAssetRole.EDIT_BASE
                 };
                 setParams(prev => ({ ...prev, smartAssets: [...(prev.smartAssets || []), newSmartAsset] }));
                 if (navigateToStudio) setActiveTab('studio');
@@ -1025,9 +1025,6 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
 
     // Wrapper for Params Config page - merges with params state (backward compatible)
     const handleParamsGenerate = async (overrideParams?: Partial<GenerationParams>) => {
-        // DEBUG: Trace smartAssets from params state
-        console.log('[handleParamsGenerate] CALLED - params.smartAssets:', params.smartAssets?.length || 0, params.smartAssets);
-        alert(`DEBUG: params.smartAssets = ${params.smartAssets?.length || 0}`);
         await handleGenerate({ ...params, ...overrideParams } as GenerationParams, {
             useParamsAsBase: true
         });
@@ -1124,7 +1121,7 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
             }
         });
     };
-    const handleBulkDownload = () => { selectedAssetIds.forEach(id => { const asset = assets.find(a => a.id === id); if (asset) { const link = document.createElement('a'); link.href = asset.url; link.download = `lumina-export-${asset.id}.${asset.type === 'IMAGE' ? 'png' : 'mp4'}`; link.click(); } }); };
+    const handleBulkDownload = () => { selectedAssetIds.forEach(id => { const asset = assets.find(a => a.id === id); if (asset) { const link = document.createElement('a'); link.href = asset.url; link.download = `ai-vision-studio-export-${asset.id}.${asset.type === 'IMAGE' ? 'png' : 'mp4'}`; link.click(); } }); };
     const toggleAssetSelection = (asset: AssetItem) => { const newSet = new Set(selectedAssetIds); if (newSet.has(asset.id)) newSet.delete(asset.id); else newSet.add(asset.id); setSelectedAssetIds(newSet); };
     // FIX: Only allow image comparison (ComparisonView doesn't support video)
     const handleCompare = () => {

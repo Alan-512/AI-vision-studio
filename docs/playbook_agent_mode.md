@@ -1,4 +1,4 @@
-# Playbook 自动模式方案（Lumina Chat Image）
+# Playbook 自动模式方案（AI Vision Studio Chat Image）
 
 ## 目标
 

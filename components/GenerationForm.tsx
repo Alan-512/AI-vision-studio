@@ -47,7 +47,7 @@ const VIDEO_TEMPLATES = [
   { label: 'Character Action', text: 'A knight in shining armor swinging a sword in slow motion, sparks flying, dramatic lighting.' }
 ];
 
-const DEFAULT_SMART_ASSET_ROLE = SmartAssetRole.SUBJECT;
+const DEFAULT_SMART_ASSET_ROLE = SmartAssetRole.EDIT_BASE;
 
 const resolveSmartAssetRole = (asset: SmartAsset): SmartAssetRole => {
   if (asset.role && Object.values(SmartAssetRole).includes(asset.role)) return asset.role;
@@ -97,10 +97,10 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
 }) => {
   const { t, language } = useLanguage();
   const smartAssetRoleOptions = [
+    { value: SmartAssetRole.EDIT_BASE, label: t('role.edit_base') },
     { value: SmartAssetRole.SUBJECT, label: t('role.subject') },
     { value: SmartAssetRole.STYLE, label: t('role.style') },
-    { value: SmartAssetRole.COMPOSITION, label: t('role.composition') },
-    { value: SmartAssetRole.EDIT_BASE, label: t('role.edit_base') }
+    { value: SmartAssetRole.COMPOSITION, label: t('role.composition') }
   ];
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isOptimizing, setIsOptimizing] = useState(false);

@@ -1,4 +1,4 @@
-# Lumina Studio - 全量代码审查报告 V2 (Comprehensive Code Review Report V2)
+# AI Vision Studio - 全量代码审查报告 V2 (Comprehensive Code Review Report V2)
 
 **Date**: 2025-12-26
 **Reviewer**: Antigravity (Deepmind Agent)

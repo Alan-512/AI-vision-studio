@@ -1,6 +1,6 @@
 
 import React, { useEffect, useRef, useState } from 'react';
-import { Undo, Brush, Eraser, Square, MousePointer2, ArrowUpRight, Type, Settings, MessageCircle, Forward, Sparkles, ChevronDown } from 'lucide-react';
+import { Undo, Brush, Eraser, Square, MousePointer2, ArrowUpRight, Type, Settings, MessageCircle, Forward, Sparkles, ChevronDown, RotateCcw } from 'lucide-react';
 import { useLanguage } from '../contexts/LanguageContext';
 import { AspectRatio, ImageModel, ImageResolution } from '../types';
 
@@ -38,7 +38,7 @@ interface CanvasEditorProps {
   };
 }
 
-type ToolType = 'brush' | 'rect' | 'eraser';
+type ToolType = 'brush' | 'rect' | 'eraser' | 'marker' | 'arrow' | 'text'; // marker/arrow/text kept for compatibility, UI buttons removed
 
 interface RegionState {
   id: string;
@@ -152,7 +152,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
 
   // Tools
   const [activeTool, setActiveTool] = useState<ToolType>('brush');
-  const [brushSize, setBrushSize] = useState(15);
+  const [brushSize, setBrushSize] = useState(40);
   const [brushColor, setBrushColor] = useState('#ef4444'); // Region color (UI only)
   const [textSize, setTextSize] = useState(22);
   const [textSizeInput, setTextSizeInput] = useState('22');
@@ -1142,7 +1142,14 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
     }
 
     let region = getActiveRegion();
-    if (!region && (activeTool === 'brush' || activeTool === 'eraser')) {
+
+    // Eraser: only works on active region, do nothing if no region selected
+    if (activeTool === 'eraser' && !region) {
+      return;
+    }
+
+    // Brush: create new region if none active
+    if (!region && activeTool === 'brush') {
       region = createRegion(undefined, { skipHistory: true }).region;
     }
     if (activeTool === 'rect') {
@@ -1788,7 +1795,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
             <Undo size={18} />
           </button>
           <button onClick={handleClear} className="p-2 rounded-lg hover:bg-white/10 text-gray-400 hover:text-white transition-colors" title={t('editor.reset')}>
-            <Eraser size={18} />
+            <RotateCcw size={18} />
           </button>
         </div>
 
@@ -1836,46 +1843,6 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
                     value={brushSize}
                     onChange={(e) => setBrushSize(parseInt(e.target.value))}
                     className="w-20 h-1.5 bg-gray-600 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:bg-white [&::-webkit-slider-thumb]:rounded-full"
-                  />
-                </div>
-              </>
-            )}
-            {activeTool === 'text' && (
-              <>
-                <div className="w-px h-6 bg-dark-border" />
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-bold text-gray-500 uppercase whitespace-nowrap">{t('editor.font_size')}</span>
-                  <input
-                    type="range"
-                    min="12"
-                    max="96"
-                    value={textSize}
-                    onChange={(e) => applyTextSize(parseInt(e.target.value, 10))}
-                    className="w-20 h-1.5 bg-gray-600 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:bg-white [&::-webkit-slider-thumb]:rounded-full"
-                  />
-                  <input
-                    type="text"
-                    inputMode="numeric"
-                    pattern="[0-9]*"
-                    value={textSizeInput}
-                    onChange={(e) => {
-                      const next = e.target.value.replace(/[^0-9]/g, '');
-                      setTextSizeInput(next);
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        e.currentTarget.blur();
-                      }
-                    }}
-                    onBlur={() => {
-                      const nextValue = textSizeInput.trim();
-                      if (nextValue.length === 0) {
-                        setTextSizeInput(String(textSize));
-                        return;
-                      }
-                      applyTextSize(Number(nextValue));
-                    }}
-                    className="w-12 h-6 bg-black/40 border border-white/10 rounded text-[10px] text-gray-200 text-center focus:outline-none focus:ring-1 focus:ring-brand-500/60"
                   />
                 </div>
               </>

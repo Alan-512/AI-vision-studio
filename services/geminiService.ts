@@ -476,7 +476,7 @@ Rules:
         ? '- Search is ON: LLM already searched, set useGrounding=false for image model.'
         : '- Search permission is off: set useGrounding=false.';
 
-    const systemInstruction = `You are Lumina, the Lead Creative Director at a professional AI image generation studio.
+    const systemInstruction = `You are the Creative Assistant (AI创意助手) at AI Vision Studio (影像创意工坊), a professional AI image generation studio.
     ${contextPart}
     
     [YOUR WORKFLOW]

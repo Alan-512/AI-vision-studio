@@ -61,7 +61,7 @@ export const AssetCard: React.FC<AssetCardProps> = ({
               const url = URL.createObjectURL(blob);
               const link = document.createElement('a');
               link.href = url;
-              link.download = `lumina-image-${asset.id}.png`;
+              link.download = `ai-vision-studio-image-${asset.id}.png`;
               document.body.appendChild(link);
               link.click();
               document.body.removeChild(link);
@@ -73,7 +73,7 @@ export const AssetCard: React.FC<AssetCardProps> = ({
       img.onerror = () => {
         const link = document.createElement('a');
         link.href = asset.url;
-        link.download = `lumina-image-${asset.id}.png`;
+        link.download = `ai-vision-studio-image-${asset.id}.png`;
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
@@ -81,7 +81,7 @@ export const AssetCard: React.FC<AssetCardProps> = ({
     } else {
       const link = document.createElement('a');
       link.href = asset.url;
-      link.download = `lumina-video-${asset.id}.mp4`;
+      link.download = `ai-vision-studio-video-${asset.id}.mp4`;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
