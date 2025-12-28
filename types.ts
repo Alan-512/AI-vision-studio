@@ -56,6 +56,15 @@ export enum TextModel {
   PRO = 'gemini-3-pro-preview'           // More capable, slower
 }
 
+export enum AssistantMode {
+  CREATE_NEW = 'CREATE_NEW',
+  STYLE_TRANSFER = 'STYLE_TRANSFER',
+  EDIT_LAST = 'EDIT_LAST',
+  COMBINE_REFS = 'COMBINE_REFS',
+  PRODUCT_SHOT = 'PRODUCT_SHOT',
+  POSTER = 'POSTER'
+}
+
 export enum ImageStyle {
   NONE = 'None',
   PHOTOREALISTIC = 'photorealistic photograph style',

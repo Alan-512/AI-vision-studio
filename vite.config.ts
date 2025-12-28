@@ -12,37 +12,40 @@ const removeAiStudioImportMap = () => ({
 });
 
 // https://vitejs.dev/config/
-export default defineConfig({
-  plugins: [
-    removeAiStudioImportMap(),
-    react()
-  ] as any,
-  // FIX [PRF-001]: Strip console.log in production
-  esbuild: {
-    drop: ['console', 'debugger']
-  },
-  build: {
-    target: 'esnext',
-    minify: 'esbuild',
-    rollupOptions: {
-      output: {
-        manualChunks: {
-          'vendor': ['react', 'react-dom', 'lucide-react', 'react-markdown'],
-          'genai': ['@google/genai']
+export default defineConfig(({ command }) => {
+  const enableDebugLogs = process.env.VITE_ENABLE_DEBUG_LOGS === '1';
+  const shouldDropConsole = command === 'build' && !enableDebugLogs;
+
+  return {
+    plugins: [
+      removeAiStudioImportMap(),
+      react()
+    ] as any,
+    // FIX [PRF-001]: Strip console.log in production builds unless debug logs are enabled
+    esbuild: shouldDropConsole ? { drop: ['console', 'debugger'] } : undefined,
+    build: {
+      target: 'esnext',
+      minify: 'esbuild',
+      rollupOptions: {
+        output: {
+          manualChunks: {
+            'vendor': ['react', 'react-dom', 'lucide-react', 'react-markdown'],
+            'genai': ['@google/genai']
+          }
         }
       }
+    },
+    // Explicitly optimize dependencies to ensure Vite bundles the local node_modules
+    // instead of trying to resolve them externally
+    optimizeDeps: {
+      include: ['react', 'react-dom', '@google/genai', 'lucide-react', 'react-markdown']
+    },
+    // Vitest configuration
+    test: {
+      globals: true,
+      environment: 'jsdom',
+      setupFiles: ['./tests/setup.ts'],
+      include: ['tests/**/*.test.ts', 'tests/**/*.test.tsx']
     }
-  },
-  // Explicitly optimize dependencies to ensure Vite bundles the local node_modules
-  // instead of trying to resolve them externally
-  optimizeDeps: {
-    include: ['react', 'react-dom', '@google/genai', 'lucide-react', 'react-markdown']
-  },
-  // Vitest configuration
-  test: {
-    globals: true,
-    environment: 'jsdom',
-    setupFiles: ['./tests/setup.ts'],
-    include: ['tests/**/*.test.ts', 'tests/**/*.test.tsx']
-  }
+  };
 });

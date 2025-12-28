@@ -70,7 +70,7 @@ A next-generation AI Creative Studio powered by **Google Gemini 3** (Flash/Pro) 
    Visit `http://localhost:5173` to start creating!
 
 ### Configuration
-On first launch, click the **Settings** (Gear icon) or follow the prompt to enter your **Google Gemini API Key**.
+On first launch, click the **Settings** (Gear icon) or follow the prompt to enter your **Google AI Studio API Key**.
 
 ## 📦 Deployment
 

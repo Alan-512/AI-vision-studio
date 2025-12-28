@@ -1,6 +1,6 @@
 
 import { GoogleGenAI, Part, Content, FunctionDeclaration, Type } from "@google/genai";
-import { ChatMessage, AppMode, SmartAsset, GenerationParams, ImageModel, AgentAction, AssetItem, AspectRatio, ImageResolution, TextModel } from "../types";
+import { ChatMessage, AppMode, SmartAsset, GenerationParams, ImageModel, AgentAction, AssetItem, AspectRatio, ImageResolution, TextModel, AssistantMode } from "../types";
 import { createTrackedBlobUrl } from "./storageService";
 
 // Key management
@@ -106,6 +106,21 @@ If the image involves these aspects, include them. Otherwise, omit:
             useGrounding: { type: Type.BOOLEAN, description: 'Use Google Search for factual accuracy (Pro model only). Default: false.' },
             negativePrompt: { type: Type.STRING, description: 'What to EXCLUDE from the image. Use semantic descriptions: "blurry, low quality, distorted faces, anime style" (when user wants realism).' },
             numberOfImages: { type: Type.NUMBER, description: 'How many variations to generate (1-4). Default: 1.' },
+            assistant_mode: {
+                type: Type.STRING,
+                description: `Playbook mode for automatic parameter defaults:
+- CREATE_NEW: Create a new image from scratch
+- STYLE_TRANSFER: Use user-uploaded images for style guidance
+- EDIT_LAST: Modify the last AI-generated image
+- COMBINE_REFS: Combine multiple user-uploaded references
+- PRODUCT_SHOT: Clean product photography
+- POSTER: Poster or key visual layout`,
+                enum: Object.values(AssistantMode)
+            },
+            override_playbook: {
+                type: Type.BOOLEAN,
+                description: 'Set true to bypass playbook defaults when needed for unusual or mixed intents.'
+            },
             reference_mode: {
                 type: Type.STRING,
                 description: `How to handle reference images from conversation history:
@@ -127,6 +142,7 @@ Default: NONE for new generations, USER_UPLOADED_ONLY when regenerating.`,
             'useGrounding',
             'numberOfImages',
             'negativePrompt',
+            'assistant_mode',
             'reference_mode',
             'reference_count'
         ]
@@ -326,7 +342,7 @@ export const streamChatResponse = async (
 
     // LLM_ONLY mode: LLM searches, image model does NOT use grounding
     const allowSearch = !!useSearch;
-    const runLlmSearch = allowSearch && isImageMode;
+    const runLlmSearch = allowSearch;
 
     console.log('[Chat] Search config:', { allowSearch, isImageMode, runLlmSearch });
 
@@ -473,12 +489,22 @@ Rules:
     - "ALL_USER_UPLOADED": User wants to combine multiple uploaded references
     - "LAST_N": Use with reference_count when user refers to "last few images"
 
+    [ASSISTANT MODE SELECTION - Playbook]
+    Choose assistant_mode for automatic defaults:
+    - "CREATE_NEW": New image from scratch
+    - "STYLE_TRANSFER": Use user-uploaded images for style guidance
+    - "EDIT_LAST": Modify the last AI-generated image
+    - "COMBINE_REFS": Combine multiple user-uploaded references
+    - "PRODUCT_SHOT": Clean product photography
+    - "POSTER": Poster/key visual layout
+    If the user's intent doesn't fit these or needs mixed behavior, set override_playbook=true.
+
     [SEARCH POLICY]
     ${groundingPolicyLine}
 
     [PARAMETER CONTRACT]
     You MUST call 'generate_image' with ALL parameters:
-    prompt, model, aspectRatio, resolution, useGrounding, numberOfImages, negativePrompt, reference_mode, reference_count.
+    prompt, model, aspectRatio, resolution, useGrounding, numberOfImages, negativePrompt, assistant_mode, reference_mode, reference_count.
     `;
 
     const contents = convertHistoryToNativeFormat(history, realModelName);
@@ -702,9 +728,17 @@ export const generateImage = async (
 
     // Add images as "Image 1", "Image 2", etc. for easy reference in prompt
     smartAssetsToUse.forEach((asset, index) => {
+        console.log(`[generateImage] Adding reference image ${index + 1}:`, {
+            mimeType: asset.mimeType,
+            dataLength: asset.data?.length || 0,
+            dataPrefix: asset.data?.slice(0, 30) || 'NO DATA'
+        });
         parts.push({ inlineData: { mimeType: asset.mimeType, data: asset.data } });
         parts.push({ text: `[Image ${index + 1}]` });
     });
+
+    // CRITICAL DEBUG: Show total parts being sent
+    console.log('[generateImage] Total parts to send:', parts.length, 'items');
 
     // Add user's prompt (they describe how to use the images here)
     let mainPrompt = params.prompt;

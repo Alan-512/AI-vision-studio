@@ -19,6 +19,7 @@
 - 前端在 `handleAgentToolCall` 里根据 `assistant_mode` 应用预定义策略。
 - 只补默认值与约束，不覆盖用户显式参数，保证灵活度。
 - 不增加调用次数，仍保持单次请求、低延迟。
+- 提供 `override_playbook=true` 作为逃生阀，跳过 Playbook 默认。
 
 ## Playbook 模式定义（v1）
 
@@ -41,6 +42,7 @@
 - 必须从枚举中选择 `assistant_mode`。
 - 判断依据：用户意图关键词、是否上传图、是否要求修改上一张等。
 - 同时继续输出原有 `reference_mode` / `reference_count`，但最终会被 Playbook 兜底修正。
+- 如意图混合或不适配现有模式，可设置 `override_playbook=true`。
 
 示例规则（文字即可，不需要额外 API）：
 - “新建/生成/创建” → CREATE_NEW
@@ -64,6 +66,7 @@
 
 - 在 `generateImageTool` 中新增参数：
   - `assistant_mode`（enum）
+  - `override_playbook`（boolean，可选）
 - 在系统指令中加入“必须输出 assistant_mode”的要求。
 - 可选：将 `assistant_mode` 写入 tool call 的日志，便于调试。
 
@@ -105,4 +108,3 @@
   3) “把上一张改成…” → EDIT_LAST / LAST_GENERATED
   4) 上传多图 + “融合” → COMBINE_REFS / ALL_USER_UPLOADED
 - 观察调试日志与生成结果一致性。
-

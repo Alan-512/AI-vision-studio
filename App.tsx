@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { Image as ImageIcon, Video, LayoutGrid, Folder, Sparkles, Settings, Star, CheckSquare, MoveHorizontal, Languages, Trash2, Recycle, Download, RotateCcw, ArrowRight, Key } from 'lucide-react';
-import { AppMode, AspectRatio, GenerationParams, AssetItem, ImageResolution, VideoResolution, ImageModel, VideoModel, ImageStyle, Project, ChatMessage, BackgroundTask, SmartAsset, VideoDuration, VideoStyle, AgentAction, EditRegion, SearchPolicy } from './types';
+import { AppMode, AspectRatio, GenerationParams, AssetItem, ImageResolution, VideoResolution, ImageModel, VideoModel, ImageStyle, Project, ChatMessage, BackgroundTask, SmartAsset, VideoDuration, VideoStyle, AgentAction, EditRegion, SearchPolicy, AssistantMode } from './types';
 import { GenerationForm } from './components/GenerationForm';
 import { AssetCard } from './components/AssetCard';
 import { ProjectSidebar } from './components/ProjectSidebar';
@@ -61,6 +61,51 @@ const getAudioContext = () => {
 const sanitizeImageModel = (model: string | undefined): ImageModel => {
     if (model === ImageModel.PRO || model === ImageModel.FLASH) return model;
     return ImageModel.FLASH;
+};
+
+type PlaybookDefaults = {
+    aspectRatio?: AspectRatio;
+    imageStyle?: ImageStyle;
+    imageResolution?: ImageResolution;
+    negativePrompt?: string;
+    referenceMode?: string;
+};
+
+const normalizeAssistantMode = (value: unknown): AssistantMode | undefined => {
+    if (typeof value !== 'string') return undefined;
+    return Object.values(AssistantMode).includes(value as AssistantMode)
+        ? (value as AssistantMode)
+        : undefined;
+};
+
+const getPlaybookDefaults = (assistantMode: AssistantMode | undefined): PlaybookDefaults => {
+    const defaults: PlaybookDefaults = {};
+    switch (assistantMode) {
+        case AssistantMode.CREATE_NEW:
+            defaults.referenceMode = 'NONE';
+            break;
+        case AssistantMode.STYLE_TRANSFER:
+            defaults.referenceMode = 'USER_UPLOADED_ONLY';
+            break;
+        case AssistantMode.EDIT_LAST:
+            defaults.referenceMode = 'LAST_GENERATED';
+            break;
+        case AssistantMode.COMBINE_REFS:
+            defaults.referenceMode = 'ALL_USER_UPLOADED';
+            break;
+        case AssistantMode.PRODUCT_SHOT:
+            defaults.aspectRatio = AspectRatio.FOUR_FIFTHS;
+            defaults.imageStyle = ImageStyle.PHOTOREALISTIC;
+            defaults.negativePrompt = 'text, watermark, logo, cluttered background, low quality';
+            break;
+        case AssistantMode.POSTER:
+            defaults.aspectRatio = AspectRatio.THREE_FOURTHS;
+            defaults.negativePrompt = 'blurry, low contrast, watermark, illegible text';
+            break;
+        default:
+            break;
+    }
+    return defaults;
 };
 
 
@@ -519,6 +564,16 @@ export function App() {
                 imageResolution: ImageResolution.RES_1K,
                 negativePrompt: ''
             };
+            const assistantMode = normalizeAssistantMode(toolArgs.assistant_mode);
+            const isPlaybookOverridden = toolArgs.override_playbook === true;
+            const playbookDefaults = isPlaybookOverridden ? {} : getPlaybookDefaults(assistantMode);
+            const hasUserUploadedImages = chatHistory.some(m => m.role === 'user' && (m.image || (m.images && m.images.length > 0)));
+            if (assistantMode) {
+                console.log(`[Agent] assistant_mode: ${assistantMode}`);
+            }
+            if (isPlaybookOverridden) {
+                console.log('[Agent] Playbook override enabled');
+            }
 
             // === NEW ARCHITECTURE: Model Selection with User Lock Priority ===
             // Priority order (from high to low):
@@ -552,14 +607,16 @@ export function App() {
             setThoughtImages([]);
             const resolvedAspectRatio = Object.values(AspectRatio).includes(aspectRatio as AspectRatio)
                 ? (aspectRatio as AspectRatio)
-                : chatDefaults.aspectRatio;
+                : (playbookDefaults.aspectRatio ?? chatDefaults.aspectRatio);
             const resolvedStyle = Object.values(ImageStyle).includes(style as ImageStyle)
                 ? (style as ImageStyle)
-                : chatDefaults.imageStyle;
+                : (playbookDefaults.imageStyle ?? chatDefaults.imageStyle);
             const resolvedResolution = Object.values(ImageResolution).includes(resolution as ImageResolution)
                 ? (resolution as ImageResolution)
-                : (effectiveModel === ImageModel.PRO ? ImageResolution.RES_2K : chatDefaults.imageResolution);
-            const resolvedNegativePrompt = typeof negativePrompt === 'string' ? negativePrompt : chatDefaults.negativePrompt;
+                : (playbookDefaults.imageResolution ?? (effectiveModel === ImageModel.PRO ? ImageResolution.RES_2K : chatDefaults.imageResolution));
+            const resolvedNegativePrompt = typeof negativePrompt === 'string'
+                ? negativePrompt
+                : (playbookDefaults.negativePrompt ?? chatDefaults.negativePrompt);
             const parsedNumberOfImages = Number(numberOfImages);
             const resolvedNumberOfImages = Number.isFinite(parsedNumberOfImages) ? parsedNumberOfImages : 1;
 
@@ -615,8 +672,9 @@ export function App() {
             // === SEMANTIC REFERENCE MODE SELECTION ===
             // AI chooses reference_mode based on user intent analysis
             // Smart default: if user uploaded images and AI didn't specify, use them
-            const hasUserUploadedImages = chatHistory.some(m => m.role === 'user' && (m.image || (m.images && m.images.length > 0)));
-            const referenceMode = toolArgs.reference_mode as string || (hasUserUploadedImages ? 'USER_UPLOADED_ONLY' : 'NONE');
+            const playbookReferenceMode = playbookDefaults.referenceMode;
+            const explicitReferenceMode = typeof toolArgs.reference_mode === 'string' ? toolArgs.reference_mode : undefined;
+            const referenceMode = explicitReferenceMode || playbookReferenceMode || (hasUserUploadedImages ? 'USER_UPLOADED_ONLY' : 'NONE');
             const referenceCount = Number(toolArgs.reference_count) || 1;
 
             // Helper: convert image data to SmartAsset
@@ -829,6 +887,12 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
         // CLEAN ISOLATION: Only merge with params if explicitly requested (params config page)
         let activeParams = useParamsAsBase ? { ...params, ...fullParams } : fullParams;
         activeParams.imageModel = sanitizeImageModel(activeParams.imageModel);
+
+        // DEBUG: Trace smartAssets at entry point
+        console.log('[handleGenerate] ENTRY - smartAssets:', {
+            fromFullParams: fullParams.smartAssets?.length || 0,
+            fromActiveParams: activeParams.smartAssets?.length || 0
+        });
         const currentProjectId = activeProjectId;
         const currentMode = modeOverride || mode;
         const project = projects.find(p => p.id === currentProjectId);
@@ -961,6 +1025,9 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
 
     // Wrapper for Params Config page - merges with params state (backward compatible)
     const handleParamsGenerate = async (overrideParams?: Partial<GenerationParams>) => {
+        // DEBUG: Trace smartAssets from params state
+        console.log('[handleParamsGenerate] CALLED - params.smartAssets:', params.smartAssets?.length || 0, params.smartAssets);
+        alert(`DEBUG: params.smartAssets = ${params.smartAssets?.length || 0}`);
         await handleGenerate({ ...params, ...overrideParams } as GenerationParams, {
             useParamsAsBase: true
         });
@@ -1078,7 +1145,11 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
         setRightPanelMode('GALLERY');
         addToast('info', 'Video Extension', t('help.extend_desc'));
     };
-    const handleRemix = (asset: AssetItem) => { setParams(prev => ({ ...prev, prompt: asset.prompt })); if (asset.type === 'IMAGE') handleUseAsReference(asset); };
+
+    const handleRemix = (asset: AssetItem) => {
+        setParams(prev => ({ ...prev, prompt: asset.prompt || '' }));
+        if (asset.type === 'IMAGE') handleUseAsReference(asset);
+    };
     const handleCanvasSaveToConfig = async (payload: {
         baseImageDataUrl: string;
         previewDataUrl: string;
