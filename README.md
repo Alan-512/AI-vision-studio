@@ -52,8 +52,8 @@ A next-generation AI Vision Studio powered by **Google Gemini 3** (Flash/Pro) an
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/your-username/lumina-studio.git
-   cd lumina-studio
+   git clone https://github.com/Alan-512/AI-vision-studio.git
+   cd AI-vision-studio
    ```
 
 2. **Install dependencies**
