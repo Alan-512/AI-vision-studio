@@ -1,7 +1,8 @@
 <div align="center">
-<img width="1200" height="475" alt="AI Vision Studio Banner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
 
-# AI Vision Studio (影像创意工坊)
+# AI Vision Studio
+
+**[English](README.md)** | [中文](README_zh.md)
 
 A next-generation AI Vision Studio powered by **Google Gemini 3** (Flash/Pro) and **Veo** models.  
 **Create, Edit, and Animate** with a professional, agentic workflow.
@@ -32,7 +33,7 @@ A next-generation AI Vision Studio powered by **Google Gemini 3** (Flash/Pro) an
 - **Region-Based Editing**: Define specific regions with instructions (e.g., "Make this shirt red") while keeping the rest of the image intact.
 
 ### 🛡️ Privacy & Security (BYOK)
-- **Bring Your Own Key**: Your API Key is stored securely in your likely browser's **Local Storage**.
+- **Bring Your Own Key**: Your API Key is stored securely in your browser's **Local Storage**.
 - **No Middleman**: Requests go directly from your browser to Google's servers. We do not store or see your keys.
 
 ## 🛠️ Tech Stack

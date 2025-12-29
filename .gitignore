@@ -28,6 +28,10 @@ dist-ssr
 .env.local
 .env.*.local
 
+# Documentation (local only)
+docs/
+tmp-docs/
+
 # Output/temp folders
 output/
 
