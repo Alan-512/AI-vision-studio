@@ -110,6 +110,27 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
   const [isAspectRatioOpen, setIsAspectRatioOpen] = useState(false);
   const [_isWarningExpanded, _setIsWarningExpanded] = useState(false);
 
+  // Local prompt state for smooth typing (debounced sync to params)
+  const [localPrompt, setLocalPrompt] = useState(params.prompt || '');
+  const promptTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Sync local prompt to params with debounce
+  const handlePromptChange = (value: string) => {
+    setLocalPrompt(value);
+    if (promptTimerRef.current) clearTimeout(promptTimerRef.current);
+    promptTimerRef.current = setTimeout(() => {
+      setParams(prev => ({ ...prev, prompt: value }));
+    }, 300);
+  };
+
+  // Sync external params.prompt changes to local state (e.g., from optimize/template)
+  useEffect(() => {
+    if (params.prompt !== localPrompt) {
+      setLocalPrompt(params.prompt || '');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [params.prompt]);
+
   // Video Mode Tabs
   const [activeVideoTab, setActiveVideoTab] = useState<'keyframes' | 'style'>('keyframes');
 
@@ -604,6 +625,18 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
 
           <div className="space-y-3">
             <PromptBuilder onAppend={handleAppendTag} mode={mode} />
+
+            {/* Style Selector - Moved after Prompt Builder */}
+            <div className="space-y-2">
+              <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">{t('lbl.style')}</label>
+              <div className="relative">
+                <select value={mode === AppMode.IMAGE ? (params.imageStyle || ImageStyle.NONE) : (params.videoStyle || VideoStyle.NONE)} onChange={(e) => setParams(prev => mode === AppMode.IMAGE ? ({ ...prev, imageStyle: e.target.value as ImageStyle }) : ({ ...prev, videoStyle: e.target.value as VideoStyle }))} className="w-full bg-dark-surface border border-dark-border rounded-lg px-3 py-2 text-xs text-white appearance-none focus:border-brand-500 focus:outline-none transition-colors">
+                  {mode === AppMode.IMAGE ? Object.entries(ImageStyle).map(([key, value]) => <option key={key} value={value}>{t(`style.${key}` as any) || value}</option>) : Object.entries(VideoStyle).map(([key, value]) => <option key={key} value={value}>{t(`style.${key}` as any) || value}</option>)}
+                </select>
+                <Palette size={14} className="absolute right-3 top-2.5 text-gray-500 pointer-events-none" />
+              </div>
+            </div>
+
             <div className="flex justify-between items-center">
               <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">{t('lbl.prompt')}</label>
               <div className="flex gap-2 relative">
@@ -637,7 +670,7 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
                 </button>
               </div>
             </div>
-            <textarea value={params.prompt} onChange={(e) => setParams(prev => ({ ...prev, prompt: e.target.value }))} placeholder={mode === AppMode.IMAGE ? t('ph.prompt.image') : t('ph.prompt.video')} className="w-full h-32 bg-dark-surface border border-dark-border rounded-xl p-4 text-sm text-white placeholder-gray-600 focus:border-brand-500 focus:outline-none resize-none transition-colors" />
+            <textarea value={localPrompt} onChange={(e) => handlePromptChange(e.target.value)} placeholder={mode === AppMode.IMAGE ? t('ph.prompt.image') : t('ph.prompt.video')} className="w-full h-32 bg-dark-surface border border-dark-border rounded-xl p-4 text-sm text-white placeholder-gray-600 focus:border-brand-500 focus:outline-none resize-none transition-colors" />
           </div>
 
           <div className="border border-dark-border rounded-xl overflow-hidden bg-dark-surface/30">
@@ -857,16 +890,6 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
               </div>
             )}
 
-            {/* Style Selector */}
-            <div className="space-y-2">
-              <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">{t('lbl.style')}</label>
-              <div className="relative">
-                <select value={mode === AppMode.IMAGE ? (params.imageStyle || ImageStyle.NONE) : (params.videoStyle || VideoStyle.NONE)} onChange={(e) => setParams(prev => mode === AppMode.IMAGE ? ({ ...prev, imageStyle: e.target.value as ImageStyle }) : ({ ...prev, videoStyle: e.target.value as VideoStyle }))} className="w-full bg-dark-surface border border-dark-border rounded-lg px-3 py-2 text-xs text-white appearance-none focus:border-brand-500 focus:outline-none transition-colors">
-                  {mode === AppMode.IMAGE ? Object.entries(ImageStyle).map(([key, value]) => <option key={key} value={value}>{t(`style.${key}` as any) || value}</option>) : Object.entries(VideoStyle).map(([key, value]) => <option key={key} value={value}>{t(`style.${key}` as any) || value}</option>)}
-                </select>
-                <Palette size={14} className="absolute right-3 top-2.5 text-gray-500 pointer-events-none" />
-              </div>
-            </div>
 
             {/* Resolution & Count/Duration */}
             <div className={`grid gap-4 ${mode === AppMode.IMAGE ? 'grid-cols-2' : 'grid-cols-1'}`}>

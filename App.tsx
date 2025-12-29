@@ -1074,7 +1074,32 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
     const openConfirmDelete = (assetId: string) => { setConfirmDialog({ isOpen: true, title: t('confirm.delete.title'), message: t('confirm.delete.desc'), confirmLabel: t('btn.delete'), cancelLabel: t('btn.cancel'), isDestructive: true, action: async () => { const asset = assets.find(a => a.id === assetId); if (asset) { await softDeleteAssetInDB(asset); setAssets(prev => prev.map(a => a.id === assetId ? { ...a, deletedAt: Date.now() } : a)); } setConfirmDialog(prev => ({ ...prev, isOpen: false })); if (activeCanvasAsset?.id === assetId) setActiveCanvasAsset(null); } }); };
     const handleRestoreAsset = async (assetId: string) => { const asset = trashAssets.find(a => a.id === assetId) || assets.find(a => a.id === assetId); if (asset) { await restoreAssetInDB(asset); setAssets(prev => prev.map(a => a.id === assetId ? { ...a, deletedAt: undefined } : a)); setTrashAssets(prev => prev.filter(a => a.id !== assetId)); } };
     const openConfirmDeleteForever = (assetId: string) => { setConfirmDialog({ isOpen: true, title: t('confirm.delete_forever.title'), message: t('confirm.delete_forever.desc'), confirmLabel: t('btn.delete_forever'), cancelLabel: t('btn.cancel'), isDestructive: true, action: async () => { await permanentlyDeleteAssetFromDB(assetId); setAssets(prev => prev.filter(a => a.id !== assetId)); setTrashAssets(prev => prev.filter(a => a.id !== assetId)); setConfirmDialog(prev => ({ ...prev, isOpen: false })); } }); };
-    const openConfirmEmptyTrash = () => { setConfirmDialog({ isOpen: true, title: t('confirm.empty_trash.title'), message: t('confirm.empty_trash.desc'), confirmLabel: t('btn.empty_trash'), cancelLabel: t('btn.cancel'), isDestructive: true, action: async () => { const trashIds = trashAssets.map(a => a.id); if (trashIds.length > 0) { await bulkPermanentlyDeleteAssets(trashIds); setAssets(prev => prev.filter(a => a.deletedAt === undefined)); setTrashAssets([]); } setConfirmDialog(prev => ({ ...prev, isOpen: false })); } }); };
+    const openConfirmEmptyTrash = () => {
+        setConfirmDialog({
+            isOpen: true,
+            title: t('confirm.empty_trash.title'),
+            message: t('confirm.empty_trash.desc'),
+            confirmLabel: t('btn.empty_trash'),
+            cancelLabel: t('btn.cancel'),
+            isDestructive: true,
+            action: async () => {
+                // Delete assets in trash
+                const trashAssetIds = trashAssets.map(a => a.id);
+                if (trashAssetIds.length > 0) {
+                    await bulkPermanentlyDeleteAssets(trashAssetIds);
+                }
+                // Delete projects in trash
+                for (const project of trashProjects) {
+                    await deleteProjectFromDB(project.id);
+                }
+                // Update UI state
+                setAssets(prev => prev.filter(a => a.deletedAt === undefined));
+                setTrashAssets([]);
+                setTrashProjects([]);
+                setConfirmDialog(prev => ({ ...prev, isOpen: false }));
+            }
+        });
+    };
     // Project restore and permanent delete
     const handleRestoreProject = async (projectId: string) => {
         const project = trashProjects.find(p => p.id === projectId);
@@ -1428,12 +1453,12 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
                         };
                     });
 
-                    // Build prompt from region instructions
+                    // Build prompt from region instructions (already formatted)
                     const regionInstructions = editRegions
                         .filter(r => r.instruction?.trim())
-                        .map(r => r.instruction.trim())
-                        .join('; ');
-                    const editPrompt = buildEditPrompt(regionInstructions || 'Apply edits to marked areas', editRegions);
+                        .map(r => `Region ${r.id}: ${r.instruction.trim()}`)
+                        .join('\n');
+                    const editPrompt = buildEditPrompt(regionInstructions || 'Apply edits to marked areas');
 
                     // Generate with full params
                     handleGenerate({

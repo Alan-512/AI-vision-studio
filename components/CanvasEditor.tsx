@@ -109,6 +109,23 @@ const MARKER_CURSOR = `crosshair`;
 const TEXT_BOX_PADDING = 3;
 const TEXT_LINE_HEIGHT = 1.1;
 
+// Generate dynamic eraser cursor: hollow circle with crosshair (2x resolution for retina)
+const generateEraserCursor = (size: number, scale: number = 1): string => {
+  // Scale the visual size based on canvas zoom, use 2x for retina clarity
+  const displaySize = Math.max(12, Math.min(128, size * scale));
+  const retinaFactor = 2; // 2x for high-DPI screens
+  const svgSize = Math.round(displaySize + 4); // Add padding for stroke
+  const renderSize = svgSize * retinaFactor;
+  const center = renderSize / 2;
+  const radius = (displaySize * retinaFactor) / 2;
+  const crossSize = Math.min(8, displaySize / 4) * retinaFactor;
+
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${svgSize}" height="${svgSize}" viewBox="0 0 ${renderSize} ${renderSize}" shape-rendering="geometricPrecision"><circle cx="${center}" cy="${center}" r="${radius}" fill="none" stroke="#000" stroke-width="${3 * retinaFactor}" opacity="0.3"/><circle cx="${center}" cy="${center}" r="${radius}" fill="none" stroke="#fff" stroke-width="${2 * retinaFactor}"/><line x1="${center}" y1="${center - crossSize}" x2="${center}" y2="${center + crossSize}" stroke="#000" stroke-width="${3 * retinaFactor}" opacity="0.3"/><line x1="${center - crossSize}" y1="${center}" x2="${center + crossSize}" y2="${center}" stroke="#000" stroke-width="${3 * retinaFactor}" opacity="0.3"/><line x1="${center}" y1="${center - crossSize}" x2="${center}" y2="${center + crossSize}" stroke="#fff" stroke-width="${2 * retinaFactor}"/><line x1="${center - crossSize}" y1="${center}" x2="${center + crossSize}" y2="${center}" stroke="#fff" stroke-width="${2 * retinaFactor}"/></svg>`;
+
+  const hotspot = Math.round(svgSize / 2);
+  return `url("data:image/svg+xml,${encodeURIComponent(svg)}") ${hotspot} ${hotspot}, crosshair`;
+};
+
 // Resolution options based on model
 // Resolution options based on model
 const RESOLUTION_OPTIONS: Record<string, ImageResolution[]> = {
@@ -1148,9 +1165,12 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
       return;
     }
 
-    // Brush: create new region if none active
-    if (!region && activeTool === 'brush') {
-      region = createRegion(undefined, { skipHistory: true }).region;
+    // Brush: create new region if none active OR if color changed
+    if (activeTool === 'brush') {
+      if (!region || region.color !== brushColor) {
+        // Create a new region with the current color
+        region = createRegion(undefined, { skipHistory: true }).region;
+      }
     }
     if (activeTool === 'rect') {
       const created = createRegion();
@@ -1158,15 +1178,6 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
     }
 
     if (!region) return;
-
-    if (region.color !== brushColor) {
-      const updatedRegions = regions.map(r =>
-        r.id === region?.id ? { ...r, color: brushColor } : r
-      );
-      setRegions(updatedRegions);
-      renderMarkerLayer(updatedRegions);
-      region = updatedRegions.find(r => r.id === region?.id) || region;
-    }
 
     const regionCanvas = regionCanvasesRef.current.get(region.id);
     const ctx = regionCanvas?.getContext('2d');
@@ -1713,8 +1724,8 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
                         }}
                         className="w-full bg-dark-bg border border-dark-border rounded-xl px-4 py-2.5 text-sm text-white appearance-none focus:border-brand-500 focus:outline-none transition-colors"
                       >
-                        <option value={ImageModel.FLASH}>Flash</option>
-                        <option value={ImageModel.PRO}>Pro</option>
+                        <option value={ImageModel.FLASH}>Nano Banana</option>
+                        <option value={ImageModel.PRO}>Nano Banana Pro</option>
                       </select>
                       <ChevronDown className="absolute right-3 top-3 text-gray-500 pointer-events-none" size={16} />
                     </div>
@@ -1849,6 +1860,21 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
             )}
           </div>
         )}
+
+        {/* Eraser Settings */}
+        {activeTool === 'eraser' && (
+          <div className="flex flex-nowrap items-center gap-4 border-l border-dark-border pl-6 animate-in slide-in-from-left-2 fade-in shrink-0">
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-bold text-gray-500 uppercase whitespace-nowrap">{t('editor.size')}</span>
+              <input
+                type="range" min="5" max="100"
+                value={brushSize}
+                onChange={(e) => setBrushSize(parseInt(e.target.value))}
+                className="w-20 h-1.5 bg-gray-600 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:bg-white [&::-webkit-slider-thumb]:rounded-full"
+              />
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Regions Panel */}
@@ -1906,15 +1932,17 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
         style={{
           cursor: isPanning
             ? 'grabbing'
-            : activeTool === 'marker'
-              ? MARKER_CURSOR
-              : activeTool === 'text'
-                ? isResizingText || textHoverState === 'handle' || isResizingEntry || entryHoverState === 'handle'
-                  ? 'crosshair'
-                  : textHoverState === 'body' || isDraggingText
-                    ? 'move'
-                    : 'text'
-                : 'crosshair'
+            : activeTool === 'eraser'
+              ? generateEraserCursor(brushSize, scale)
+              : activeTool === 'marker'
+                ? MARKER_CURSOR
+                : activeTool === 'text'
+                  ? isResizingText || textHoverState === 'handle' || isResizingEntry || entryHoverState === 'handle'
+                    ? 'crosshair'
+                    : textHoverState === 'body' || isDraggingText
+                      ? 'move'
+                      : 'text'
+                  : 'crosshair'
         }}
       >
         {textEntry && (
