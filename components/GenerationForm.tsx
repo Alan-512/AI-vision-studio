@@ -339,7 +339,23 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
     }
   };
 
-  const handleAppendTag = (tag: string) => { setParams(prev => { const current = prev.prompt.trim(); if (current.includes(tag)) return prev; return { ...prev, prompt: current ? `${current}, ${tag}` : tag }; }); };
+  // Toggle tag selection for PromptBuilder (mode-specific)
+  const getSelectedTags = () => mode === AppMode.IMAGE ? (params.selectedImageTags || []) : (params.selectedVideoTags || []);
+  const handleToggleTag = (tagKey: string) => {
+    const field = mode === AppMode.IMAGE ? 'selectedImageTags' : 'selectedVideoTags';
+    setParams(prev => {
+      const current = mode === AppMode.IMAGE ? (prev.selectedImageTags || []) : (prev.selectedVideoTags || []);
+      if (current.includes(tagKey)) {
+        return { ...prev, [field]: current.filter(t => t !== tagKey) };
+      } else {
+        return { ...prev, [field]: [...current, tagKey] };
+      }
+    });
+  };
+  const handleClearTags = () => {
+    const field = mode === AppMode.IMAGE ? 'selectedImageTags' : 'selectedVideoTags';
+    setParams(prev => ({ ...prev, [field]: [] }));
+  };
   const applyTemplate = (text: string) => { setParams(prev => ({ ...prev, prompt: text })); setShowTemplates(false); };
   const isValidImage = (file: File) => { const validTypes = ['image/jpeg', 'image/png', 'image/webp']; if (!validTypes.includes(file.type)) { console.warn(`Blocked invalid file type: ${file.type}`); return false; } return true; };
 
@@ -624,7 +640,7 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
           </div>
 
           <div className="space-y-3">
-            <PromptBuilder onAppend={handleAppendTag} mode={mode} />
+            <PromptBuilder selectedTags={getSelectedTags()} onToggleTag={handleToggleTag} onClearTags={handleClearTags} mode={mode} />
 
             {/* Style Selector - Moved after Prompt Builder */}
             <div className="space-y-2">

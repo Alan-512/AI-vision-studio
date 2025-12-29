@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
-import { Image as ImageIcon, Video, LayoutGrid, Folder, Sparkles, Settings, Star, CheckSquare, MoveHorizontal, Languages, Trash2, Recycle, Download, RotateCcw, ArrowRight, Key } from 'lucide-react';
+import { Image as ImageIcon, Video, LayoutGrid, Folder, Sparkles, Settings, Star, CheckSquare, MoveHorizontal, Languages, Trash2, Recycle, Download, RotateCcw, ArrowRight, Key, X } from 'lucide-react';
 import { AppMode, AspectRatio, GenerationParams, AssetItem, ImageResolution, VideoResolution, ImageModel, VideoModel, ImageStyle, Project, ChatMessage, BackgroundTask, SmartAsset, VideoDuration, VideoStyle, AgentAction, EditRegion, SearchPolicy, AssistantMode, SmartAssetRole } from './types';
 import { GenerationForm } from './components/GenerationForm';
 import { AssetCard } from './components/AssetCard';
@@ -232,6 +232,7 @@ export function App() {
     });
 
     const [showSettings, setShowSettings] = useState(false);
+    const [apiKeyTooltipDismissed, setApiKeyTooltipDismissed] = useState(false);
     const [showProjects, setShowProjects] = useState(false);
     const [activeCanvasAsset, setActiveCanvasAsset] = useState<AssetItem | null>(null);
     const [editorAsset, setEditorAsset] = useState<AssetItem | null>(null);
@@ -941,6 +942,18 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
 
                 let asset: AssetItem;
                 const genParams = { ...activeParams };
+
+                // Concatenate selected Prompt Builder tags to the prompt (mode-specific)
+                const selectedTags = currentMode === AppMode.IMAGE
+                    ? (activeParams.selectedImageTags || [])
+                    : (activeParams.selectedVideoTags || []);
+                if (selectedTags.length > 0) {
+                    const tagTexts = selectedTags.map(tagKey => t(tagKey as any) || tagKey).join(', ');
+                    genParams.prompt = genParams.prompt.trim()
+                        ? `${tagTexts}, ${genParams.prompt.trim()}`
+                        : tagTexts;
+                }
+
                 const isEditMode = currentMode === AppMode.IMAGE && !!activeParams.editBaseImage && !!activeParams.editMask;
                 if (isEditMode) {
                     genParams.smartAssets = [
@@ -1312,10 +1325,16 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
                 </div>
                 <div className="mt-auto flex flex-col gap-4 w-full px-2 relative">
                     {/* API Key Reminder Tooltip */}
-                    {!getUserApiKey() && !showSettings && (
-                        <div className="absolute bottom-16 left-1/2 -translate-x-1/2 w-52 animate-in fade-in slide-in-from-bottom-2 duration-300">
+                    {!getUserApiKey() && !showSettings && !apiKeyTooltipDismissed && (
+                        <div className="absolute bottom-2 left-full ml-3 w-52 animate-in fade-in slide-in-from-left-2 duration-300">
                             <div className="relative bg-dark-surface border border-dark-border rounded-xl p-3 shadow-xl">
-                                <div className="absolute -bottom-2 left-1/2 -translate-x-1/2 w-0 h-0 border-l-8 border-r-8 border-t-8 border-l-transparent border-r-transparent border-t-dark-border"></div>
+                                <div className="absolute top-1/2 -left-2 -translate-y-1/2 w-0 h-0 border-t-8 border-b-8 border-r-8 border-t-transparent border-b-transparent border-r-dark-border"></div>
+                                <button
+                                    onClick={() => setApiKeyTooltipDismissed(true)}
+                                    className="absolute top-2 right-2 text-gray-500 hover:text-white transition-colors"
+                                >
+                                    <X size={14} />
+                                </button>
                                 <div className="flex items-center gap-2 mb-2">
                                     <Key size={14} className="text-brand-400" />
                                     <span className="text-xs font-bold text-white">

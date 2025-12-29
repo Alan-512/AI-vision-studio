@@ -117,6 +117,21 @@ export enum SearchPolicy {
   BOTH = 'both'               // Both search (rarely needed, avoid cost duplication)
 }
 
+// SearchProgress: Structured search info for UI display (2025 best practices)
+export interface SearchProgress {
+  status: 'searching' | 'complete';
+  title?: string;                    // e.g., "搜索阿凡达3和潘多拉星球的相关信息"
+  queries?: string[];                // e.g., ["Avatar 3 release date", "Pandora planet visual style"]
+  results?: Array<{                  // Extracted key findings
+    label: string;
+    value: string;
+  }>;
+  sources?: Array<{                  // Web sources from groundingChunks
+    title: string;
+    url: string;
+  }>;
+}
+
 // Reference Image (simplified - user describes usage in prompt)
 export interface SmartAsset {
   id: string;
@@ -139,6 +154,10 @@ export interface GenerationParams {
   // --- New: Isolated Prompts Storage ---
   savedImagePrompt?: string;
   savedVideoPrompt?: string;
+
+  // --- NEW: Prompt Builder Selected Tags (Separated by mode) ---
+  selectedImageTags?: string[]; // Selected tag keys for Image mode
+  selectedVideoTags?: string[]; // Selected tag keys for Video mode
 
   negativePrompt?: string; // Not directly supported by all Gemini models but good for UI
   aspectRatio: AspectRatio;

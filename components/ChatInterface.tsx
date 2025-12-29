@@ -1,7 +1,7 @@
 
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { Send, User, Sparkles, ChevronDown, BrainCircuit, Zap, X, Box, Copy, Check, Plus, MonitorPlay, Palette, Film, Bot, Square, Crop, CheckCircle2, Globe, Brain, CircuitBoard, Wrench, Image as ImageIcon, CircleDashed, Terminal, RefreshCw, AlertCircle, Search, Upload } from 'lucide-react';
-import { ChatMessage, GenerationParams, ImageStyle, ImageResolution, AppMode, ImageModel, VideoResolution, VideoModel, VideoStyle, AspectRatio, SmartAsset, APP_LIMITS, AgentAction, TextModel } from '../types';
+import { ChatMessage, GenerationParams, ImageStyle, ImageResolution, AppMode, ImageModel, VideoResolution, VideoModel, VideoStyle, AspectRatio, SmartAsset, APP_LIMITS, AgentAction, TextModel, SearchProgress } from '../types';
 import { streamChatResponse } from '../services/geminiService';
 import { normalizeImageUrlForChat } from '../services/imageUtils';
 import { AgentStateMachine, AgentState, createInitialAgentState, PendingAction, createGenerateAction } from '../services/agentService';
@@ -241,11 +241,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   const [thinkingText, setThinkingText] = useState<string>('');
   const thinkingTextRef = useRef<string>(''); // Ref to hold latest value for finally block
 
-  // NEW: Track search streaming content
-  const [searchContent, setSearchContent] = useState<string>('');
-  const [searchIsComplete, setSearchIsComplete] = useState(false);
+  // NEW: Track structured search progress (2025 best practices)
+  const [searchProgress, setSearchProgress] = useState<SearchProgress | null>(null);
   const [searchIsCollapsed, setSearchIsCollapsed] = useState(false);
-  const searchScrollRef = useRef<HTMLDivElement>(null);
 
   // NEW: Drag and Drop state
   const [isDragging, setIsDragging] = useState(false);
@@ -501,8 +499,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
       setThinkingText(''); // Clear previous thinking text
       thinkingTextRef.current = ''; // Clear ref too
       // Clear search state for new message
-      setSearchContent('');
-      setSearchIsComplete(false);
+      setSearchProgress(null);
       setSearchIsCollapsed(false);
       setHistory(prev => [...prev, tempAiMsg]);
 
@@ -539,20 +536,15 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
           thinkingTextRef.current += text;
           setThinkingText(prev => prev + text);
         },
-        // NEW: Callback for search streaming (搜索过程)
-        (text, isComplete) => {
+        // NEW: Callback for structured search progress (2025 best practices)
+        (progress: SearchProgress) => {
           if (projectIdRef.current !== sendingProjectId) return;
-          setSearchContent(text);
-          if (isComplete) {
-            setSearchIsComplete(true);
+          setSearchProgress(progress);
+          if (progress.status === 'complete') {
             // Auto-collapse after 2 seconds
             setTimeout(() => {
               setSearchIsCollapsed(true);
             }, 2000);
-          }
-          // Auto-scroll search content
-          if (searchScrollRef.current) {
-            searchScrollRef.current.scrollTop = searchScrollRef.current.scrollHeight;
           }
         }
       );
@@ -647,8 +639,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                   message={msg}
                   nativeThinkingText={isStreaming ? thinkingText : undefined}
                   // Pass search/tool data to last AI message (regardless of isThinking)
-                  searchContent={isLastAiMessage ? searchContent : undefined}
-                  searchIsComplete={isLastAiMessage ? searchIsComplete : undefined}
+                  searchProgress={isLastAiMessage ? searchProgress : undefined}
                   searchIsCollapsed={isLastAiMessage ? searchIsCollapsed : undefined}
                   onSearchToggle={isLastAiMessage ? () => setSearchIsCollapsed(!searchIsCollapsed) : undefined}
                   toolCallStatus={isLastAiMessage ? toolCallStatus : undefined}
@@ -783,8 +774,7 @@ interface ChatBubbleProps {
   message: ChatMessage;
   nativeThinkingText?: string;
   // Search flow props (only passed for current AI message during loading)
-  searchContent?: string;
-  searchIsComplete?: boolean;
+  searchProgress?: SearchProgress | null;
   searchIsCollapsed?: boolean;
   onSearchToggle?: () => void;
   // Tool call flow props
@@ -796,8 +786,7 @@ interface ChatBubbleProps {
 const ChatBubble: React.FC<ChatBubbleProps> = ({
   message,
   nativeThinkingText,
-  searchContent,
-  searchIsComplete,
+  searchProgress,
   searchIsCollapsed,
   onSearchToggle,
   toolCallStatus,
@@ -887,22 +876,70 @@ const ChatBubble: React.FC<ChatBubbleProps> = ({
           </div>
         )}
 
-        {/* SEARCH SECTION - Shows during search phase */}
-        {!isUser && !isSystem && searchContent && (
-          <div className={`w-full min-w-full max-w-md mb-2 bg-gradient-to-r from-blue-500/10 to-purple-500/10 border border-blue-500/30 rounded-xl overflow-hidden transition-all duration-300 ${searchIsCollapsed ? 'max-h-10' : 'max-h-48'}`}>
+        {/* SEARCH SECTION - Shows during search phase (2025 Best Practices UI) */}
+        {!isUser && !isSystem && searchProgress && (
+          <div className={`w-full min-w-full max-w-md mb-2 bg-gradient-to-r from-blue-500/10 to-purple-500/10 border border-blue-500/30 rounded-xl overflow-hidden transition-all duration-300 ${searchIsCollapsed ? 'max-h-10' : 'max-h-96'}`}>
             <button
               onClick={onSearchToggle}
               className="w-full flex items-center justify-between px-3 py-2 text-xs text-blue-300 hover:bg-white/5 transition-colors"
             >
               <div className="flex items-center gap-2">
-                <Search size={14} className={searchIsComplete ? '' : 'animate-pulse'} />
-                <span>{searchIsComplete ? (language === 'zh' ? '搜索完成' : 'Search Complete') : (language === 'zh' ? '正在搜索...' : 'Searching...')}</span>
+                <Search size={14} className={searchProgress.status === 'complete' ? '' : 'animate-pulse'} />
+                <span>{searchProgress.title || (language === 'zh' ? '收集关键信息' : 'Gathering information')}</span>
               </div>
               <ChevronDown size={14} className={`transition-transform ${searchIsCollapsed ? '' : 'rotate-180'}`} />
             </button>
             {!searchIsCollapsed && (
-              <div className="px-3 pb-3 max-h-32 overflow-y-auto text-xs text-gray-400 font-mono whitespace-pre-wrap custom-scrollbar">
-                {searchContent}
+              <div className="px-3 pb-3 space-y-2 max-h-80 overflow-y-auto custom-scrollbar">
+                {/* Search Queries List */}
+                {searchProgress.queries && searchProgress.queries.length > 0 && (
+                  <div className="space-y-1">
+                    <div className="text-[10px] font-bold text-gray-500 uppercase">{language === 'zh' ? '搜索查询' : 'Search Queries'}</div>
+                    <div className="space-y-0.5">
+                      {searchProgress.queries.map((query, idx) => (
+                        <div key={idx} className="flex items-center gap-2 text-xs text-gray-400">
+                          <span className={`w-3 h-3 flex items-center justify-center ${searchProgress.status === 'complete' ? 'text-green-400' : 'text-blue-400'}`}>
+                            {searchProgress.status === 'complete' ? '✓' : '○'}
+                          </span>
+                          <span className="truncate">{query}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Search Results (extracted facts) */}
+                {searchProgress.status === 'complete' && searchProgress.results && searchProgress.results.length > 0 && (
+                  <div className="mt-2 pt-2 border-t border-blue-500/20 space-y-1">
+                    <div className="text-[10px] font-bold text-gray-500 uppercase">{language === 'zh' ? '搜索结果' : 'Key Findings'}</div>
+                    {searchProgress.results.map((item, idx) => (
+                      <div key={idx} className="text-xs text-gray-300">
+                        <span className="text-blue-400">•</span> <strong>{item.label}:</strong> {item.value}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Sources */}
+                {searchProgress.sources && searchProgress.sources.length > 0 && (
+                  <div className="mt-2 pt-2 border-t border-blue-500/20">
+                    <div className="text-[10px] font-bold text-gray-500 uppercase mb-1">{language === 'zh' ? '信息来源' : 'Sources'}</div>
+                    <div className="flex flex-wrap gap-1">
+                      {searchProgress.sources.slice(0, 3).map((source, idx) => (
+                        <a
+                          key={idx}
+                          href={source.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-[10px] text-blue-400 hover:text-blue-300 bg-blue-500/10 px-1.5 py-0.5 rounded truncate max-w-32"
+                          title={source.title}
+                        >
+                          {source.title}
+                        </a>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>
