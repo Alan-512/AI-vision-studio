@@ -823,6 +823,14 @@ export const generateImage = async (
 ): Promise<AssetItem> => {
     onStart();
 
+    // DEBUG: Log edit mode params
+    console.log('[generateImage] Edit mode check:', {
+        hasEditBaseImage: !!params.editBaseImage,
+        hasEditMask: !!params.editMask,
+        editBaseImageDataLength: params.editBaseImage?.data?.length || 0,
+        editMaskDataLength: params.editMask?.data?.length || 0
+    });
+
     // DEBUG: Log key parameters for troubleshooting search grounding
     console.log('[generateImage] Called with:', {
         model: params.imageModel,

@@ -955,10 +955,9 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
 
                 const isEditMode = currentMode === AppMode.IMAGE && !!activeParams.editBaseImage && !!activeParams.editMask;
                 if (isEditMode) {
-                    genParams.smartAssets = [
-                        activeParams.editBaseImage as SmartAsset,
-                        activeParams.editMask as SmartAsset
-                    ];
+                    // FIX: Don't put edit images in smartAssets - they're handled via dedicated fields
+                    // genParams.smartAssets is cleared to avoid duplicate image injection
+                    genParams.smartAssets = [];
                     genParams.prompt = buildEditPrompt(activeParams.prompt, activeParams.editRegions);
                 }
                 const historyForGeneration = !isEditMode && currentMode === AppMode.IMAGE ? historyOverride : undefined;
@@ -1490,7 +1489,10 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
                         editRegions,
                         numberOfImages: 1,
                         continuousMode: false
-                    } as GenerationParams, { useParamsAsBase: false });
+                    } as GenerationParams, {
+                        modeOverride: AppMode.IMAGE,  // FIX: Always use IMAGE mode for inpainting
+                        useParamsAsBase: false
+                    });
                 }}
             />}
             <ToastContainer toasts={toasts} onDismiss={removeToast} />

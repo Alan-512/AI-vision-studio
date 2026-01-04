@@ -1880,14 +1880,14 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
       {/* Regions Panel */}
       <div className="absolute right-6 top-28 w-72 bg-dark-panel/95 border border-dark-border rounded-xl shadow-xl p-4 z-40">
         <div className="flex items-center justify-between mb-3">
-          <div className="text-xs font-bold text-gray-400 uppercase">Regions</div>
+          <div className="text-xs font-bold text-gray-400 uppercase">{t('editor.regions')}</div>
           {activeRegionId && (
             <div className="text-[10px] text-brand-400 font-bold">Active #{activeRegionId}</div>
           )}
         </div>
         {regions.length === 0 ? (
           <div className="text-xs text-gray-500 leading-relaxed">
-            Add a marker or draw to create an edit region.
+            {t('editor.regions_hint')}
           </div>
         ) : (
           <div className="space-y-3 max-h-64 overflow-y-auto pr-1 custom-scrollbar">
@@ -1900,12 +1900,12 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
                   <span className="w-5 h-5 rounded-full text-[10px] font-bold flex items-center justify-center text-white" style={{ backgroundColor: region.color }}>
                     {region.id}
                   </span>
-                  <span className="text-xs font-semibold text-gray-300">Region {region.id}</span>
+                  <span className="text-xs font-semibold text-gray-300">{t('editor.region')} {region.id}</span>
                 </button>
                 <textarea
                   value={region.instruction}
                   onChange={(e) => updateRegionInstruction(region.id, e.target.value)}
-                  placeholder={`Describe edit for region ${region.id}...`}
+                  placeholder={t('editor.region_placeholder').replace('{id}', region.id)}
                   className="mt-2 w-full bg-black/30 border border-white/5 rounded-md p-2 text-[11px] text-gray-200 placeholder-gray-500 resize-none focus:outline-none focus:ring-1 focus:ring-brand-500/60"
                   rows={2}
                 />
