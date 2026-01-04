@@ -618,7 +618,7 @@ Rules:
     - model: "gemini-2.5-flash-image" (fast mode, good quality)
     - model: "gemini-3-pro-image-preview" (ONLY when user explicitly asks for "pro", "high quality", "专业", "高质量")
     - aspectRatio: "16:9" (landscape default, or match user's request/reference image)
-    - resolution: "1K" (default), use "2K" or "4K" only with pro model when user asks for high resolution
+    - resolution: "2K" for Pro model (default), "1K" for Flash model; use "4K" only with pro model when user asks for ultra-high resolution
     - numberOfImages: 1 (unless user asks for multiple)
     - useGrounding: false (set true only when user needs real-world facts/current events)
     
