@@ -849,9 +849,24 @@ export const generateImage = async (
     // Build message parts
     const parts: Part[] = [];
 
-    // Add reference images first (user describes their usage in prompt)
+    // FIX: Handle Inpainting/Editing Base Images FIRST
+    // usage: if editBaseImage is provided, it takes precedence as the primary context
+    if (params.editBaseImage) {
+        console.log('[generateImage] Using EDIT BASE image');
+        parts.push({ inlineData: { mimeType: params.editBaseImage.mimeType, data: params.editBaseImage.data } });
+        parts.push({ text: getRoleInstruction(SmartAssetRole.EDIT_BASE, 0) });
+    }
+    if (params.editMask) {
+        console.log('[generateImage] Using EDIT MASK image');
+        parts.push({ inlineData: { mimeType: params.editMask.mimeType, data: params.editMask.data } });
+        parts.push({ text: "Mask Image (White=Edit, Black=Keep)" });
+    }
+
+    // Add reference images (user describes their usage in prompt)
     const maxImages = params.imageModel === ImageModel.PRO ? 14 : 3;
-    const availableSlots = Math.max(0, maxImages - historyImageCount);
+    // Count edit assets against quota
+    const usedSlots = (params.editBaseImage ? 1 : 0) + (params.editMask ? 1 : 0);
+    const availableSlots = Math.max(0, maxImages - historyImageCount - usedSlots);
     const smartAssets = (params.smartAssets || []).filter(asset => {
         return !historyImagePrefixes.has(asset.data.slice(0, 50));
     });

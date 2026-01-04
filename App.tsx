@@ -693,14 +693,14 @@ export function App() {
             const messagesWithImages = chatHistory.filter(m => m.image || (m.images && m.images.length > 0));
 
             // Select references based on mode
-            // SKIP if we already extracted images from latest user message
+            // ALWAYS execute reference logic to ensure we respect the AI's intent (e.g. LAST_GENERATED)
+            // Results will be deduplicated when merging
             let selectedReferences: SmartAsset[] = [];
-            const skipHistoryExtraction = (executionParams.smartAssets?.length ?? 0) > 0;
-            if (skipHistoryExtraction) {
-                console.log('[Agent] Using latest user message images exclusively, skipping history extraction');
-            }
 
-            if (!skipHistoryExtraction) switch (referenceMode) {
+            // [DEBUG] Log reference mode decision
+            console.log(`[Agent] Reference Strategy: mode=${referenceMode}, count=${referenceCount}, pre-extracted=${executionParams.smartAssets?.length ?? 0}`);
+
+            switch (referenceMode) {
                 case 'NONE':
                     // Pure text-to-image, no references
                     break;
