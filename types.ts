@@ -270,6 +270,9 @@ export interface ChatMessage {
     signature: string;  // The actual signature string
   }>;
 
+  // Search progress data (persisted with message for history display)
+  searchProgress?: SearchProgress;
+
   // Link to the Job System
   relatedJobId?: string; // If this message triggered a job
   toolCalls?: ToolCallRecord[]; // Record of tools called in this turn

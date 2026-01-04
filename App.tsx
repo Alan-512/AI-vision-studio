@@ -20,7 +20,6 @@ import {
     releaseBlobUrl, saveTask, loadTasks, deleteTask
 } from './services/storageService';
 import { useLanguage } from './contexts/LanguageContext';
-import { StorageStatusBanner } from './components/StorageStatusBanner';
 
 const DEFAULT_PARAMS: GenerationParams = {
     prompt: '',
@@ -1495,7 +1494,6 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
                 }}
             />}
             <ToastContainer toasts={toasts} onDismiss={removeToast} />
-            <StorageStatusBanner />
         </div>
     );
 }

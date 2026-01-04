@@ -96,11 +96,28 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
   setThoughtImages
 }) => {
   const { t, language } = useLanguage();
+  const isZh = language === 'zh';
   const smartAssetRoleOptions = [
-    { value: SmartAssetRole.EDIT_BASE, label: t('role.edit_base') },
-    { value: SmartAssetRole.SUBJECT, label: t('role.subject') },
-    { value: SmartAssetRole.STYLE, label: t('role.style') },
-    { value: SmartAssetRole.COMPOSITION, label: t('role.composition') }
+    {
+      value: SmartAssetRole.EDIT_BASE,
+      label: t('role.edit_base'),
+      tooltip: isZh ? '将此图作为编辑底图，AI 会在此图基础上进行修改' : 'Use as base image for editing, AI will modify this image'
+    },
+    {
+      value: SmartAssetRole.SUBJECT,
+      label: t('role.subject'),
+      tooltip: isZh ? '提取图中的主体（人物/物体），用于生成新场景' : 'Extract the main subject (person/object) for new scene generation'
+    },
+    {
+      value: SmartAssetRole.STYLE,
+      label: t('role.style'),
+      tooltip: isZh ? '参考此图的艺术风格（色调、笔触、氛围）' : 'Reference artistic style (colors, strokes, mood) from this image'
+    },
+    {
+      value: SmartAssetRole.COMPOSITION,
+      label: t('role.composition'),
+      tooltip: isZh ? '参考此图的构图和布局方式' : 'Reference composition and layout from this image'
+    }
   ];
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isOptimizing, setIsOptimizing] = useState(false);
@@ -109,6 +126,8 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
   const [isAdvancedOpen, setIsAdvancedOpen] = useState(false);
   const [isAspectRatioOpen, setIsAspectRatioOpen] = useState(false);
   const [_isWarningExpanded, _setIsWarningExpanded] = useState(false);
+  // Track which asset's role dropdown is open (for custom dropdown with tooltips)
+  const [openRoleDropdown, setOpenRoleDropdown] = useState<string | null>(null);
 
   // Local prompt state for smooth typing (debounced sync to params)
   const [localPrompt, setLocalPrompt] = useState(params.prompt || '');
@@ -753,15 +772,62 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
                         <X size={10} />
                       </button>
                     </div>
-                    <select
-                      value={resolveSmartAssetRole(asset)}
-                      onChange={(e) => updateSmartAssetRole(asset.id, e.target.value as SmartAssetRole)}
-                      className="w-20 bg-dark-bg border border-dark-border rounded px-1 py-0.5 text-[9px] text-gray-300"
-                    >
-                      {smartAssetRoleOptions.map(option => (
-                        <option key={option.value} value={option.value}>{option.label}</option>
-                      ))}
-                    </select>
+                    {/* Custom dropdown with per-option tooltips */}
+                    <div className="relative">
+                      {/* Trigger button */}
+                      <button
+                        type="button"
+                        onClick={() => setOpenRoleDropdown(openRoleDropdown === asset.id ? null : asset.id)}
+                        onBlur={() => setTimeout(() => setOpenRoleDropdown(null), 150)}
+                        className="w-24 bg-dark-bg border border-dark-border rounded px-1.5 py-0.5 text-[9px] text-gray-300 cursor-pointer hover:border-brand-500 transition-colors flex items-center justify-between gap-1"
+                      >
+                        <span>{smartAssetRoleOptions.find(o => o.value === resolveSmartAssetRole(asset))?.label}</span>
+                        <ChevronDown size={10} className={`text-gray-500 transition-transform ${openRoleDropdown === asset.id ? 'rotate-180' : ''}`} />
+                      </button>
+                      {/* Dropdown menu */}
+                      {openRoleDropdown === asset.id && (
+                        <div className="absolute left-0 top-full mt-0.5 z-[100] bg-dark-panel border border-dark-border rounded shadow-xl w-24 animate-in fade-in slide-in-from-top-2 duration-150">
+                          {smartAssetRoleOptions.map(option => (
+                            <div
+                              key={option.value}
+                              className="relative group/option"
+                              onMouseEnter={(e) => {
+                                // Show tooltip
+                                const tooltip = e.currentTarget.querySelector('.tooltip-content') as HTMLElement;
+                                if (tooltip) tooltip.style.display = 'block';
+                              }}
+                              onMouseLeave={(e) => {
+                                // Hide tooltip
+                                const tooltip = e.currentTarget.querySelector('.tooltip-content') as HTMLElement;
+                                if (tooltip) tooltip.style.display = 'none';
+                              }}
+                            >
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  updateSmartAssetRole(asset.id, option.value);
+                                  setOpenRoleDropdown(null);
+                                }}
+                                className={`w-full text-left px-1.5 py-1 text-[9px] transition-colors ${option.value === resolveSmartAssetRole(asset)
+                                  ? 'bg-brand-500/20 text-brand-400'
+                                  : 'text-gray-300 hover:bg-white/10'
+                                  }`}
+                              >
+                                {option.label}
+                              </button>
+                              {/* Tooltip - positioned to the right */}
+                              <div
+                                className="tooltip-content hidden absolute left-full top-1/2 -translate-y-1/2 ml-2 z-[200]"
+                              >
+                                <div className="bg-gray-900 text-gray-200 text-[10px] rounded-lg px-2 py-1.5 shadow-xl border border-gray-700 whitespace-normal w-[150px]">
+                                  {option.tooltip}
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
                   </div>
                 ))}
               </div>

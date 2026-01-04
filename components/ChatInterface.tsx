@@ -243,7 +243,10 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
 
   // NEW: Track structured search progress (2025 best practices)
   const [searchProgress, setSearchProgress] = useState<SearchProgress | null>(null);
+  const searchProgressRef = useRef<SearchProgress | null>(null); // Ref to hold latest value for finally block
   const [searchIsCollapsed, setSearchIsCollapsed] = useState(false);
+  // Track collapsed state for historical messages (key = message timestamp)
+  const [searchCollapsedMap, setSearchCollapsedMap] = useState<Record<number, boolean>>({});
 
   // NEW: Drag and Drop state
   const [isDragging, setIsDragging] = useState(false);
@@ -500,6 +503,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
       thinkingTextRef.current = ''; // Clear ref too
       // Clear search state for new message
       setSearchProgress(null);
+      searchProgressRef.current = null; // Clear ref too
       setSearchIsCollapsed(false);
       setHistory(prev => [...prev, tempAiMsg]);
 
@@ -540,6 +544,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         (progress: SearchProgress) => {
           if (projectIdRef.current !== sendingProjectId) return;
           setSearchProgress(progress);
+          searchProgressRef.current = progress; // Sync to ref for finally block
           if (progress.status === 'complete') {
             // Auto-collapse after 2 seconds
             setTimeout(() => {
@@ -570,8 +575,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
       if (projectIdRef.current === sendingProjectId) {
         setIsLoading(false);
         abortControllerRef.current = null;
-        // Store thinkingText in the message for persistence after completion
+        // Store thinkingText and searchProgress in the message for persistence after completion
         const finalThinkingContent = thinkingTextRef.current; // Use ref to get latest value
+        const finalSearchProgress = searchProgressRef.current; // Use ref to get latest value
         setHistory(prev => {
           const updated = [...prev];
           const last = updated[updated.length - 1];
@@ -580,7 +586,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
               ...last,
               isThinking: false,
               thinkingContent: finalThinkingContent || undefined, // Persist thinking content
-              thoughtSignatures: collectedSignatures.length > 0 ? collectedSignatures : undefined
+              thoughtSignatures: collectedSignatures.length > 0 ? collectedSignatures : undefined,
+              searchProgress: finalSearchProgress || undefined // Persist search progress
             };
           }
           return updated;
@@ -638,10 +645,18 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                   key={idx}
                   message={msg}
                   nativeThinkingText={isStreaming ? thinkingText : undefined}
-                  // Pass search/tool data to last AI message (regardless of isThinking)
-                  searchProgress={isLastAiMessage ? searchProgress : undefined}
-                  searchIsCollapsed={isLastAiMessage ? searchIsCollapsed : undefined}
-                  onSearchToggle={isLastAiMessage ? () => setSearchIsCollapsed(!searchIsCollapsed) : undefined}
+                  // Pass search/tool data: use persisted data from message, OR current streaming data for last message
+                  searchProgress={msg.searchProgress || (isLastAiMessage ? searchProgress : undefined)}
+                  searchIsCollapsed={
+                    msg.searchProgress
+                      ? (searchCollapsedMap[msg.timestamp] ?? true) // Default collapsed for historical
+                      : (isLastAiMessage ? searchIsCollapsed : undefined)
+                  }
+                  onSearchToggle={
+                    msg.searchProgress
+                      ? () => setSearchCollapsedMap(prev => ({ ...prev, [msg.timestamp]: !(prev[msg.timestamp] ?? true) }))
+                      : (isLastAiMessage ? () => setSearchIsCollapsed(!searchIsCollapsed) : undefined)
+                  }
                   toolCallStatus={isLastAiMessage ? toolCallStatus : undefined}
                   toolCallExpanded={isLastAiMessage ? toolCallExpanded : undefined}
                   onToolCallToggle={isLastAiMessage ? () => setToolCallExpanded(!toolCallExpanded) : undefined}

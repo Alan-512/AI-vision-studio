@@ -425,7 +425,8 @@ Rules:
         const searchContents = convertHistoryToNativeFormat(history, realModelName);
         if (signal.aborted) throw new Error('Cancelled');
 
-        // NOTE: Don't notify UI yet - only show search UI when actual search queries are received
+        // NOTE: Don't notify UI immediately - only show search UI when actual groundingMetadata is detected
+        // This ensures the UI only appears when AI actually uses the search tool
 
         // Use streaming for search to show real-time progress
         const searchResult = await ai.models.generateContentStream({
@@ -440,6 +441,7 @@ Rules:
 
         let searchFullText = '';
         let collectedQueries: string[] = [];
+        let hasNotifiedSearchStart = false; // Track if we've shown the initial "searching" UI
         let collectedSources: Array<{ title: string; url: string }> = [];
 
         for await (const chunk of searchResult) {
@@ -454,6 +456,18 @@ Rules:
             const candidates = (chunk as any).candidates;
             if (candidates && candidates[0]?.groundingMetadata) {
                 const gm = candidates[0].groundingMetadata;
+
+                // First time we detect groundingMetadata - show initial "searching" UI
+                if (!hasNotifiedSearchStart && onSearchProgress) {
+                    hasNotifiedSearchStart = true;
+                    onSearchProgress({
+                        status: 'searching',
+                        title: language === 'zh' ? '正在搜索中...' : 'Searching...',
+                        queries: [],
+                        sources: []
+                    });
+                }
+
                 // Extract search queries
                 if (gm.webSearchQueries && gm.webSearchQueries.length > 0) {
                     collectedQueries = [...new Set([...collectedQueries, ...gm.webSearchQueries])];
@@ -469,16 +483,16 @@ Rules:
                         }
                     }
                 }
-            }
 
-            // Update UI with progress
-            if (onSearchProgress && collectedQueries.length > 0) {
-                onSearchProgress({
-                    status: 'searching',
-                    title: language === 'zh' ? '收集关键信息' : 'Gathering key information',
-                    queries: collectedQueries,
-                    sources: collectedSources.slice(0, 5) // Limit to 5 sources in UI
-                });
+                // Update UI with progress - send on every new data (streaming effect)
+                if (onSearchProgress && (collectedQueries.length > 0 || collectedSources.length > 0)) {
+                    onSearchProgress({
+                        status: 'searching',
+                        title: language === 'zh' ? '收集关键信息' : 'Gathering key information',
+                        queries: collectedQueries,
+                        sources: collectedSources.slice(0, 5) // Limit to 5 sources in UI
+                    });
+                }
             }
         }
 
