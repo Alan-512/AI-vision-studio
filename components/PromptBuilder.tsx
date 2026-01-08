@@ -125,7 +125,7 @@ export const PromptBuilder: React.FC<PromptBuilderProps> = ({ selectedTags, onTo
         </label>
         {selectedTags.length > 0 && (
           <button onClick={onClearTags} className="text-[10px] text-gray-500 hover:text-white transition-colors">
-            {t('btn.clear') || 'Clear all'}
+            Clear all
           </button>
         )}
       </div>
@@ -153,8 +153,8 @@ export const PromptBuilder: React.FC<PromptBuilderProps> = ({ selectedTags, onTo
             key={cat.id}
             onClick={() => toggleCategory(cat.id)}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-wider transition-all border shrink-0 ${activeCategory === cat.id
-                ? 'bg-brand-500 text-white border-brand-500 shadow-lg shadow-brand-500/20'
-                : 'bg-dark-surface text-gray-400 border-dark-border hover:border-gray-500 hover:text-gray-200'
+              ? 'bg-brand-500 text-white border-brand-500 shadow-lg shadow-brand-500/20'
+              : 'bg-dark-surface text-gray-400 border-dark-border hover:border-gray-500 hover:text-gray-200'
               }`}
           >
             {cat.icon}
@@ -172,8 +172,8 @@ export const PromptBuilder: React.FC<PromptBuilderProps> = ({ selectedTags, onTo
               key={tagKey}
               onClick={() => onToggleTag(tagKey)}
               className={`text-left text-xs px-2 py-1.5 rounded transition-colors flex items-center gap-2 group ${isTagSelected(tagKey)
-                  ? 'bg-brand-500/20 text-brand-400 border border-brand-500/50'
-                  : 'text-gray-300 hover:text-brand-400 hover:bg-white/5'
+                ? 'bg-brand-500/20 text-brand-400 border border-brand-500/50'
+                : 'text-gray-300 hover:text-brand-400 hover:bg-white/5'
                 }`}
             >
               <Tag size={10} className={isTagSelected(tagKey) ? 'text-brand-500' : 'text-gray-600 group-hover:text-brand-500'} />

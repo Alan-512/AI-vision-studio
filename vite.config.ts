@@ -12,8 +12,9 @@ const removeAiStudioImportMap = () => ({
 });
 
 // https://vitejs.dev/config/
-export default defineConfig(({ command }) => {
-  const enableDebugLogs = process.env.VITE_ENABLE_DEBUG_LOGS === '1';
+export default defineConfig(({ command, mode }) => {
+  // Use mode parameter instead of process.env which may not be available in config context
+  const enableDebugLogs = mode === 'development' || mode === 'debug';
   const shouldDropConsole = command === 'build' && !enableDebugLogs;
 
   return {

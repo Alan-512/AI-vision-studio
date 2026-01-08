@@ -132,19 +132,25 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
   // Local prompt state for smooth typing (debounced sync to params)
   const [localPrompt, setLocalPrompt] = useState(params.prompt || '');
   const promptTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Track if the last change was from user typing (to avoid overwriting during input)
+  const isUserTypingRef = useRef(false);
 
   // Sync local prompt to params with debounce
   const handlePromptChange = (value: string) => {
+    isUserTypingRef.current = true;
     setLocalPrompt(value);
     if (promptTimerRef.current) clearTimeout(promptTimerRef.current);
     promptTimerRef.current = setTimeout(() => {
       setParams(prev => ({ ...prev, prompt: value }));
+      // Reset typing flag after sync completes
+      isUserTypingRef.current = false;
     }, 300);
   };
 
   // Sync external params.prompt changes to local state (e.g., from optimize/template)
+  // Only sync if the change was NOT from user typing
   useEffect(() => {
-    if (params.prompt !== localPrompt) {
+    if (!isUserTypingRef.current && params.prompt !== localPrompt) {
       setLocalPrompt(params.prompt || '');
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
