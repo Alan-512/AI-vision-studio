@@ -134,18 +134,42 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
   const promptTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Track if the last change was from user typing (to avoid overwriting during input)
   const isUserTypingRef = useRef(false);
+  const promptBaseRef = useRef<string | null>(null);
+  const latestPromptRef = useRef(params.prompt || '');
+
+  useEffect(() => {
+    latestPromptRef.current = params.prompt || '';
+  }, [params.prompt]);
+
+  useEffect(() => {
+    return () => {
+      if (promptTimerRef.current) {
+        clearTimeout(promptTimerRef.current);
+      }
+      promptBaseRef.current = null;
+      isUserTypingRef.current = false;
+    };
+  }, []);
 
   // Sync local prompt to params with debounce
   const handlePromptChange = (value: string) => {
     isUserTypingRef.current = true;
+    promptBaseRef.current = latestPromptRef.current;
     setLocalPrompt(value);
     if (promptTimerRef.current) clearTimeout(promptTimerRef.current);
     promptTimerRef.current = setTimeout(() => {
+      const hasExternalUpdate = promptBaseRef.current !== latestPromptRef.current;
+      if (hasExternalUpdate) {
+        isUserTypingRef.current = false;
+        promptBaseRef.current = null;
+        return;
+      }
       setParams(prev => ({ ...prev, prompt: value }));
-      // Reset typing flag after sync completes
       isUserTypingRef.current = false;
+      promptBaseRef.current = null;
     }, 300);
   };
+
 
   // Sync external params.prompt changes to local state (e.g., from optimize/template)
   // Only sync if the change was NOT from user typing

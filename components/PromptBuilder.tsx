@@ -125,7 +125,7 @@ export const PromptBuilder: React.FC<PromptBuilderProps> = ({ selectedTags, onTo
         </label>
         {selectedTags.length > 0 && (
           <button onClick={onClearTags} className="text-[10px] text-gray-500 hover:text-white transition-colors">
-            Clear all
+            {t('builder.clear_all')}
           </button>
         )}
       </div>
