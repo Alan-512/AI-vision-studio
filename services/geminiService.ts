@@ -1194,11 +1194,27 @@ export const generateTitle = async (prompt: string): Promise<string> => {
     try {
         const response = await ai.models.generateContent({
             model: TextModel.FLASH,
-            contents: `Short title for: "${prompt}". Text only.`
+            contents: `Generate a very short title (5-15 Chinese characters OR 3-6 English words MAX) that summarizes the following creative prompt. 
+RULES:
+- Output ONLY the title itself, nothing else.
+- Do NOT output a list of options. Output exactly ONE title.
+- Do NOT include quotes, numbering, or explanations.
+- Keep it concise and descriptive.
+
+Prompt: "${prompt.slice(0, 200)}"`
         });
-        return (response.text ?? '').trim().replace(/^["']|["']$/g, '');
+        // Clean up any stray formatting
+        let title = (response.text ?? '').trim()
+            .replace(/^[\"'""'']+|[\"'""'']+$/g, '') // Remove quotes
+            .replace(/^\d+\.\s*/, '') // Remove numbering like "1. "
+            .split('\n')[0]; // Take only first line if multiple
+        // Fallback if still too long
+        if (title.length > 30) {
+            title = title.slice(0, 30);
+        }
+        return title || prompt.slice(0, 20);
     } catch (e) {
-        return prompt.slice(0, 30);
+        return prompt.slice(0, 20);
     }
 };
 
