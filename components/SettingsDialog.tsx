@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
-import { X, Save, Key, Trash2, ExternalLink, AlertTriangle, Activity, CheckCircle, AlertCircle, HardDrive } from 'lucide-react';
-import { saveUserApiKey, getUserApiKey, removeUserApiKey, testConnection } from '../services/geminiService';
+import { X, Save, Key, Trash2, ExternalLink, AlertTriangle, Activity, CheckCircle, AlertCircle, HardDrive, Zap } from 'lucide-react';
+import { saveUserApiKey, getUserApiKey, removeUserApiKey, testConnection, saveProxyState, getProxyState } from '../services/geminiService';
 import { getStorageEstimate } from '../services/storageService';
 import { useLanguage } from '../contexts/LanguageContext';
 
@@ -24,6 +24,9 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose,
   // Storage State
   const [storageInfo, setStorageInfo] = useState<{ usage: number; quota: number; percentage: number } | null>(null);
 
+  // Network Acceleration (Proxy) State
+  const [proxyEnabled, setProxyEnabled] = useState(true);
+
   useEffect(() => {
     if (isOpen) {
       const key = getUserApiKey();
@@ -31,6 +34,9 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose,
       setApiKey(key || '');
       setTestResult(null);
       setTestStatus('idle');
+
+      // Load proxy state
+      setProxyEnabled(getProxyState());
 
       // Check storage
       getStorageEstimate().then(setStorageInfo);
@@ -145,8 +151,8 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose,
           {/* Test Result Feedback */}
           {testStatus !== 'idle' && (
             <div className={`p-3 border rounded-lg flex items-start gap-3 ${testStatus === 'success'
-                ? 'bg-green-500/10 border-green-500/20 text-green-200'
-                : 'bg-red-500/10 border-red-500/20 text-red-200'
+              ? 'bg-green-500/10 border-green-500/20 text-green-200'
+              : 'bg-red-500/10 border-red-500/20 text-red-200'
               }`}>
               {testStatus === 'success' ? <CheckCircle size={16} className="shrink-0 mt-0.5" /> : <AlertCircle size={16} className="shrink-0 mt-0.5" />}
               <div className="text-xs">
@@ -154,6 +160,35 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose,
               </div>
             </div>
           )}
+
+          <div className="h-px bg-white/5 my-2" />
+
+          {/* Network Acceleration Section */}
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Zap size={16} className={proxyEnabled ? "text-brand-500" : "text-gray-500"} />
+                <span className="text-sm font-medium text-gray-300">{t('settings.use_proxy')}</span>
+              </div>
+              <button
+                onClick={() => {
+                  const newState = !proxyEnabled;
+                  setProxyEnabled(newState);
+                  saveProxyState(newState);
+                }}
+                className={`relative w-11 h-6 rounded-full transition-colors ${proxyEnabled ? 'bg-brand-600' : 'bg-dark-border'
+                  }`}
+              >
+                <span
+                  className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full transition-transform ${proxyEnabled ? 'translate-x-5' : 'translate-x-0'
+                    }`}
+                />
+              </button>
+            </div>
+            <p className="text-xs text-gray-400 leading-relaxed">
+              {t('settings.proxy_desc')}
+            </p>
+          </div>
 
           <div className="h-px bg-white/5 my-2" />
 

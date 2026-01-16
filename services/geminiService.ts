@@ -8,10 +8,31 @@ export const saveUserApiKey = (key: string) => localStorage.setItem('user_gemini
 export const getUserApiKey = () => localStorage.getItem('user_gemini_api_key');
 export const removeUserApiKey = () => localStorage.removeItem('user_gemini_api_key');
 
+// Proxy/Network Acceleration management (for domestic direct connection)
+const PROXY_STATE_KEY = 'gemini_proxy_enabled';
+export const saveProxyState = (enabled: boolean) => localStorage.setItem(PROXY_STATE_KEY, enabled ? 'true' : 'false');
+export const getProxyState = (): boolean => {
+    const saved = localStorage.getItem(PROXY_STATE_KEY);
+    // Default to enabled (true) for best domestic experience
+    return saved === null ? true : saved === 'true';
+};
+
+// Default Google API base URL
+const GOOGLE_API_BASE_URL = 'https://generativelanguage.googleapis.com';
+// Proxy base URL (relative path, handled by Cloudflare Pages Function)
+const PROXY_BASE_URL = '/api';
+
 const getAIClient = (userKey?: string) => {
     const key = userKey || getUserApiKey() || (typeof import.meta !== 'undefined' ? (import.meta as any).env?.VITE_API_KEY : undefined);
     if (!key) throw new Error("API Key not found");
-    return new GoogleGenAI({ apiKey: key });
+
+    const useProxy = getProxyState();
+    const baseUrl = useProxy ? PROXY_BASE_URL : GOOGLE_API_BASE_URL;
+
+    return new GoogleGenAI({
+        apiKey: key,
+        httpOptions: { baseUrl }
+    });
 };
 
 // --- STRUCTURED FACTS HELPERS (Two-Phase Search Architecture) ---
