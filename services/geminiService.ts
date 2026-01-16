@@ -19,15 +19,22 @@ export const getProxyState = (): boolean => {
 
 // Default Google API base URL
 const GOOGLE_API_BASE_URL = 'https://generativelanguage.googleapis.com';
-// Proxy base URL (relative path, handled by Cloudflare Pages Function)
-const PROXY_BASE_URL = '/api';
+
+// Helper to get the proxy base URL (must be absolute for SDK's URL constructor)
+const getProxyBaseUrl = (): string => {
+    if (typeof window !== 'undefined') {
+        return window.location.origin + '/api';
+    }
+    // Fallback for SSR or non-browser environments (should not happen in this app)
+    return '/api';
+};
 
 const getAIClient = (userKey?: string) => {
     const key = userKey || getUserApiKey() || (typeof import.meta !== 'undefined' ? (import.meta as any).env?.VITE_API_KEY : undefined);
     if (!key) throw new Error("API Key not found");
 
     const useProxy = getProxyState();
-    const baseUrl = useProxy ? PROXY_BASE_URL : GOOGLE_API_BASE_URL;
+    const baseUrl = useProxy ? getProxyBaseUrl() : GOOGLE_API_BASE_URL;
 
     return new GoogleGenAI({
         apiKey: key,
