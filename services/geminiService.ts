@@ -13,8 +13,8 @@ const PROXY_STATE_KEY = 'gemini_proxy_enabled';
 export const saveProxyState = (enabled: boolean) => localStorage.setItem(PROXY_STATE_KEY, enabled ? 'true' : 'false');
 export const getProxyState = (): boolean => {
     const saved = localStorage.getItem(PROXY_STATE_KEY);
-    // Default to enabled (true) for best domestic experience
-    return saved === null ? true : saved === 'true';
+    // Default to disabled (false) - users can enable in settings if needed
+    return saved === null ? false : saved === 'true';
 };
 
 // Default Google API base URL
@@ -138,28 +138,34 @@ const generateImageTool: FunctionDeclaration = {
                 type: Type.STRING,
                 description: `The COMPLETE visual prompt synthesized from the ENTIRE conversation.
 
-=== REQUIRED(always include) ===
-    1. CONVERSATION SYNTHESIS:
-- The user's ORIGINAL intent and core subject
-    - ALL refinements and agreements from the discussion
-        - The FINAL consensus - integrate the FULL conversation, not just latest message
+=== REQUIRED (always include) ===
+1. CONVERSATION SYNTHESIS:
+   - The user's ORIGINAL intent and core subject
+   - ALL refinements and agreements from the discussion
+   - The FINAL consensus - integrate the FULL conversation, not just latest message
 
-2. NARRATIVE STYLE:
-- Write flowing sentences describing the scene, NOT keyword lists
-   ❌ "cyberpunk, city, night, neon" → ✅ "A rain-soaked cyberpunk cityscape at night..."
+2. NARRATIVE STYLE & STRUCTURE:
+   - Write flowing sentences describing the scene, NOT keyword lists.
+   - Use structured templates based on intent:
+     * Stylized: "A [Style] illustration of [Subject], featuring [Characteristics]..."
+     * Photorealistic: "A [Shot Type] of [Subject] in [Environment] with [Lighting]..."
+     * Product: "A studio-lit photograph of [Product] on [Surface]..."
 
 3. SPECIFICITY:
-- Replace vague terms with precise descriptions
-   ❌ "fantasy armor" → ✅ "Ornate elven plate armor with silver leaf etchings"
+   - Replace vague terms with hyper-specific details.
+   - ❌ "fantasy armor" → ✅ "Ornate elven plate armor with silver leaf etchings"
 
-    === OPTIONAL(add only when relevant to the scene) ===
-    If the image involves these aspects, include them.Otherwise, omit:
-- Shot type: close - up, wide - angle, aerial view, macro(for photos / realistic)
-    - Lighting: golden hour, soft diffused, dramatic rim(when lighting matters)
-        - Camera / lens: "85mm portrait lens with bokeh"(for photorealistic only)
-    - Mood / atmosphere: serene, dramatic, warm(when setting a tone)
-        - Textures: skin texture, fabric weave, metal sheen(when materials are important)
-            - Art style: "oil painting style", "Studio Ghibli anime"(for illustrated / stylized)`
+4. SEMANTIC NEGATIVE:
+   - Describe the *absence* of elements positively in the main prompt (e.g., "an empty, deserted street" instead of just "no cars").
+
+=== OPTIONAL (add only when relevant to the scene) ===
+   If the image involves these aspects, include them. Otherwise, omit:
+   - Shot type: wide-angle, macro, telephoto, low-angle
+   - Lighting: softbox, golden hour, rim light, volumetric
+   - Camera: bokeh, depth of field, shutter speed (for photorealism)
+   - Mood: serene, dramatic, high-contrast
+   - Textures: skin texture, fabric weave, metal sheen
+   - Art style: "oil painting", "pencil sketch", "3D render"`
             },
             aspectRatio: { type: Type.STRING, description: 'Aspect ratio. Options: "1:1" (square), "16:9" (landscape), "9:16" (portrait), "4:3", "3:4", "21:9" (ultrawide). Default: "16:9"', enum: Object.values(AspectRatio) },
             model: { type: Type.STRING, description: 'Image model. Use "gemini-2.5-flash-image" (fast, default) or "gemini-3-pro-image-preview" (pro/high quality).', enum: Object.values(ImageModel) },
@@ -326,42 +332,52 @@ export const optimizePrompt = async (prompt: string, mode: AppMode, _smartAssets
 You are a professional video prompt optimizer for Veo 3.1.
 
 CRITICAL RULES:
-    1. PRESERVE the user's original subject, intent, and core idea EXACTLY
+1. PRESERVE the user's original subject, intent, and core idea EXACTLY
 2. DO NOT add new subjects, characters, or change the main theme
 3. ONLY enhance with: camera movement, composition, mood, sound design
 
-ENHANCEMENT STRUCTURE(add missing elements):
+ENHANCEMENT STRUCTURE (add missing elements):
 - Subject: Keep original, add detail if vague
-    - Action: Specify motion if implied
-        - Style: Add cinematic style(sci - fi, noir, documentary) if appropriate
-            - Camera: Add camera movement(tracking shot, aerial, dolly zoom)
-                - Composition: Specify shot type(wide - angle, close - up, POV)
-                    - Mood: Add lighting / color tone(warm golden hour, cool blue tones)
-                        - Audio: Add sound design("footsteps echo", "wind howls")
+- Action: Specify motion clearly (e.g., "walking slowly", "running aggressively")
+- Style: Add cinematic style (sci-fi, noir, documentary) if appropriate
+- Camera: Add specific camera movement (tracking shot, aerial, dolly zoom, truck left/right)
+- Composition: Specify shot type (wide-angle, close-up, POV, over-the-shoulder)
+- Mood: Add lighting / color tone (warm golden hour, cool blue tones, high contrast)
+- Audio: Add sound design ("footsteps echo", "wind howls", "muffled city noise")
 
 OUTPUT: Enhanced prompt in the user's original language, with technical terms in English.
-Keep concise but descriptive.Output ONLY the enhanced prompt, no explanations.
+Keep concise but descriptive. Output ONLY the enhanced prompt, no explanations.
 
 User prompt: "${prompt}"
     ` : `
 You are a professional image prompt optimizer for Gemini Image.
 
 CRITICAL RULES:
-    1. PRESERVE the user's original subject, intent, and core idea EXACTLY
-2. DO NOT add new subjects, characters, or change the main theme
-3. ONLY enhance with: lighting, composition, textures, atmosphere
+1. PRESERVE the user's original subject, intent, and core idea EXACTLY.
+2. DO NOT add new subjects, characters, or change the main theme.
+3. USE NARRATIVE DESCRIPTION: Write flowing sentences, not just keyword lists.
+4. SPECIFICITY: Replace vague terms with hyper-specific details (e.g., "Ornate elven plate armor" instead of "Fantasy armor").
+5. SEMANTIC NEGATIVE: If the user implies absence (e.g., "no cars"), describe the state positively (e.g., "empty, deserted street").
 
-ENHANCEMENT STRUCTURE:
-- Shot type: close - up, wide - angle, aerial view, macro
-    - Subject: Keep original, add vivid details
-        - Environment: Expand setting description
-            - Lighting: golden hour, soft diffused, dramatic rim lighting
-                - Camera: lens type, bokeh, depth of field
-                    - Mood: atmosphere description
-                        - Textures: surface details, materials
+OPTIMAL STRUCTURES (Apply based on intent):
 
-OUTPUT: Enhanced prompt in the user's original language, with photography terms in English.
-Use narrative description, not keyword lists.Output ONLY the enhanced prompt, no explanations.
+[Type A: Stylized/Character]
+"A [Style] illustration of [Subject], featuring [Key Characteristics] and a [Color Palette]. The design features [Line/Shading Style]. Background is [Background Detail]."
+
+[Type B: Photorealistic/Cinematic]
+"A [Shot Type] of [Subject] in [Environment]. Lighting is [Specific Lighting: softbox, golden hour, rim light]. Camera: [Lens/Angle: 85mm, wide-angle, low-angle]. Atmosphere is [Mood]. Textures: [Material Details]."
+
+[Type C: Product/Object]
+"A high-resolution, studio-lit photograph of [Product] on [Surface]. Lighting: [Setup]. Camera: [Angle] to showcase [Feature]. Sharp focus on [Detail]."
+
+ENHANCEMENT CHECKLIST:
+- Shot type (wide-angle, macro, telephoto)
+- Lighting (softbox, cinematic, volumetric, natural)
+- Camera (bokeh, depth of field, shutter speed)
+- Materials (matte, glossy, rough, velvet)
+
+OUTPUT: Enhanced prompt in the user's original language, utilizing English for technical photography/art terms.
+Output ONLY the enhanced prompt, no explanations.
 
 User prompt: "${prompt}"
 `;
