@@ -20,13 +20,26 @@ export const getProxyState = (): boolean => {
 // Default Google API base URL
 const GOOGLE_API_BASE_URL = 'https://generativelanguage.googleapis.com';
 
+/**
+ * Deno Deploy Proxy URL for Network Acceleration
+ * 
+ * This external proxy bypasses Cloudflare's 100-second timeout limit,
+ * enabling long-running image generation requests (2-5 minutes) to complete.
+ * 
+ * Set via environment variable: VITE_PROXY_URL=https://your-project.deno.dev
+ * 
+ * IMPORTANT: After deploying to Deno Deploy, update this URL in:
+ * 1. Local development: .env.local file
+ * 2. Cloudflare Pages: Environment Variables settings
+ */
+const DENO_PROXY_URL = (typeof import.meta !== 'undefined'
+    ? (import.meta as any).env?.VITE_PROXY_URL
+    : undefined) || 'https://clear-ant-68.deno.dev';
+
 // Helper to get the proxy base URL (must be absolute for SDK's URL constructor)
 const getProxyBaseUrl = (): string => {
-    if (typeof window !== 'undefined') {
-        return window.location.origin + '/api';
-    }
-    // Fallback for SSR or non-browser environments (should not happen in this app)
-    return '/api';
+    // Use Deno Deploy proxy (no timeout limit) instead of Cloudflare Functions
+    return DENO_PROXY_URL;
 };
 
 const getAIClient = (userKey?: string) => {
