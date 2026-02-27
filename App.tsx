@@ -66,7 +66,7 @@ type PlaybookDefaults = {
     aspectRatio?: AspectRatio;
     imageStyle?: ImageStyle;
     imageResolution?: ImageResolution;
-    thinkingLevel?: string;
+    thinkingLevel?: ThinkingLevel;
     negativePrompt?: string;
     referenceMode?: string;
 };
@@ -563,7 +563,7 @@ export function App() {
                 aspectRatio: AspectRatio.LANDSCAPE,
                 imageStyle: ImageStyle.NONE,
                 imageResolution: ImageResolution.RES_1K,
-                thinkingLevel: 'Minimal',
+                thinkingLevel: ThinkingLevel.MINIMAL,
                 negativePrompt: ''
             };
             const assistantMode = normalizeAssistantMode(toolArgs.assistant_mode);
@@ -617,7 +617,7 @@ export function App() {
                 ? (resolution as ImageResolution)
                 : (playbookDefaults.imageResolution ?? (effectiveModel === ImageModel.PRO ? ImageResolution.RES_2K : chatDefaults.imageResolution));
             const resolvedThinkingLevel = typeof thinkingLevel === 'string'
-                ? thinkingLevel
+                ? (thinkingLevel.toLowerCase() as ThinkingLevel)
                 : (playbookDefaults.thinkingLevel ?? (effectiveModel === ImageModel.FLASH_3_1 ? chatDefaults.thinkingLevel : undefined));
             const resolvedNegativePrompt = typeof negativePrompt === 'string'
                 ? negativePrompt

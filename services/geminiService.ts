@@ -670,6 +670,7 @@ Rules:
     4. GENERATE: Only call the tool when you have clear understanding
        - Use reference image style EXACTLY unless explicitly asked to change it
        - Include all user-specified elements
+       - When visual grounding is present, strictly follow the visual details and layout found in groundings.
     
     [CRITICAL RULES]
     - Reference images are STYLE GUIDES - preserve their visual style unless told otherwise
@@ -1002,9 +1003,12 @@ export const generateImage = async (
         const now = new Date();
         const dateStr = now.toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric' });
         const dateStrEn = now.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
-        messageConfig.systemInstruction = `Today is ${dateStr} (${dateStrEn}). 
-When searching for products (like iPhone 17), use this date to determine if it is already released. 
-Prioritize actual product specifications and official images over 'leaks' or 'rumors' for released items.`;
+        messageConfig.systemInstruction = `Today is ${dateStr} (${dateStrEn}).
+Use this date as temporal context for all searches — determine whether events have occurred, whether products have been released, or whether information is current.
+STRICT REQUIREMENT: You MUST use the search results (googleSearch) to ground your generation.
+If search results provide images, descriptions, specifications, or factual data about the subject, follow them EXACTLY.
+Prioritize verified, up-to-date information and official visuals found in grounding results over your internal training data.
+When generating images, strictly replicate the visual details, colors, materials, proportions, and layout found in the grounding sources.`;
     }
 
     if (params.aspectRatio || ((isPro || isFlash31) && params.imageResolution)) {
@@ -1012,13 +1016,22 @@ Prioritize actual product specifications and official images over 'leaks' or 'ru
         messageConfig.imageConfig = {
             ...(params.aspectRatio && { aspectRatio: params.aspectRatio }),
             ...((isPro || isFlash31) && params.imageResolution && { imageSize: params.imageResolution }),
-            ...(params.numberOfImages && { count: params.numberOfImages })
+            ...(params.numberOfImages && { numberOfImages: params.numberOfImages })
         };
     }
 
     if ((isPro || isFlash31) && params.useGrounding) {
+        // Use camelCase for SDK compatibility at top level
+        // Official docs specify googleSearch with searchTypes
         messageConfig.tools = isFlash31
-            ? [{ googleSearch: { searchTypes: { webSearch: {}, imageSearch: {} } } }]
+            ? [{
+                googleSearch: {
+                    searchTypes: {
+                        webSearch: {},
+                        imageSearch: {}
+                    }
+                }
+            }]
             : [{ googleSearch: {} }];
     }
 

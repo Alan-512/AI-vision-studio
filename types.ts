@@ -116,8 +116,8 @@ export enum VideoDuration {
 }
 
 export enum ThinkingLevel {
-  MINIMAL = 'Minimal',
-  HIGH = 'High'
+  MINIMAL = 'minimal',
+  HIGH = 'high'
 }
 
 // SearchPolicy: Controls how search is performed when user enables search
