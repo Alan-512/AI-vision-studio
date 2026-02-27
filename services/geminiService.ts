@@ -493,7 +493,14 @@ Rules:
             contents: searchContents,
             config: {
                 systemInstruction: searchInstruction,
-                tools: [{ googleSearch: {} }],
+                tools: [{
+                    googleSearch: isReasoning ? {} : {
+                        searchTypes: {
+                            webSearch: {},
+                            imageSearch: {}
+                        }
+                    }
+                } as any],
                 abortSignal: signal
             }
         });
@@ -970,12 +977,7 @@ export const generateImage = async (
     // Add user's prompt (they describe how to use the images here)
     let mainPrompt = params.prompt;
 
-    // Add time context when search grounding is enabled (helps with time-sensitive queries)
-    if (params.useGrounding) {
-        const now = new Date();
-        const timeContext = `[Current Date: ${now.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}]\n`;
-        mainPrompt = timeContext + mainPrompt;
-    }
+    // [Note: Time context moved to systemInstruction below for better model adherence]
 
     // FIX [SUP-003]: Apply imageStyle to prompt if specified
     if (params.imageStyle && params.imageStyle !== 'None') {
@@ -993,6 +995,17 @@ export const generateImage = async (
     const messageConfig: any = {
         responseModalities: ['TEXT', 'IMAGE']
     };
+
+    // Add time context as systemInstruction when search grounding is enabled
+    // This is more effective than prepending to prompt for influencing search behavior
+    if (params.useGrounding) {
+        const now = new Date();
+        const dateStr = now.toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric' });
+        const dateStrEn = now.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+        messageConfig.systemInstruction = `Today is ${dateStr} (${dateStrEn}). 
+When searching for products (like iPhone 17), use this date to determine if it is already released. 
+Prioritize actual product specifications and official images over 'leaks' or 'rumors' for released items.`;
+    }
 
     if (params.aspectRatio || ((isPro || isFlash31) && params.imageResolution)) {
         // Official JS SDK uses imageConfig (not imageGenerationConfig)
