@@ -24,10 +24,15 @@ export enum AspectRatio {
   THREE_TWOS = '3:2',      // 35mm film ratio
   FOUR_FIFTHS = '4:5',     // Instagram portrait
   FIVE_FOURTHS = '5:4',    // Large format camera
-  ULTRAWIDE = '21:9'       // Cinematic ultrawide
+  ULTRAWIDE = '21:9',      // Cinematic ultrawide
+  ONE_FOURTH = '1:4',
+  FOUR_ONES = '4:1',
+  ONE_EIGHTH = '1:8',
+  EIGHT_ONES = '8:1'
 }
 
 export enum ImageResolution {
+  RES_512 = '512px',
   RES_1K = '1K',
   RES_2K = '2K', // Requires Pro
   RES_4K = '4K'  // Requires Pro
@@ -39,8 +44,8 @@ export enum VideoResolution {
 }
 
 export enum ImageModel {
-  FLASH = 'gemini-2.5-flash-image',
-  PRO = 'gemini-3-pro-image-preview'
+  PRO = 'gemini-3-pro-image-preview',
+  FLASH_3_1 = 'gemini-3.1-flash-image-preview'
 }
 
 export enum VideoModel {
@@ -53,7 +58,7 @@ export enum VideoModel {
 // Text models for general tasks (prompts, descriptions, etc.)
 export enum TextModel {
   FLASH = 'gemini-3-flash-preview',      // Fast, general purpose
-  PRO = 'gemini-3-pro-preview'           // More capable, slower
+  PRO = 'gemini-3.1-pro-preview'           // More capable, slower
 }
 
 export enum AssistantMode {
@@ -108,6 +113,11 @@ export enum VideoDuration {
   SHORT = '4',
   MEDIUM = '6',
   LONG = '8'
+}
+
+export enum ThinkingLevel {
+  MINIMAL = 'Minimal',
+  HIGH = 'High'
 }
 
 // SearchPolicy: Controls how search is performed when user enables search
@@ -171,6 +181,7 @@ export interface GenerationParams {
   numberOfImages?: number; // New: Number of images to generate (1-4)
   useGrounding?: boolean; // New: Use Google Search Grounding (Pro model only)
   searchPolicy?: SearchPolicy; // New: Controls search behavior (llm_only, image_only, both)
+  thinkingLevel?: ThinkingLevel; // New: Controls thinking depth for models that support it (Nano Banana 2)
 
   // --- NEW: UNIFIED VISUAL CONTROL ---
   smartAssets?: SmartAsset[];

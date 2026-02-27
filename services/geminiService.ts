@@ -1,6 +1,6 @@
 
 import { GoogleGenAI, Part, Content, FunctionDeclaration, Type } from "@google/genai";
-import { ChatMessage, AppMode, SmartAsset, GenerationParams, ImageModel, AgentAction, AssetItem, AspectRatio, ImageResolution, TextModel, AssistantMode, SmartAssetRole, SearchProgress } from "../types";
+import { ChatMessage, AppMode, SmartAsset, GenerationParams, ImageModel, AgentAction, AssetItem, AspectRatio, ImageResolution, TextModel, AssistantMode, SmartAssetRole, SearchProgress, ThinkingLevel } from "../types";
 import { createTrackedBlobUrl } from "./storageService";
 
 // Key management
@@ -181,7 +181,7 @@ const generateImageTool: FunctionDeclaration = {
    - Art style: "oil painting", "pencil sketch", "3D render"`
             },
             aspectRatio: { type: Type.STRING, description: 'Aspect ratio. Options: "1:1" (square), "16:9" (landscape), "9:16" (portrait), "4:3", "3:4", "21:9" (ultrawide). Default: "16:9"', enum: Object.values(AspectRatio) },
-            model: { type: Type.STRING, description: 'Image model. Use "gemini-2.5-flash-image" (fast, default) or "gemini-3-pro-image-preview" (pro/high quality).', enum: Object.values(ImageModel) },
+            model: { type: Type.STRING, description: 'Image model. Use "gemini-3.1-flash-image-preview" (nano banana 2) or "gemini-3-pro-image-preview" (pro/high quality).', enum: Object.values(ImageModel) },
             resolution: { type: Type.STRING, description: 'Output resolution. Options: "1K" (default), "2K" (Pro only), "4K" (Pro only).', enum: Object.values(ImageResolution) },
             useGrounding: { type: Type.BOOLEAN, description: 'Use Google Search for factual accuracy (Pro model only). Default: false.' },
             negativePrompt: { type: Type.STRING, description: 'What to EXCLUDE from the image. Use semantic descriptions: "blurry, low quality, distorted faces, anime style" (when user wants realism).' },
@@ -672,12 +672,12 @@ Rules:
     ${searchFacts.length > 0 ? '- MUST use the [RETRIEVED CONTEXT FROM SEARCH] information in your response' : ''}
     
     [GENERATION DEFAULTS - Use these unless user specifies otherwise]
-    - model: "gemini-2.5-flash-image" (fast mode, good quality)
-    - model: "gemini-3-pro-image-preview" (ONLY when user explicitly asks for "pro", "high quality", "专业", "高质量")
-    - aspectRatio: "16:9" (landscape default, or match user's request/reference image)
-    - resolution: "2K" for Pro model (default), "1K" for Flash model; use "4K" only with pro model when user asks for ultra-high resolution
-    - numberOfImages: 1 (unless user asks for multiple)
-    - useGrounding: false (set true only when user needs real-world facts/current events)
+    The user has selected the following settings in their UI. You MUST use these values as your defaults unless the user explicitly requests to change them in their text prompt:
+    - model: "${_params?.imageModel || 'gemini-3.1-flash-image-preview'}"
+    - aspectRatio: "${_params?.aspectRatio || '16:9'}"
+    - resolution: "${_params?.imageResolution || '1K'}"
+    - numberOfImages: ${_params?.numberOfImages || 1}
+    - useGrounding: ${_params?.useGrounding ? 'true' : 'false'}
     
     [REFERENCE MODE SELECTION - Critical for multi-turn editing]
     Choose reference_mode based on user intent:
@@ -928,7 +928,7 @@ export const generateImage = async (
     }
 
     // Add reference images (user describes their usage in prompt)
-    const maxImages = params.imageModel === ImageModel.PRO ? 14 : 3;
+    const maxImages = (params.imageModel === ImageModel.PRO || params.imageModel === ImageModel.FLASH_3_1) ? 14 : 3;
     // Count edit assets against quota
     const usedSlots = (params.editBaseImage ? 1 : 0) + (params.editMask ? 1 : 0);
     const availableSlots = Math.max(0, maxImages - historyImageCount - usedSlots);
@@ -986,20 +986,30 @@ export const generateImage = async (
 
     // Build message config with imageConfig
     const isPro = params.imageModel === ImageModel.PRO;
+    const isFlash31 = params.imageModel === ImageModel.FLASH_3_1;
     const messageConfig: any = {
         responseModalities: ['TEXT', 'IMAGE']
     };
 
-    if (params.aspectRatio || (isPro && params.imageResolution)) {
+    if (params.aspectRatio || ((isPro || isFlash31) && params.imageResolution)) {
         // Official JS SDK uses imageConfig (not imageGenerationConfig)
         messageConfig.imageConfig = {
             ...(params.aspectRatio && { aspectRatio: params.aspectRatio }),
-            ...(isPro && params.imageResolution && { imageSize: params.imageResolution })
+            ...((isPro || isFlash31) && params.imageResolution && { imageSize: params.imageResolution })
         };
     }
 
-    if (isPro && params.useGrounding) {
-        messageConfig.tools = [{ googleSearch: {} }];
+    if ((isPro || isFlash31) && params.useGrounding) {
+        messageConfig.tools = isFlash31
+            ? [{ googleSearch: { searchTypes: { webSearch: {}, imageSearch: {} } } }]
+            : [{ googleSearch: {} }];
+    }
+
+    if (isFlash31) {
+        messageConfig.thinkingConfig = {
+            thinkingLevel: params.thinkingLevel || ThinkingLevel.MINIMAL,
+            includeThoughts: true
+        };
     }
 
     // Send message with unified history + current prompt
@@ -1040,6 +1050,12 @@ export const generateImage = async (
     if (signal.aborted) throw new Error('Cancelled');
 
     // Process response
+    console.log('[GeminiService] Full Response:', response);
+    const groundingMetadata = response.candidates?.[0]?.groundingMetadata;
+    if (groundingMetadata) {
+        console.log('[GeminiService] Grounding Metadata (Search Results):', JSON.stringify(groundingMetadata, null, 2));
+    }
+
     let imageUrl = '';
     const finishReason = String(response.candidates?.[0]?.finishReason || 'UNKNOWN');
     const collectedSignatures: Array<{ partIndex: number; signature: string }> = [];

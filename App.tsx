@@ -26,7 +26,7 @@ const DEFAULT_PARAMS: GenerationParams = {
     savedImagePrompt: '',
     savedVideoPrompt: '',
     aspectRatio: AspectRatio.SQUARE,
-    imageModel: ImageModel.FLASH,
+    imageModel: ImageModel.FLASH_3_1,
     videoModel: VideoModel.VEO_FAST,
     imageStyle: ImageStyle.NONE,
     videoStyle: VideoStyle.NONE,
@@ -58,8 +58,8 @@ const getAudioContext = () => {
 
 // Helper: Sanitize Image Model
 const sanitizeImageModel = (model: string | undefined): ImageModel => {
-    if (model === ImageModel.PRO || model === ImageModel.FLASH) return model;
-    return ImageModel.FLASH;
+    if (model === ImageModel.PRO || model === ImageModel.FLASH_3_1) return model;
+    return ImageModel.FLASH_3_1;
 };
 
 type PlaybookDefaults = {
@@ -596,8 +596,8 @@ export function App() {
                 // AI explicitly selected a valid model
                 effectiveModel = aiModel as ImageModel;
             } else {
-                // Default to Flash
-                effectiveModel = ImageModel.FLASH;
+                // Default to Flash 3.1
+                effectiveModel = ImageModel.FLASH_3_1;
             }
             // LLM_ONLY: LLM already handled search, so image model never uses grounding
             effectiveGrounding = false;
@@ -631,7 +631,7 @@ export function App() {
                 aspectRatio: resolvedAspectRatio,
                 imageModel: effectiveModel,
                 imageStyle: resolvedStyle,
-                // Default resolution based on model: Pro=2K, Flash=1K (Flash only supports 1K)
+                // Default resolution based on model: Pro=2K, Flash 3.1=1K by default but supports 4K natively
                 imageResolution: resolvedResolution,
                 negativePrompt: resolvedNegativePrompt,
                 numberOfImages: resolvedNumberOfImages,

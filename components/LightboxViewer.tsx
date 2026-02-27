@@ -36,7 +36,7 @@ export const LightboxViewer: React.FC<LightboxViewerProps> = ({ asset, onClose, 
 
   const getModelLabel = (modelId: string | undefined) => {
     if (!modelId) return '';
-    if (modelId === ImageModel.FLASH) return t('model.flash');
+    if (modelId === ImageModel.FLASH_3_1) return 'Nano Banana 2';
     if (modelId === ImageModel.PRO) return t('model.pro');
     if (modelId === VideoModel.VEO_FAST) return t('model.veo_fast');
     if (modelId === VideoModel.VEO_HQ) return t('model.veo_hq');

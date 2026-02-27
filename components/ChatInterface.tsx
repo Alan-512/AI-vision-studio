@@ -379,8 +379,12 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
     } else {
       // Auto mode: use AI's choices but ensure valid model value
       const validModels = Object.values(ImageModel);
+      if (finalArgs.model && !validModels.includes(finalArgs.model)) {
+        console.warn(`[ChatInterface] Validated invalid model: ${finalArgs.model}, keeping current`);
+        finalArgs = { ...finalArgs, model: params.imageModel };
+      }
       if (!validModels.includes(finalArgs.model)) {
-        finalArgs = { ...finalArgs, model: ImageModel.FLASH };
+        finalArgs = { ...finalArgs, model: ImageModel.FLASH_3_1 };
       }
     }
 
@@ -395,7 +399,10 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
     try {
       console.log('[Agent] Setting pending action (will auto-execute)');
       // Show tool call status in UI (collapsed by default)
-      const modelName = finalArgs.model === ImageModel.PRO ? 'Nano Banana Pro' : 'Nano Banana';
+      let modelNameStr = 'Nano Banana 2';
+      if (finalArgs.model === ImageModel.PRO) modelNameStr = 'Nano Banana Pro';
+      if (finalArgs.model === ImageModel.FLASH_3_1) modelNameStr = 'Nano Banana 2';
+      const modelName = modelNameStr;
       setToolCallStatus({
         isActive: true,
         toolName: 'generate_image',
@@ -752,10 +759,15 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                             <button onClick={() => setParams(prev => ({ ...prev, isAutoMode: !prev.isAutoMode }))} className={`w-8 h-4 rounded-full transition-colors relative flex items-center shrink-0 ${isAutoMode ? 'bg-brand-500' : 'bg-gray-700'}`}><div className={`w-3 h-3 bg-white rounded-full shadow-sm transition-all absolute ${isAutoMode ? 'translate-x-[18px]' : 'translate-x-[2px]'}`} /></button>
                           </div>
                           <div className={`space-y-4 transition-opacity ${isAutoMode ? 'opacity-50 pointer-events-none' : ''}`}>
-                            <div className="space-y-1.5"><label className="text-[10px] text-gray-400 font-bold flex items-center gap-1"><Bot size={10} /> {t('lbl.model').toUpperCase()}</label><select value={mode === AppMode.IMAGE ? params.imageModel : params.videoModel} onChange={(e) => setParams(prev => mode === AppMode.IMAGE ? ({ ...prev, imageModel: e.target.value as ImageModel }) : ({ ...prev, videoModel: e.target.value as VideoModel }))} className="w-full bg-dark-bg border border-dark-border rounded-lg px-2 py-1.5 text-xs text-white">{mode === AppMode.IMAGE ? (<><option value={ImageModel.FLASH}>{t('model.flash')}</option><option value={ImageModel.PRO}>{t('model.pro')}</option></>) : (<><option value={VideoModel.VEO_FAST}>{t('model.veo_fast')}</option><option value={VideoModel.VEO_HQ}>{t('model.veo_hq')}</option></>)}</select></div>
+                            <div className="space-y-1.5"><label className="text-[10px] text-gray-400 font-bold flex items-center gap-1"><Bot size={10} /> {t('lbl.model').toUpperCase()}</label><select value={mode === AppMode.IMAGE ? params.imageModel : params.videoModel} onChange={(e) => setParams(prev => mode === AppMode.IMAGE ? ({ ...prev, imageModel: e.target.value as ImageModel }) : ({ ...prev, videoModel: e.target.value as VideoModel }))} className="w-full bg-dark-bg border border-dark-border rounded-lg px-2 py-1.5 text-xs text-white">{mode === AppMode.IMAGE ? (<><option value={ImageModel.FLASH_3_1}>Nano Banana 2</option><option value={ImageModel.PRO}>{t('model.pro')}</option></>) : (<><option value={VideoModel.VEO_FAST}>{t('model.veo_fast')}</option><option value={VideoModel.VEO_HQ}>{t('model.veo_hq')}</option></>)}</select></div>
                             <div className="space-y-1.5"><label className="text-[10px] text-gray-400 font-bold flex items-center gap-1"><Crop size={10} /> {t('lbl.aspect_ratio').toUpperCase()}</label><select value={params.aspectRatio} onChange={(e) => setParams(prev => ({ ...prev, aspectRatio: e.target.value as AspectRatio }))} className="w-full bg-dark-bg border border-dark-border rounded-lg px-2 py-1.5 text-xs text-white">{Object.values(AspectRatio).map(ratio => (<option key={ratio} value={ratio}>{getRatioLabel(ratio)}</option>))}</select></div>
                             <div className="space-y-1.5"><label className="text-[10px] text-gray-400 font-bold flex items-center gap-1"><Palette size={10} /> {t('lbl.style').toUpperCase()}</label><select value={mode === AppMode.IMAGE ? params.imageStyle : params.videoStyle} onChange={(e) => setParams(prev => mode === AppMode.IMAGE ? ({ ...prev, imageStyle: e.target.value as ImageStyle }) : ({ ...prev, videoStyle: e.target.value as VideoStyle }))} className="w-full bg-dark-bg border border-dark-border rounded-lg px-2 py-1.5 text-xs text-white">{mode === AppMode.IMAGE ? Object.entries(ImageStyle).map(([k, v]) => <option key={k} value={v}>{t(`style.${k}` as any) || v}</option>) : Object.entries(VideoStyle).map(([k, v]) => <option key={k} value={v}>{t(`style.${k}` as any) || v}</option>)}</select></div>
-                            <div className="space-y-1.5"><label className="text-[10px] text-gray-400 font-bold flex items-center gap-1"><MonitorPlay size={10} /> {t('lbl.resolution').toUpperCase()}</label><select value={mode === AppMode.IMAGE ? params.imageResolution : params.videoResolution} onChange={(e) => setParams(prev => mode === AppMode.IMAGE ? ({ ...prev, imageResolution: e.target.value as ImageResolution }) : ({ ...prev, videoResolution: e.target.value as VideoResolution }))} className="w-full bg-dark-bg border border-dark-border rounded-lg px-2 py-1.5 text-xs text-white">{mode === AppMode.IMAGE ? (<><option value={ImageResolution.RES_1K}>1K</option><option value={ImageResolution.RES_2K}>2K (Pro)</option><option value={ImageResolution.RES_4K}>4K (Pro)</option></>) : (<><option value={VideoResolution.RES_720P}>720p</option><option value={VideoResolution.RES_1080P}>1080p</option></>)}</select></div>
+                            <div className="space-y-1.5"><label className="text-[10px] text-gray-400 font-bold flex items-center gap-1"><MonitorPlay size={10} /> {t('lbl.resolution').toUpperCase()}</label><select value={mode === AppMode.IMAGE ? params.imageResolution : params.videoResolution} onChange={(e) => setParams(prev => mode === AppMode.IMAGE ? ({ ...prev, imageResolution: e.target.value as ImageResolution }) : ({ ...prev, videoResolution: e.target.value as VideoResolution }))} className="w-full bg-dark-bg border border-dark-border rounded-lg px-2 py-1.5 text-xs text-white">{mode === AppMode.IMAGE ? (<>
+                              {params.imageModel === ImageModel.FLASH_3_1 && <option value={ImageResolution.RES_512}>0.5K (512px)</option>}
+                              <option value={ImageResolution.RES_1K}>1K</option>
+                              <option value={ImageResolution.RES_2K}>2K</option>
+                              <option value={ImageResolution.RES_4K}>4K</option>
+                            </>) : (<><option value={VideoResolution.RES_720P}>720p</option><option value={VideoResolution.RES_1080P}>1080p</option></>)}</select></div>
                           </div>
                         </div>
                       </div>
@@ -770,7 +782,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                   {showModelSelector && (
                     <div className="model-popover absolute bottom-12 right-0 w-56 bg-dark-surface border border-dark-border rounded-xl shadow-xl p-1 z-50 animate-in slide-in-from-bottom-2 fade-in">
                       <button onClick={() => { setSelectedModel(TextModel.FLASH); setShowModelSelector(false); }} className={`w-full flex items-center gap-3 p-2 rounded-lg text-left transition-colors ${selectedModel === TextModel.FLASH ? 'bg-white/10 text-white' : 'text-gray-400 hover:text-gray-200 hover:bg-white/5'}`}><Zap size={16} className="text-yellow-400" /><div><div className="text-xs font-bold">Flash</div><div className="text-[10px] opacity-70">Gemini 3 Flash</div></div>{selectedModel === TextModel.FLASH && <Check size={14} className="ml-auto" />}</button>
-                      <button onClick={() => { setSelectedModel(TextModel.PRO); setShowModelSelector(false); }} className={`w-full flex items-center gap-3 p-2 rounded-lg text-left transition-colors ${selectedModel === TextModel.PRO ? 'bg-white/10 text-white' : 'text-gray-400 hover:text-gray-200 hover:bg-white/5'}`}><BrainCircuit size={16} className="text-purple-400" /><div><div className="text-xs font-bold">Thinking</div><div className="text-[10px] opacity-70">Gemini 3 Pro</div></div>{selectedModel === TextModel.PRO && <Check size={14} className="ml-auto" />}</button>
+                      <button onClick={() => { setSelectedModel(TextModel.PRO); setShowModelSelector(false); }} className={`w-full flex items-center gap-3 p-2 rounded-lg text-left transition-colors ${selectedModel === TextModel.PRO ? 'bg-white/10 text-white' : 'text-gray-400 hover:text-gray-200 hover:bg-white/5'}`}><BrainCircuit size={16} className="text-purple-400" /><div><div className="text-xs font-bold">Thinking</div><div className="text-[10px] opacity-70">Gemini 3.1 Pro</div></div>{selectedModel === TextModel.PRO && <Check size={14} className="ml-auto" />}</button>
                     </div>
                   )}
                 </div>

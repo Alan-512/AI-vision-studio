@@ -83,20 +83,17 @@ export const createInitialAgentState = (): AgentState => ({
 export class AgentStateMachine {
     private state: AgentState;
     private onStateChange?: (state: AgentState) => void;
-    private onRequestConfirmation?: (action: PendingAction) => Promise<'confirm' | 'reject' | 'modify'>;
     private onExecuteAction?: (action: PendingAction) => Promise<any>;
 
     constructor(
         initialState?: AgentState,
         callbacks?: {
             onStateChange?: (state: AgentState) => void;
-            onRequestConfirmation?: (action: PendingAction) => Promise<'confirm' | 'reject' | 'modify'>;
             onExecuteAction?: (action: PendingAction) => Promise<any>;
         }
     ) {
         this.state = initialState || createInitialAgentState();
         this.onStateChange = callbacks?.onStateChange;
-        this.onRequestConfirmation = callbacks?.onRequestConfirmation;
         this.onExecuteAction = callbacks?.onExecuteAction;
     }
 

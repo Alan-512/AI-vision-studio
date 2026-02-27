@@ -1,6 +1,6 @@
 
 import React, { useRef, useState, useEffect } from 'react';
-import { AppMode, AspectRatio, GenerationParams, ImageResolution, VideoResolution, ImageModel, VideoModel, ImageStyle, VideoStyle, VideoDuration, ChatMessage, AssetItem, SmartAsset, APP_LIMITS, AgentAction, SmartAssetRole } from '../types';
+import { AppMode, AspectRatio, GenerationParams, ImageResolution, VideoResolution, ImageModel, VideoModel, ImageStyle, VideoStyle, VideoDuration, ChatMessage, AssetItem, SmartAsset, APP_LIMITS, AgentAction, SmartAssetRole, ThinkingLevel } from '../types';
 import { Settings2, Sparkles, Image as ImageIcon, Video as VideoIcon, X, Palette, MessageSquare, Layers, ChevronDown, ChevronUp, SlidersHorizontal, Monitor, Eye, Lock, ScanFace, Frame, ArrowRight, Loader2, Clock, BookTemplate, Clapperboard, XCircle, Search, Briefcase } from 'lucide-react';
 import { ChatInterface } from './ChatInterface';
 import { extractPromptFromHistory, optimizePrompt, describeImage } from '../services/geminiService';
@@ -193,7 +193,7 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
   const smartAssetInputRef = useRef<HTMLInputElement>(null);
 
   // Model-specific reference image limit
-  const getMaxSmartAssets = () => params.imageModel === ImageModel.PRO ? 14 : 3;
+  const getMaxSmartAssets = () => (params.imageModel === ImageModel.PRO || params.imageModel === ImageModel.FLASH_3_1) ? 14 : 3;
 
   // Timer State
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
@@ -285,19 +285,21 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
     }
   }, [mode, params.inputVideoUri, params.videoStyleReferences, params.videoResolution, params.videoDuration, params.aspectRatio]);
 
-  // Enforce valid Resolution for Image Flash Model
+  // Enforce valid Resolution for Image Models
   useEffect(() => {
-    if (mode === AppMode.IMAGE && params.imageModel === ImageModel.FLASH) {
-      if (params.imageResolution !== ImageResolution.RES_1K) {
-        setParams(prev => ({ ...prev, imageResolution: ImageResolution.RES_1K }));
+    if (mode === AppMode.IMAGE) {
+      if (params.imageModel === ImageModel.PRO || params.imageModel === ImageModel.FLASH_3_1) {
+        // Both support all resolutions
+        return;
       }
+      // If we ever add older models that only support 1K, enforce it here
     }
   }, [mode, params.imageModel, params.imageResolution, setParams]);
 
   const handleToggleSearch = () => {
     setParams(prev => {
       const nextState = !prev.useGrounding;
-      if (nextState && prev.imageModel !== ImageModel.PRO) {
+      if (nextState && prev.imageModel !== ImageModel.PRO && prev.imageModel !== ImageModel.FLASH_3_1) {
         return { ...prev, useGrounding: true, imageModel: ImageModel.PRO, imageResolution: ImageResolution.RES_2K };
       }
       return { ...prev, useGrounding: nextState };
@@ -310,8 +312,11 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
       if (newModel === ImageModel.PRO && prev.imageResolution === ImageResolution.RES_1K) {
         updates.imageResolution = ImageResolution.RES_2K;
       }
-      if (newModel === ImageModel.FLASH && prev.useGrounding) {
-        updates.useGrounding = false;
+      if (newModel === ImageModel.FLASH_3_1 && prev.imageResolution !== ImageResolution.RES_1K && prev.imageResolution !== ImageResolution.RES_512) {
+        updates.imageResolution = ImageResolution.RES_1K;
+      }
+      if (newModel !== ImageModel.FLASH_3_1 && [AspectRatio.ONE_FOURTH, AspectRatio.FOUR_ONES, AspectRatio.ONE_EIGHTH, AspectRatio.EIGHT_ONES].includes(prev.aspectRatio)) {
+        updates.aspectRatio = AspectRatio.SQUARE;
       }
       return { ...prev, ...updates };
     });
@@ -416,7 +421,7 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
       const currentCount = params.smartAssets?.length || 0;
       const maxAllowed = getMaxSmartAssets();
       if (currentCount + files.length > maxAllowed) {
-        alert(`${params.imageModel === ImageModel.PRO ? 'Pro' : 'Flash'} 模型最多支持 ${maxAllowed} 张参考图，当前已有 ${currentCount} 张`);
+        alert(`${params.imageModel === ImageModel.PRO || params.imageModel === ImageModel.FLASH_3_1 ? 'Pro / Nano Banana 2' : 'Flash'} 模型最多支持 ${maxAllowed} 张参考图，当前已有 ${currentCount} 张`);
         return;
       }
     }
@@ -517,7 +522,7 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
           if (target === 'smart') {
             const maxAllowed = getMaxSmartAssets();
             if ((params.smartAssets?.length || 0) >= maxAllowed) {
-              alert(`${params.imageModel === ImageModel.PRO ? 'Pro' : 'Flash'} 模型最多支持 ${maxAllowed} 张参考图`);
+              alert(`${params.imageModel === ImageModel.PRO || params.imageModel === ImageModel.FLASH_3_1 ? 'Pro / Nano Banana 2' : 'Flash'} 模型最多支持 ${maxAllowed} 张参考图`);
               return;
             }
             setParams(prev => ({ ...prev, smartAssets: [...(prev.smartAssets || []), { id: crypto.randomUUID(), data, mimeType, role: DEFAULT_SMART_ASSET_ROLE }] }));
@@ -531,7 +536,7 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
         if (target === 'smart') {
           const maxAllowed = getMaxSmartAssets();
           if ((params.smartAssets?.length || 0) + files.length > maxAllowed) {
-            alert(`${params.imageModel === ImageModel.PRO ? 'Pro' : 'Flash'} 模型最多支持 ${maxAllowed} 张参考图`);
+            alert(`${params.imageModel === ImageModel.PRO || params.imageModel === ImageModel.FLASH_3_1 ? 'Pro / Nano Banana 2' : 'Flash'} 模型最多支持 ${maxAllowed} 张参考图`);
             return;
           }
         }
@@ -579,6 +584,10 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
       case AspectRatio.FOUR_FIFTHS: width = 16; height = 20; break;
       case AspectRatio.FIVE_FOURTHS: width = 20; height = 16; break;
       case AspectRatio.ULTRAWIDE: width = 28; height = 12; break;
+      case AspectRatio.ONE_FOURTH: width = 10; height = 28; break;
+      case AspectRatio.FOUR_ONES: width = 28; height = 10; break;
+      case AspectRatio.ONE_EIGHTH: width = 6; height = 28; break;
+      case AspectRatio.EIGHT_ONES: width = 28; height = 6; break;
     }
     const isSelected = params.aspectRatio === ratio;
     return (
@@ -592,7 +601,15 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
   const isVideoGenerating = mode === AppMode.VIDEO && isGenerating;
   const isCoolingDown = cooldownRemaining > 0;
   const isBtnDisabled = (activeTab === 'studio' ? !params.prompt.trim() : (chatHistory.length === 0 || isAnalyzing)) || isVideoGenerating || isCoolingDown;
-  const displayedRatios = mode === AppMode.VIDEO ? [AspectRatio.LANDSCAPE, AspectRatio.PORTRAIT] : Object.values(AspectRatio);
+
+  const displayedRatios = mode === AppMode.VIDEO
+    ? [AspectRatio.LANDSCAPE, AspectRatio.PORTRAIT]
+    : Object.values(AspectRatio).filter(ratio => {
+      if (params.imageModel === ImageModel.FLASH_3_1) return true;
+      // Exclude Nano Banana 2 exclusive ratios
+      return ![AspectRatio.ONE_FOURTH, AspectRatio.FOUR_ONES, AspectRatio.ONE_EIGHTH, AspectRatio.EIGHT_ONES].includes(ratio);
+    });
+
   const isVeoHQ = params.videoModel === VideoModel.VEO_HQ;
   const isVideoExtension = !!params.inputVideoUri;
   const hasRefImages = (params.videoStyleReferences?.length || 0) > 0;
@@ -655,7 +672,7 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
                   onChange={(e) => handleModelChange(e.target.value as ImageModel)}
                   className="w-full bg-dark-surface border border-dark-border rounded-xl px-4 py-3 text-sm text-white appearance-none focus:border-brand-500 focus:outline-none transition-colors"
                 >
-                  <option value={ImageModel.FLASH}>{t('model.flash')}</option>
+                  <option value={ImageModel.FLASH_3_1}>Nano Banana 2</option>
                   <option value={ImageModel.PRO}>{t('model.pro')}</option>
                 </select>
               ) : (
@@ -667,7 +684,7 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
               <Settings2 className="absolute right-3 top-3.5 text-gray-500 pointer-events-none" size={16} />
             </div>
 
-            {mode === AppMode.IMAGE && params.imageModel === ImageModel.PRO && (
+            {(mode === AppMode.IMAGE && (params.imageModel === ImageModel.PRO || params.imageModel === ImageModel.FLASH_3_1)) && (
               <div className={`flex flex-col gap-2 p-3 bg-dark-surface border border-dark-border rounded-xl animate-in fade-in slide-in-from-top-2 transition-colors ${params.useGrounding ? 'border-brand-500/30 bg-brand-500/5' : ''}`}>
                 <div className="flex items-center justify-between gap-3">
                   <div className="flex flex-col flex-1 min-w-0">
@@ -1007,9 +1024,16 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
             <div className={`grid gap-4 ${mode === AppMode.IMAGE ? 'grid-cols-2' : 'grid-cols-1'}`}>
               <div className="space-y-2">
                 <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">{t('lbl.resolution')}</label>
-                <div className={`relative ${(hasRefImages || isVideoExtension) ? 'opacity-50 pointer-events-none' : ''}`}>
+                <div className={`relative ${((mode === AppMode.VIDEO && (hasRefImages || isVideoExtension))) ? 'opacity-50 pointer-events-none' : ''}`}>
                   <select value={mode === AppMode.IMAGE ? params.imageResolution : params.videoResolution} onChange={(e) => setParams(prev => mode === AppMode.IMAGE ? ({ ...prev, imageResolution: e.target.value as ImageResolution }) : ({ ...prev, videoResolution: e.target.value as VideoResolution }))} className="w-full bg-dark-surface border border-dark-border rounded-lg px-3 py-2 text-xs text-white appearance-none focus:border-brand-500 focus:outline-none">
-                    {mode === AppMode.IMAGE ? (<><option value={ImageResolution.RES_1K}>1K</option><option value={ImageResolution.RES_2K} disabled={params.imageModel === ImageModel.FLASH}>2K (Pro)</option><option value={ImageResolution.RES_4K} disabled={params.imageModel === ImageModel.FLASH}>4K (Pro)</option></>) : (
+                    {mode === AppMode.IMAGE ? (
+                      <>
+                        {params.imageModel === ImageModel.FLASH_3_1 && <option value={ImageResolution.RES_512}>512px (0.5K)</option>}
+                        <option value={ImageResolution.RES_1K}>1K</option>
+                        <option value={ImageResolution.RES_2K}>2K</option>
+                        <option value={ImageResolution.RES_4K}>4K</option>
+                      </>
+                    ) : (
                       <>
                         <option value={VideoResolution.RES_720P}>720p HD</option>
                         <option value={VideoResolution.RES_1080P} disabled={params.videoDuration !== VideoDuration.LONG}>1080p FHD (Requires 8s)</option>
@@ -1029,6 +1053,24 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
                 </div>
               )}
             </div>
+
+            {/* Thinking Depth (NB2 only) */}
+            {mode === AppMode.IMAGE && params.imageModel === ImageModel.FLASH_3_1 && (
+              <div className="space-y-2 mt-4">
+                <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">{t('lbl.thinking')}</label>
+                <div className="grid grid-cols-2 gap-2">
+                  {[ThinkingLevel.MINIMAL, ThinkingLevel.HIGH].map(level => (
+                    <button
+                      key={level}
+                      onClick={() => setParams(prev => ({ ...prev, thinkingLevel: level }))}
+                      className={`py-2 rounded-lg border text-[10px] font-medium transition-all ${(params.thinkingLevel || ThinkingLevel.MINIMAL) === level ? 'border-brand-500 bg-brand-500/20 text-brand-400' : 'border-dark-border bg-dark-surface text-gray-500 hover:border-gray-500'}`}
+                    >
+                      {t(`thinking.${level.toLowerCase()}` as any)}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="pb-6" />

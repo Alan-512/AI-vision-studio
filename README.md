@@ -4,7 +4,7 @@
 
 **[English](README.md)** | [中文](README_zh.md)
 
-A next-generation AI Vision Studio powered by **Google Gemini 3** (Flash/Pro) and **Veo** models.  
+A next-generation AI Vision Studio powered by **Google Gemini 3.1** (Flash/Pro) and **Veo** models.  
 **Create, Edit, and Animate** with a professional, agentic workflow.
 
 [Online Demo (Coming Soon)] • [Report Bug] • [Request Feature]
@@ -14,9 +14,10 @@ A next-generation AI Vision Studio powered by **Google Gemini 3** (Flash/Pro) an
 ## ✨ Features
 
 ### 🎨 Advanced Image Generation
-- **Powered by Gemini Models**: Support for `gemini-2.5-flash-image` (Nano Banana) and `gemini-3-pro-image-preview` (Nano Banana Pro).
-- **Pro-Level Controls**: Fine-tune Aspect Ratio, Style, Resolution (up to 4K), and Negative Prompts.
-- **Smart Assets**: Upload reference images to control **Identity (Character)**, **Structure (Pose/Layout)**, and **Style (Vibe)** independently.
+- **Powered by Gemini 3.1**: Support for `gemini-3.1-flash-image-preview` (Nano Banana 2) and `gemini-3-pro-image-preview` (Nano Banana Pro).
+- **Pro-Level Controls**: Fine-tune Aspect Ratio (including 1:4, 1:8, etc.), Style, Resolution (0.5K, 1K, 2K, 4K), and Negative Prompts.
+- **Smart Assets**: Support for up to 14 reference images (NB2) to control **Identity (Character)**, **Structure (Pose/Layout)**, and **Style (Vibe)**.
+- **Grounding**: Built-in Google Search grounding for accurate real-world visual generation (NB2).
 
 ### 🎥 Cinematic Video Creation
 - **Veo Model Integration**: Generate high-quality videos using Google's latest `Veo` model (`veo-3.1`).
@@ -24,9 +25,9 @@ A next-generation AI Vision Studio powered by **Google Gemini 3** (Flash/Pro) an
 - **Keyframe & Reference Control**: Use images to guide the start/end frames or lock character consistency in videos.
 
 ### 🤖 Deep Agent Assistant
-- **Thinking Process**: The AI Assistant doesn't just reply; it *thinks*, plans, and executes complex workflows.
+- **Thinking Process**: Powered by **Gemini 3.1 Pro** (`gemini-3.1-pro-preview`). The AI Assistant doesn't just reply; it *thinks*, plans, and executes complex workflows.
 - **Autonomous Control**: The Agent can autonomously control the studio interface, changing models, parameters, and initiating generation based on natural language requests.
-- **Refinement**: Ask the agent to "Make it more cinematic" or "Fix the hands," and it will adjust prompts and settings for you.
+- **Auto-Selection**: Intelligent model selection logic that ensures the best output for your specific prompt.
 
 ### 🖌️ Editor & Inpainting
 - **Canvas Editor**: Integrated editor for masking and inpainting.

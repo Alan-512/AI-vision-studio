@@ -128,9 +128,9 @@ const generateEraserCursor = (size: number, scale: number = 1): string => {
 
 // Resolution options based on model
 // Resolution options based on model
-const RESOLUTION_OPTIONS: Record<string, ImageResolution[]> = {
-  [ImageModel.FLASH]: [ImageResolution.RES_1K],
-  [ImageModel.PRO]: [ImageResolution.RES_1K, ImageResolution.RES_2K, ImageResolution.RES_4K]
+const MODEL_RESOLUTIONS: Record<ImageModel, ImageResolution[]> = {
+  [ImageModel.PRO]: [ImageResolution.RES_1K, ImageResolution.RES_2K, ImageResolution.RES_4K],
+  [ImageModel.FLASH_3_1]: [ImageResolution.RES_512, ImageResolution.RES_1K, ImageResolution.RES_2K, ImageResolution.RES_4K]
 };
 
 export const CanvasEditor: React.FC<CanvasEditorProps> = ({
@@ -172,7 +172,6 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
   const [brushSize, setBrushSize] = useState(40);
   const [brushColor, setBrushColor] = useState('#ef4444'); // Region color (UI only)
   const [textSize, setTextSize] = useState(22);
-  const [textSizeInput, setTextSizeInput] = useState('22');
 
   // State
   const [isDrawing, setIsDrawing] = useState(false);
@@ -239,45 +238,6 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
     }
   };
 
-  const clampTextSize = (value: number) => Math.min(96, Math.max(12, Math.round(value)));
-
-  const applyTextSize = (value: number) => {
-    const nextValue = clampTextSize(value);
-    setTextSize(nextValue);
-    if (activeTool !== 'text') return;
-    const annotationCanvas = annotationCanvasRef.current;
-    const annotationCtx = annotationCanvas?.getContext('2d');
-    const scaleFactor = annotationCtx ? Math.max(1, getDynamicScaleFactor(annotationCtx)) : 1;
-    const nextFontSize = Math.round(nextValue * scaleFactor);
-
-    if (textEntry) {
-      const layout = annotationCtx
-        ? getTextLayout(annotationCtx, textEntry.value, nextFontSize, textEntry.width)
-        : null;
-      setTextEntry(prev => prev
-        ? {
-          ...prev,
-          fontSize: nextFontSize,
-          height: Math.max(prev.height, layout?.height ?? prev.height)
-        }
-        : prev);
-    }
-
-    if (selectedTextId && (!textEntry || textEntry.id !== selectedTextId)) {
-      const next = textAnnotations.map(item => {
-        if (item.id !== selectedTextId) return item;
-        const layout = annotationCtx ? getTextLayout(annotationCtx, item.text, nextFontSize, item.width) : null;
-        return {
-          ...item,
-          fontSize: nextFontSize,
-          height: Math.max(item.height, layout?.height ?? item.height)
-        };
-      });
-      setTextAnnotations(next);
-      saveState(nextLabelIndex, regions, activeRegionId ?? null, next);
-    }
-  };
-
   const stopEntryResize = () => {
     setIsResizingEntry(false);
     entryResizeStartRef.current = null;
@@ -294,10 +254,6 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
       textFocusRef.current = false;
     }
   }, [textEntry]);
-
-  useEffect(() => {
-    setTextSizeInput(String(textSize));
-  }, [textSize]);
 
   useEffect(() => {
     if (activeTool !== 'text' && textEntry) {
@@ -1717,14 +1673,20 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
                         onChange={(e) => {
                           const model = e.target.value as ImageModel;
                           setSelectedModel(model);
-                          // Reset resolution if switching to Flash
-                          if (model === ImageModel.FLASH) {
-                            setSelectedResolution(ImageResolution.RES_1K);
+                          // Auto correct resolution if incompatible
+                          if (model === ImageModel.FLASH_3_1) {
+                            if (!MODEL_RESOLUTIONS[model].includes(selectedResolution)) {
+                              setSelectedResolution(ImageResolution.RES_1K);
+                            }
+                          } else if (model === ImageModel.PRO) {
+                            if (!MODEL_RESOLUTIONS[model].includes(selectedResolution)) {
+                              setSelectedResolution(ImageResolution.RES_2K);
+                            }
                           }
                         }}
                         className="w-full bg-dark-bg border border-dark-border rounded-xl px-4 py-2.5 text-sm text-white appearance-none focus:border-brand-500 focus:outline-none transition-colors"
                       >
-                        <option value={ImageModel.FLASH}>Nano Banana</option>
+                        <option value={ImageModel.FLASH_3_1}>Nano Banana 2</option>
                         <option value={ImageModel.PRO}>Nano Banana Pro</option>
                       </select>
                       <ChevronDown className="absolute right-3 top-3 text-gray-500 pointer-events-none" size={16} />
@@ -1757,10 +1719,9 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
                       <select
                         value={selectedResolution}
                         onChange={(e) => setSelectedResolution(e.target.value as ImageResolution)}
-                        className="w-full bg-dark-bg border border-dark-border rounded-xl px-4 py-2.5 text-sm text-white appearance-none focus:border-brand-500 focus:outline-none transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                        disabled={selectedModel === ImageModel.FLASH}
+                        className="w-full bg-dark-bg border border-dark-border rounded-xl px-4 py-2.5 text-sm text-white appearance-none focus:border-brand-500 focus:outline-none transition-colors"
                       >
-                        {(RESOLUTION_OPTIONS[selectedModel] || [ImageResolution.RES_1K, ImageResolution.RES_2K]).map(res => (
+                        {(MODEL_RESOLUTIONS[selectedModel] || [ImageResolution.RES_1K, ImageResolution.RES_2K]).map(res => (
                           <option key={res} value={res}>{res}</option>
                         ))}
                       </select>

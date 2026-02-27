@@ -1,7 +1,7 @@
 
 import React from 'react';
-import { AssetItem, ImageModel, VideoModel } from '../types';
-import { Download, ZoomIn, RefreshCcw, Trash2, MessageSquarePlus, Star, Check, RotateCcw, X, Loader2, AlertCircle, Sparkles, Bookmark } from 'lucide-react';
+import { AssetItem } from '../types';
+import { Download, Trash2, Star, Check, RotateCcw, Loader2, AlertCircle, Sparkles, Bookmark } from 'lucide-react';
 import { useLanguage } from '../contexts/LanguageContext';
 
 interface AssetCardProps {
@@ -25,9 +25,7 @@ interface AssetCardProps {
 export const AssetCard: React.FC<AssetCardProps> = ({
   asset,
   onClick,
-  onUseAsReference,
   onDelete,
-  onAddToChat,
   onToggleFavorite,
   isSelectionMode,
   isSelected,
@@ -88,19 +86,9 @@ export const AssetCard: React.FC<AssetCardProps> = ({
     }
   };
 
-  const handleUseRef = (e: React.MouseEvent) => {
-    e.stopPropagation(); e.preventDefault();
-    if (onUseAsReference) onUseAsReference(asset);
-  };
-
   const handleDelete = (e: React.MouseEvent) => {
     e.stopPropagation(); e.preventDefault();
     if (onDelete) onDelete();
-  };
-
-  const handleAddToChat = (e: React.MouseEvent) => {
-    e.stopPropagation(); e.preventDefault();
-    if (onAddToChat) onAddToChat(asset);
   };
 
   const handleFavorite = (e: React.MouseEvent) => {
