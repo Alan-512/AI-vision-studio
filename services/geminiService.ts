@@ -212,7 +212,8 @@ const generateImageTool: FunctionDeclaration = {
 Default: NONE for new generations, USER_UPLOADED_ONLY when regenerating.`,
                 enum: ['NONE', 'USER_UPLOADED_ONLY', 'LAST_GENERATED', 'ALL_USER_UPLOADED', 'LAST_N']
             },
-            reference_count: { type: Type.NUMBER, description: 'Only for LAST_N mode: how many recent images to use. Default: 1.' }
+            reference_count: { type: Type.NUMBER, description: 'Only for LAST_N mode: how many recent images to use. Default: 1.' },
+            thinkingLevel: { type: Type.STRING, description: 'Thinking depth for Gemini 3.1 Flash Image. Options: "Minimal" (speed), "High" (quality). Default: "Minimal".', enum: Object.values(ThinkingLevel) }
         },
         required: [
             'prompt',
@@ -224,7 +225,8 @@ Default: NONE for new generations, USER_UPLOADED_ONLY when regenerating.`,
             'negativePrompt',
             'assistant_mode',
             'reference_mode',
-            'reference_count'
+            'reference_count',
+            'thinkingLevel'
         ]
     }
 };
@@ -678,6 +680,7 @@ Rules:
     - resolution: "${_params?.imageResolution || '1K'}"
     - numberOfImages: ${_params?.numberOfImages || 1}
     - useGrounding: ${_params?.useGrounding ? 'true' : 'false'}
+    - thinkingLevel: "${_params?.thinkingLevel || 'Minimal'}"
     
     [REFERENCE MODE SELECTION - Critical for multi-turn editing]
     Choose reference_mode based on user intent:
@@ -704,7 +707,7 @@ Rules:
 
     [PARAMETER CONTRACT]
     You MUST call 'generate_image' with ALL parameters:
-    prompt, model, aspectRatio, resolution, useGrounding, numberOfImages, negativePrompt, assistant_mode, reference_mode, reference_count.
+    prompt, model, aspectRatio, resolution, useGrounding, numberOfImages, negativePrompt, assistant_mode, reference_mode, reference_count, thinkingLevel.
     `;
 
     const contents = convertHistoryToNativeFormat(history, realModelName);
@@ -995,7 +998,8 @@ export const generateImage = async (
         // Official JS SDK uses imageConfig (not imageGenerationConfig)
         messageConfig.imageConfig = {
             ...(params.aspectRatio && { aspectRatio: params.aspectRatio }),
-            ...((isPro || isFlash31) && params.imageResolution && { imageSize: params.imageResolution })
+            ...((isPro || isFlash31) && params.imageResolution && { imageSize: params.imageResolution }),
+            ...(params.numberOfImages && { count: params.numberOfImages })
         };
     }
 

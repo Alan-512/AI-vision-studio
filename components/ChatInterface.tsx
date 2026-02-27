@@ -1,7 +1,7 @@
 
 import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { Send, User, Sparkles, ChevronDown, BrainCircuit, Zap, X, Box, Copy, Check, Plus, MonitorPlay, Palette, Film, Bot, Square, Crop, CheckCircle2, Globe, Brain, CircuitBoard, Wrench, Image as ImageIcon, CircleDashed, Terminal, RefreshCw, AlertCircle, Search, Upload } from 'lucide-react';
-import { ChatMessage, GenerationParams, ImageStyle, ImageResolution, AppMode, ImageModel, VideoResolution, VideoModel, VideoStyle, AspectRatio, SmartAsset, APP_LIMITS, AgentAction, TextModel, SearchProgress } from '../types';
+import { Send, User, Sparkles, ChevronDown, BrainCircuit, Zap, X, Box, Copy, Check, Plus, MonitorPlay, Film, Bot, Square, Crop, CheckCircle2, Globe, Brain, CircuitBoard, Wrench, Image as ImageIcon, CircleDashed, Terminal, RefreshCw, AlertCircle, Search, Upload } from 'lucide-react';
+import { ChatMessage, GenerationParams, ImageResolution, AppMode, ImageModel, VideoResolution, VideoModel, AspectRatio, SmartAsset, APP_LIMITS, AgentAction, TextModel, SearchProgress, ThinkingLevel } from '../types';
 import { streamChatResponse } from '../services/geminiService';
 import { normalizeImageUrlForChat } from '../services/imageUtils';
 import { AgentStateMachine, AgentState, createInitialAgentState, PendingAction, createGenerateAction } from '../services/agentService';
@@ -372,6 +372,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         model: params.imageModel,
         aspectRatio: params.aspectRatio,
         resolution: params.imageResolution,
+        thinkingLevel: params.thinkingLevel,
         negativePrompt: params.negativePrompt || action.args.negativePrompt,
         numberOfImages: params.numberOfImages || action.args.numberOfImages || 1,
         useGrounding: params.useGrounding ?? action.args.useGrounding ?? false,
@@ -379,6 +380,10 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
     } else {
       // Auto mode: use AI's choices but ensure valid model value
       const validModels = Object.values(ImageModel);
+      if (action.args.thinkingLevel) {
+        // Respect AI's selection of thinking level in Auto Mode
+        finalArgs.thinkingLevel = action.args.thinkingLevel;
+      }
       if (finalArgs.model && !validModels.includes(finalArgs.model)) {
         console.warn(`[ChatInterface] Validated invalid model: ${finalArgs.model}, keeping current`);
         finalArgs = { ...finalArgs, model: params.imageModel };
@@ -760,8 +765,60 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                           </div>
                           <div className={`space-y-4 transition-opacity ${isAutoMode ? 'opacity-50 pointer-events-none' : ''}`}>
                             <div className="space-y-1.5"><label className="text-[10px] text-gray-400 font-bold flex items-center gap-1"><Bot size={10} /> {t('lbl.model').toUpperCase()}</label><select value={mode === AppMode.IMAGE ? params.imageModel : params.videoModel} onChange={(e) => setParams(prev => mode === AppMode.IMAGE ? ({ ...prev, imageModel: e.target.value as ImageModel }) : ({ ...prev, videoModel: e.target.value as VideoModel }))} className="w-full bg-dark-bg border border-dark-border rounded-lg px-2 py-1.5 text-xs text-white">{mode === AppMode.IMAGE ? (<><option value={ImageModel.FLASH_3_1}>Nano Banana 2</option><option value={ImageModel.PRO}>{t('model.pro')}</option></>) : (<><option value={VideoModel.VEO_FAST}>{t('model.veo_fast')}</option><option value={VideoModel.VEO_HQ}>{t('model.veo_hq')}</option></>)}</select></div>
-                            <div className="space-y-1.5"><label className="text-[10px] text-gray-400 font-bold flex items-center gap-1"><Crop size={10} /> {t('lbl.aspect_ratio').toUpperCase()}</label><select value={params.aspectRatio} onChange={(e) => setParams(prev => ({ ...prev, aspectRatio: e.target.value as AspectRatio }))} className="w-full bg-dark-bg border border-dark-border rounded-lg px-2 py-1.5 text-xs text-white">{Object.values(AspectRatio).map(ratio => (<option key={ratio} value={ratio}>{getRatioLabel(ratio)}</option>))}</select></div>
-                            <div className="space-y-1.5"><label className="text-[10px] text-gray-400 font-bold flex items-center gap-1"><Palette size={10} /> {t('lbl.style').toUpperCase()}</label><select value={mode === AppMode.IMAGE ? params.imageStyle : params.videoStyle} onChange={(e) => setParams(prev => mode === AppMode.IMAGE ? ({ ...prev, imageStyle: e.target.value as ImageStyle }) : ({ ...prev, videoStyle: e.target.value as VideoStyle }))} className="w-full bg-dark-bg border border-dark-border rounded-lg px-2 py-1.5 text-xs text-white">{mode === AppMode.IMAGE ? Object.entries(ImageStyle).map(([k, v]) => <option key={k} value={v}>{t(`style.${k}` as any) || v}</option>) : Object.entries(VideoStyle).map(([k, v]) => <option key={k} value={v}>{t(`style.${k}` as any) || v}</option>)}</select></div>
+
+                            {/* Thinking Level Toggle (Flash 3.1 only) */}
+                            {mode === AppMode.IMAGE && params.imageModel === ImageModel.FLASH_3_1 && (
+                              <div className="space-y-1.5">
+                                <label className="text-[10px] text-gray-400 font-bold flex items-center gap-1">
+                                  <BrainCircuit size={10} /> {language === 'zh' ? '思考深度' : 'THINKING DEPTH'}
+                                </label>
+                                <div className="flex bg-black/20 p-0.5 rounded-lg border border-dark-border">
+                                  <button
+                                    onClick={() => setParams(prev => ({ ...prev, thinkingLevel: ThinkingLevel.MINIMAL }))}
+                                    className={`flex-1 py-1 rounded-md text-[10px] font-medium transition-all ${params.thinkingLevel === ThinkingLevel.MINIMAL || !params.thinkingLevel ? 'bg-brand-500 text-white shadow-sm' : 'text-gray-500 hover:text-gray-300'}`}
+                                  >
+                                    {language === 'zh' ? '极速' : 'Minimal'}
+                                  </button>
+                                  <button
+                                    onClick={() => setParams(prev => ({ ...prev, thinkingLevel: ThinkingLevel.HIGH }))}
+                                    className={`flex-1 py-1 rounded-md text-[10px] font-medium transition-all ${params.thinkingLevel === ThinkingLevel.HIGH ? 'bg-brand-500 text-white shadow-sm' : 'text-gray-500 hover:text-gray-300'}`}
+                                  >
+                                    {language === 'zh' ? '深度' : 'High'}
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+
+                            <div className="space-y-1.5"><label className="text-[10px] text-gray-400 font-bold flex items-center gap-1"><Crop size={10} /> {t('lbl.aspect_ratio').toUpperCase()}</label><select value={params.aspectRatio} onChange={(e) => setParams(prev => ({ ...prev, aspectRatio: e.target.value as AspectRatio }))} className="w-full bg-dark-bg border border-dark-border rounded-lg px-2 py-1.5 text-xs text-white">
+                              {Object.values(AspectRatio)
+                                .filter(ratio => {
+                                  // Extreme ratios only supported by Nano Banana 2 (Flash 3.1)
+                                  const isExtreme = [AspectRatio.ONE_FOURTH, AspectRatio.FOUR_ONES, AspectRatio.ONE_EIGHTH, AspectRatio.EIGHT_ONES].includes(ratio);
+                                  if (isExtreme) return params.imageModel === ImageModel.FLASH_3_1;
+                                  return true;
+                                })
+                                .map(ratio => (<option key={ratio} value={ratio}>{getRatioLabel(ratio)}</option>))
+                              }
+                            </select></div>
+                            <div className="space-y-1.5">
+                              <label className="text-[10px] text-gray-400 font-bold flex items-center gap-1">
+                                <Plus size={10} /> {language === 'zh' ? '图片数量' : 'IMAGE COUNT'}
+                              </label>
+                              <div className="flex gap-2">
+                                {[1, 2, 3, 4].map(num => (
+                                  <button
+                                    key={num}
+                                    onClick={() => setParams(prev => ({ ...prev, numberOfImages: num }))}
+                                    className={`flex-1 py-1.5 rounded-lg border text-xs transition-all ${params.numberOfImages === num
+                                      ? 'bg-brand-500 border-brand-500 text-white'
+                                      : 'bg-dark-bg border-dark-border text-gray-400 hover:border-gray-500'
+                                      }`}
+                                  >
+                                    {num}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
                             <div className="space-y-1.5"><label className="text-[10px] text-gray-400 font-bold flex items-center gap-1"><MonitorPlay size={10} /> {t('lbl.resolution').toUpperCase()}</label><select value={mode === AppMode.IMAGE ? params.imageResolution : params.videoResolution} onChange={(e) => setParams(prev => mode === AppMode.IMAGE ? ({ ...prev, imageResolution: e.target.value as ImageResolution }) : ({ ...prev, videoResolution: e.target.value as VideoResolution }))} className="w-full bg-dark-bg border border-dark-border rounded-lg px-2 py-1.5 text-xs text-white">{mode === AppMode.IMAGE ? (<>
                               {params.imageModel === ImageModel.FLASH_3_1 && <option value={ImageResolution.RES_512}>0.5K (512px)</option>}
                               <option value={ImageResolution.RES_1K}>1K</option>

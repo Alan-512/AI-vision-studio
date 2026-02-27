@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { Image as ImageIcon, Video, LayoutGrid, Folder, Sparkles, Settings, Star, CheckSquare, MoveHorizontal, Languages, Trash2, Recycle, Download, RotateCcw, ArrowRight, Key, X } from 'lucide-react';
-import { AppMode, AspectRatio, GenerationParams, AssetItem, ImageResolution, VideoResolution, ImageModel, VideoModel, ImageStyle, Project, ChatMessage, BackgroundTask, SmartAsset, VideoDuration, VideoStyle, AgentAction, EditRegion, SearchPolicy, AssistantMode, SmartAssetRole } from './types';
+import { AppMode, AspectRatio, GenerationParams, AssetItem, ImageResolution, VideoResolution, ImageModel, VideoModel, ImageStyle, Project, ChatMessage, BackgroundTask, SmartAsset, VideoDuration, VideoStyle, AgentAction, EditRegion, SearchPolicy, AssistantMode, SmartAssetRole, ThinkingLevel } from './types';
 import { GenerationForm } from './components/GenerationForm';
 import { AssetCard } from './components/AssetCard';
 import { ProjectSidebar } from './components/ProjectSidebar';
@@ -66,6 +66,7 @@ type PlaybookDefaults = {
     aspectRatio?: AspectRatio;
     imageStyle?: ImageStyle;
     imageResolution?: ImageResolution;
+    thinkingLevel?: string;
     negativePrompt?: string;
     referenceMode?: string;
 };
@@ -547,7 +548,7 @@ export function App() {
 
         if (action.toolName === 'generate_image') {
             const toolArgs = rawArgs && typeof rawArgs === 'object' ? rawArgs : {};
-            const { prompt, aspectRatio, style, resolution, negativePrompt, save_as_reference, numberOfImages } = toolArgs;
+            const { prompt, aspectRatio, style, resolution, thinkingLevel, negativePrompt, save_as_reference, numberOfImages } = toolArgs;
             setRightPanelMode('GALLERY');
             if (mode !== AppMode.IMAGE) handleModeSwitch(AppMode.IMAGE);
 
@@ -562,6 +563,7 @@ export function App() {
                 aspectRatio: AspectRatio.LANDSCAPE,
                 imageStyle: ImageStyle.NONE,
                 imageResolution: ImageResolution.RES_1K,
+                thinkingLevel: 'Minimal',
                 negativePrompt: ''
             };
             const assistantMode = normalizeAssistantMode(toolArgs.assistant_mode);
@@ -614,6 +616,9 @@ export function App() {
             const resolvedResolution = Object.values(ImageResolution).includes(resolution as ImageResolution)
                 ? (resolution as ImageResolution)
                 : (playbookDefaults.imageResolution ?? (effectiveModel === ImageModel.PRO ? ImageResolution.RES_2K : chatDefaults.imageResolution));
+            const resolvedThinkingLevel = typeof thinkingLevel === 'string'
+                ? thinkingLevel
+                : (playbookDefaults.thinkingLevel ?? (effectiveModel === ImageModel.FLASH_3_1 ? chatDefaults.thinkingLevel : undefined));
             const resolvedNegativePrompt = typeof negativePrompt === 'string'
                 ? negativePrompt
                 : (playbookDefaults.negativePrompt ?? chatDefaults.negativePrompt);
@@ -633,6 +638,7 @@ export function App() {
                 imageStyle: resolvedStyle,
                 // Default resolution based on model: Pro=2K, Flash 3.1=1K by default but supports 4K natively
                 imageResolution: resolvedResolution,
+                thinkingLevel: resolvedThinkingLevel as ThinkingLevel,
                 negativePrompt: resolvedNegativePrompt,
                 numberOfImages: resolvedNumberOfImages,
                 useGrounding: effectiveGrounding,
