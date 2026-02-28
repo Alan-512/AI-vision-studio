@@ -647,7 +647,8 @@ export function App() {
                 // Extract smartAssets from the LATEST user message in chatHistory
                 // (agentContextAssets may already be cleared from UI)
                 smartAssets: (() => {
-                    const latestUserMsg = [...chatHistory].reverse().find(m => m.role === 'user' && (m.images?.length || m.image));
+                    // FIX: Must ignore isSystem messages so we don't accidentally treat previous AI-generated output as user references
+                    const latestUserMsg = [...chatHistory].reverse().find(m => m.role === 'user' && !m.isSystem && (m.images?.length || m.image));
                     const images: SmartAsset[] = [];
                     if (latestUserMsg?.images) {
                         latestUserMsg.images.forEach((img, idx) => {
@@ -663,7 +664,7 @@ export function App() {
                         latestUserMsgContent: latestUserMsg?.content?.slice(0, 50),
                         latestUserMsgTimestamp: latestUserMsg?.timestamp,
                         imagesCount: images.length,
-                        totalUserMsgsWithImages: chatHistory.filter(m => m.role === 'user' && (m.images?.length || m.image)).length
+                        totalUserMsgsWithImages: chatHistory.filter(m => m.role === 'user' && !m.isSystem && (m.images?.length || m.image)).length
                     });
                     return images;
                 })(),
@@ -675,13 +676,10 @@ export function App() {
                 continuousMode: false
             };
 
-            // === SEMANTIC REFERENCE MODE SELECTION ===
-            // AI chooses reference_mode based on user intent analysis
-            // Smart default: if user uploaded images and AI didn't specify, use them
-            const playbookReferenceMode = playbookDefaults.referenceMode;
-            const explicitReferenceMode = typeof toolArgs.reference_mode === 'string' ? toolArgs.reference_mode : undefined;
-            const referenceMode = explicitReferenceMode || playbookReferenceMode || (hasUserUploadedImages ? 'USER_UPLOADED_ONLY' : 'NONE');
-            const referenceCount = Number(toolArgs.reference_count) || 1;
+            // === DYNAMIC REFERENCE IMAGE ID TARGETING ===
+            // AI explicitly chooses via toolArgs.reference_image_ids based on available [Attached Image ID: <id>] markers
+            const playbookReferenceMode = playbookDefaults.referenceMode; // Fallback rule from playbook
+            const requestedIds = Array.isArray(toolArgs.reference_image_ids) ? toolArgs.reference_image_ids : [];
 
             // Helper: convert image data to SmartAsset
             const toSmartAsset = (imgData: string, id: string): SmartAsset | null => {
@@ -698,67 +696,47 @@ export function App() {
             // Get all messages with images from chat history
             const messagesWithImages = chatHistory.filter(m => m.image || (m.images && m.images.length > 0));
 
-            // Select references based on mode
-            // ALWAYS execute reference logic to ensure we respect the AI's intent (e.g. LAST_GENERATED)
-            // Results will be deduplicated when merging
             let selectedReferences: SmartAsset[] = [];
 
-            // [DEBUG] Log reference mode decision
-            console.log(`[Agent] Reference Strategy: mode=${referenceMode}, count=${referenceCount}, pre-extracted=${executionParams.smartAssets?.length ?? 0}`);
+            // [DEBUG] Log reference decision
+            console.log(`[Agent] Reference IDs requested by AI:`, requestedIds, `pre-extracted size: ${executionParams.smartAssets?.length ?? 0}`);
 
-            switch (referenceMode) {
-                case 'NONE':
-                    // Pure text-to-image, no references
-                    break;
+            if (requestedIds.length > 0) {
+                // EXPLICIT ID TARGETING
+                const allAvailableImages = messagesWithImages.flatMap(m => {
+                    const prefix = m.role === 'user' ? 'user' : 'generated';
+                    return extractImages(m).map((img, idx) => ({
+                        id: `${prefix}-${m.timestamp}-${idx}`,
+                        img: img
+                    }));
+                });
 
-                case 'USER_UPLOADED_ONLY':
-                    // Only user-uploaded images (role === 'user' AND has image)
-                    messagesWithImages
-                        .filter(m => m.role === 'user')
-                        .forEach(m => {
-                            extractImages(m).forEach((img, idx) => {
-                                const asset = toSmartAsset(img, `user-${m.timestamp}-${idx}`);
-                                if (asset) selectedReferences.push(asset);
-                            });
-                        });
-                    break;
-
-                case 'LAST_GENERATED': {
-                    // Last AI-generated image (role === 'assistant' or model)
-                    const lastGenerated = [...messagesWithImages]
-                        .reverse()
-                        .find(m => m.role === 'model' && extractImages(m).length > 0);
-                    if (lastGenerated) {
-                        const images = extractImages(lastGenerated);
-                        const img = images[images.length - 1];
-                        const asset = img ? toSmartAsset(img, `generated-${lastGenerated.timestamp}`) : null;
-                        if (asset) selectedReferences.push(asset);
-                    }
-                    break;
-                }
-
-                case 'ALL_USER_UPLOADED':
-                    // All user-uploaded images
-                    messagesWithImages
-                        .filter(m => m.role === 'user')
-                        .forEach(m => {
-                            extractImages(m).forEach((img, idx) => {
-                                const asset = toSmartAsset(img, `user-all-${m.timestamp}-${idx}`);
-                                if (asset) selectedReferences.push(asset);
-                            });
-                        });
-                    break;
-
-                case 'LAST_N': {
-                    // Last N images regardless of source
-                    const allImages = messagesWithImages.flatMap(m =>
-                        extractImages(m).map((img, idx) => ({ img, id: `last-n-${m.timestamp}-${idx}` }))
-                    );
-                    allImages.slice(-referenceCount).forEach(({ img, id }) => {
+                allAvailableImages.forEach(({ id, img }) => {
+                    if (requestedIds.includes(id)) {
                         const asset = toSmartAsset(img, id);
                         if (asset) selectedReferences.push(asset);
-                    });
-                    break;
+                    }
+                });
+            } else if (requestedIds.length === 0 && Array.isArray(toolArgs.reference_image_ids)) {
+                // AI explicitly asked for NO references (empty array)
+                console.log(`[Agent] AI explicitly passed empty reference_image_ids.`);
+            } else {
+                // FALLBACK for backward compatibility or when AI hallucinates param
+                // Smart default: if user uploaded images recently, use the last one
+                if (playbookReferenceMode === 'LAST_GENERATED') {
+                    const lastGenerated = [...messagesWithImages].reverse().find(m => m.role === 'model');
+                    if (lastGenerated) {
+                        const images = extractImages(lastGenerated);
+                        const asset = toSmartAsset(images[images.length - 1], `generated-${lastGenerated.timestamp}-0`);
+                        if (asset) selectedReferences.push(asset);
+                    }
+                } else if (hasUserUploadedImages) {
+                    const lastUserMsg = [...messagesWithImages].reverse().find(m => m.role === 'user' && !m.isSystem);
+                    if (lastUserMsg) {
+                        const images = extractImages(lastUserMsg);
+                        const asset = toSmartAsset(images[images.length - 1], `user-${lastUserMsg.timestamp}-0`);
+                        if (asset) selectedReferences.push(asset);
+                    }
                 }
             }
 
@@ -771,7 +749,7 @@ export function App() {
             });
 
             if (selectedReferences.length > 0) {
-                console.log(`[Agent] reference_mode: ${referenceMode}, selected ${selectedReferences.length} images`);
+                console.log(`[Agent] Selected ${selectedReferences.length} reference images`);
                 addToast('info', 'Reference Active', `Using ${selectedReferences.length} reference image(s).`);
             }
 

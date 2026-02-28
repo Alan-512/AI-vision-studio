@@ -267,17 +267,29 @@ export const saveAsset = async (asset: AssetItem): Promise<void> => {
   // STRICT VALIDATION: Ensure we never save a broken record for COMPLETED assets
   try {
     // 1. Image Optimization & Persistence
-    if (asset.type === 'IMAGE' && asset.url.startsWith('data:')) {
+    if (asset.type === 'IMAGE' && typeof asset.url === 'string' && asset.url.startsWith('data:')) {
       try {
-        const response = await fetch(asset.url);
-        const blob = await response.blob();
+        // Build robust base64 to Blob conversion instead of fetch() which fails on large data strings in some browsers
+        const [header, base64Data] = asset.url.split(',');
+        const mimeMatch = header.match(/:(.*?);/);
+        const mimeType = mimeMatch ? mimeMatch[1] : 'image/jpeg';
+
+        // Convert base64 to Uint8Array
+        const byteCharacters = atob(base64Data);
+        const byteNumbers = new Array(byteCharacters.length);
+        for (let i = 0; i < byteCharacters.length; i++) {
+          byteNumbers[i] = byteCharacters.charCodeAt(i);
+        }
+        const byteArray = new Uint8Array(byteNumbers);
+        const blob = new Blob([byteArray], { type: mimeType });
+
         storageRecord.blob = blob;
         storageRecord.url = 'blob';
       } catch (conversionError) {
-        console.warn("Blob conversion failed for image", conversionError);
+        console.warn("Base64 to Blob conversion failed for image", conversionError);
         // Fallback: Try saving string if small enough, otherwise this might fail Quota later
       }
-    } else if (asset.type === 'IMAGE' && asset.url.startsWith('blob:')) {
+    } else if (asset.type === 'IMAGE' && typeof asset.url === 'string' && asset.url.startsWith('blob:')) {
       try {
         const response = await fetch(asset.url);
         const blob = await response.blob();
@@ -347,7 +359,26 @@ export const updateAsset = async (id: string, updates: Partial<AssetItem>): Prom
 
   // If we are updating a URL to a blob (common for Video generation completion), 
   // we must persist the actual Blob data.
-  if (typeof updates.url === 'string' && updates.url.startsWith('blob:')) {
+  if (typeof updates.url === 'string' && updates.url.startsWith('data:')) {
+    try {
+      const [header, base64Data] = updates.url.split(',');
+      const mimeMatch = header.match(/:(.*?);/);
+      const mimeType = mimeMatch ? mimeMatch[1] : 'image/jpeg';
+
+      const byteCharacters = atob(base64Data);
+      const byteNumbers = new Array(byteCharacters.length);
+      for (let i = 0; i < byteCharacters.length; i++) {
+        byteNumbers[i] = byteCharacters.charCodeAt(i);
+      }
+      const byteArray = new Uint8Array(byteNumbers);
+      const blob = new Blob([byteArray], { type: mimeType });
+
+      processedUpdates.blob = blob;
+      processedUpdates.url = 'blob';
+    } catch (e) {
+      console.warn("Base64 to Blob conversion failed in updateAsset", e);
+    }
+  } else if (typeof updates.url === 'string' && updates.url.startsWith('blob:')) {
     try {
       const response = await fetch(updates.url);
       const blob = await response.blob();

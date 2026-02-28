@@ -171,6 +171,12 @@ const generateImageTool: FunctionDeclaration = {
 4. SEMANTIC NEGATIVE:
    - Describe the *absence* of elements positively in the main prompt (e.g., "an empty, deserted street" instead of just "no cars").
 
+=== CONTINUOUS / MULTIPLE IMAGE SEQUENCES ===
+If the user requests a sequence, storyboard, or set of distinct images (e.g., "generate 4 e-commerce detail shots"):
+- You MUST emit MULTIPLE, SEPARATE generate_image function calls (one for each distinct image).
+- DO NOT combine different scenes into one prompt.
+- For subject consistency across the sequence, you MUST set reference_mode to "ALL_USER_UPLOADED" or "USER_UPLOADED_ONLY" in EVERY distinct function call if reference images are available.
+
 === OPTIONAL (add only when relevant to the scene) ===
    If the image involves these aspects, include them. Otherwise, omit:
    - Shot type: wide-angle, macro, telephoto, low-angle
@@ -185,7 +191,7 @@ const generateImageTool: FunctionDeclaration = {
             resolution: { type: Type.STRING, description: 'Output resolution. Options: "1K" (default), "2K" (Pro only), "4K" (Pro only).', enum: Object.values(ImageResolution) },
             useGrounding: { type: Type.BOOLEAN, description: 'Use Google Search for factual accuracy (Pro model only). Default: false.' },
             negativePrompt: { type: Type.STRING, description: 'What to EXCLUDE from the image. Use semantic descriptions: "blurry, low quality, distorted faces, anime style" (when user wants realism).' },
-            numberOfImages: { type: Type.NUMBER, description: 'How many variations to generate (1-4). Default: 1.' },
+            numberOfImages: { type: Type.NUMBER, description: 'How many variations to generate (1-4). Default: 1. ONLY use > 1 when you want exact variations of the SAME prompt. For a sequence of distinct images, set to 1 and emit multiple separate function calls.' },
             assistant_mode: {
                 type: Type.STRING,
                 description: `Playbook mode for automatic parameter defaults:
@@ -201,18 +207,15 @@ const generateImageTool: FunctionDeclaration = {
                 type: Type.BOOLEAN,
                 description: 'Set true to bypass playbook defaults when needed for unusual or mixed intents.'
             },
-            reference_mode: {
-                type: Type.STRING,
-                description: `How to handle reference images from conversation history:
-- NONE: No reference images(pure text - to - image)
-    - USER_UPLOADED_ONLY: Only use images the USER uploaded(ignore AI - generated ones) - Use when user says "regenerate", "try again", "not satisfied"
-        - LAST_GENERATED: Use the most recent AI - generated image - Use when user wants to EDIT / MODIFY the last result
-            - ALL_USER_UPLOADED: Use ALL images the user uploaded in this conversation
-                - LAST_N: Use the last N images(set reference_count)
-Default: NONE for new generations, USER_UPLOADED_ONLY when regenerating.`,
-                enum: ['NONE', 'USER_UPLOADED_ONLY', 'LAST_GENERATED', 'ALL_USER_UPLOADED', 'LAST_N']
+            reference_image_ids: {
+                type: Type.ARRAY,
+                items: { type: Type.STRING },
+                description: `Explicit IDs of images to use as reference.
+- Look at the [Attached Image ID: <id>] markers in the conversation history.
+- To use an image for style/subject, put its <id> here.
+- For pure text-to-image (no reference needed), leave empty.
+- When generating a sequence of consistent images, pass the SAME user uploaded image ID to every call.`
             },
-            reference_count: { type: Type.NUMBER, description: 'Only for LAST_N mode: how many recent images to use. Default: 1.' },
             thinkingLevel: { type: Type.STRING, description: 'Thinking depth for Gemini 3.1 Flash Image. Options: "Minimal" (speed), "High" (quality). Default: "Minimal".', enum: Object.values(ThinkingLevel) }
         },
         required: [
@@ -224,8 +227,6 @@ Default: NONE for new generations, USER_UPLOADED_ONLY when regenerating.`,
             'numberOfImages',
             'negativePrompt',
             'assistant_mode',
-            'reference_mode',
-            'reference_count',
             'thinkingLevel'
         ]
     }
@@ -279,6 +280,8 @@ const convertHistoryToNativeFormat = (history: ChatMessage[], modelName: string)
                 if (shouldKeep) {
                     const matches = img.match(/^data:(.+);base64,(.+)$/);
                     if (matches) {
+                        const imgId = `${msg.role === 'user' ? 'user' : 'generated'}-${msg.timestamp}-${imgIdx}`;
+                        parts.push({ text: `\n[Attached Image ID: ${imgId}]\n` });
                         const partData: any = { inlineData: { mimeType: matches[1], data: matches[2] } };
                         // Attach thought_signature if present for this part
                         const sig = msg.thoughtSignatures?.find(s => s.partIndex === imgIdx);
@@ -294,6 +297,8 @@ const convertHistoryToNativeFormat = (history: ChatMessage[], modelName: string)
             if (shouldKeep) {
                 const matches = msg.image.match(/^data:(.+);base64,(.+)$/);
                 if (matches) {
+                    const imgId = `${msg.role === 'user' ? 'user' : 'generated'}-${msg.timestamp}-0`;
+                    parts.push({ text: `\n[Attached Image ID: ${imgId}]\n` });
                     const partData: any = { inlineData: { mimeType: matches[1], data: matches[2] } };
                     // Attach thought_signature if present
                     const sig = msg.thoughtSignatures?.find(s => s.partIndex === 0);
@@ -691,14 +696,11 @@ Rules:
     - thinkingLevel: "${_params?.thinkingLevel || 'Minimal'}"
     
     [REFERENCE MODE SELECTION - Critical for multi-turn editing]
-    Choose reference_mode based on user intent:
-    - "NONE": Pure text-to-image, no references needed (user says "生成/create a new...")
-    - "USER_UPLOADED_ONLY": User uploaded reference images AND says "不满意/regenerate/try again/换一个" 
-      → Keep original references, ignore AI-generated results
-    - "LAST_GENERATED": User wants to EDIT the previous result (says "把这张图改成/modify this/change the background")
-      → Use the last AI-generated image as base
-    - "ALL_USER_UPLOADED": User wants to combine multiple uploaded references
-    - "LAST_N": Use with reference_count when user refers to "last few images"
+    Use 'reference_image_ids' to target specific images from conversational history.
+    - Read the [Attached Image ID: <id>] markers in the conversation history.
+    - If user wants to EDIT/MODIFY the last generated image, include its ID.
+    - If user wants to reuse an originally UPLOADED image, include its ID.
+    - For pure text-to-image with no reference needed, pass an empty array [].
 
     [ASSISTANT MODE SELECTION - Playbook]
     Choose assistant_mode for automatic defaults:
@@ -714,8 +716,10 @@ Rules:
     ${groundingPolicyLine}
 
     [PARAMETER CONTRACT]
-    You MUST call 'generate_image' with ALL parameters:
-    prompt, model, aspectRatio, resolution, useGrounding, numberOfImages, negativePrompt, assistant_mode, reference_mode, reference_count, thinkingLevel.
+    You MUST call 'generate_image' with ALL REQUIRED parameters:
+    prompt, model, aspectRatio, resolution, useGrounding, numberOfImages, negativePrompt, assistant_mode, thinkingLevel.
+    - If the user requests a sequence of distinct images, you MUST emit multiple separate 'generate_image' function calls, each with a distinct prompt and numberOfImages=1.
+    - To maintain subject consistency across multiple function calls, set 'reference_image_ids' explicitly to include the required anchor image IDs in EACH call.
     `;
 
     const contents = convertHistoryToNativeFormat(history, realModelName);
@@ -748,7 +752,7 @@ Rules:
     const sourcesSet = new Set<string>();
     const sourcesList: { title: string; uri: string }[] = [];
     const collectedSignatures: Array<{ partIndex: number; signature: string }> = [];
-    let pendingToolCall: { toolName: string; args: any } | null = null; // Collect tool call, execute after stream
+    const pendingToolCalls: Array<{ toolName: string; args: any }> = []; // Collect tool calls, execute after stream
 
     console.log('[Stream] Starting stream loop...');
     let chunkCount = 0;
@@ -782,7 +786,7 @@ Rules:
                 if (part.functionCall) {
                     console.log('[Stream] FunctionCall detected (deferred):', part.functionCall.name);
                     if (part.functionCall.name === 'generate_image') {
-                        pendingToolCall = { toolName: 'generate_image', args: part.functionCall.args };
+                        pendingToolCalls.push({ toolName: 'generate_image', args: part.functionCall.args });
                     }
                 }
             }
@@ -833,7 +837,7 @@ Rules:
         fullText += sourceText;
         onChunk(fullText);
     }
-    console.log('[Stream] Stream completed. Total chunks:', chunkCount, 'Has pending tool call:', !!pendingToolCall);
+    console.log('[Stream] Stream completed. Total chunks:', chunkCount, 'Pending tool calls:', pendingToolCalls.length);
 
     // Return collected thought signatures to caller for storage
     if (collectedSignatures.length > 0 && onThoughtSignatures) {
@@ -842,41 +846,43 @@ Rules:
 
     // DEFERRED TOOL CALL: Execute after stream completes so AI response is fully shown
     // FIX [SUP-005]: Check abort signal before executing deferred tool call
-    if (pendingToolCall && onToolCall && !signal?.aborted) {
-        console.log('[Stream] Executing deferred tool call:', pendingToolCall.toolName);
+    if (pendingToolCalls.length > 0 && onToolCall && !signal?.aborted) {
+        console.log(`[Stream] Executing ${pendingToolCalls.length} deferred tool calls`);
 
-        // FIX: Handle both direct args and args wrapped in { parameters: {...} }
-        // App.tsx unwraps parameters, so we need to inject into the correct location
-        const rawArgs = pendingToolCall.args && typeof pendingToolCall.args === 'object'
-            ? pendingToolCall.args as Record<string, any>
-            : {};
+        for (const pendingToolCall of pendingToolCalls) {
+            // FIX: Handle both direct args and args wrapped in { parameters: {...} }
+            // App.tsx unwraps parameters, so we need to inject into the correct location
+            const rawArgs = pendingToolCall.args && typeof pendingToolCall.args === 'object'
+                ? pendingToolCall.args as Record<string, any>
+                : {};
 
-        // Check if args are wrapped in 'parameters' (some models do this)
-        const hasParametersWrapper = 'parameters' in rawArgs && typeof rawArgs.parameters === 'object';
-        const targetArgs = hasParametersWrapper ? rawArgs.parameters : rawArgs;
+            // Check if args are wrapped in 'parameters' (some models do this)
+            const hasParametersWrapper = 'parameters' in rawArgs && typeof rawArgs.parameters === 'object';
+            const targetArgs = hasParametersWrapper ? rawArgs.parameters : rawArgs;
 
-        // Get base prompt from either location
-        const existingPrompt = targetArgs.prompt;
-        const basePrompt = typeof existingPrompt === 'string'
-            ? existingPrompt
-            : (searchPromptDraft || _newMessage);
+            // Get base prompt from either location
+            const existingPrompt = targetArgs.prompt;
+            const basePrompt = typeof existingPrompt === 'string'
+                ? existingPrompt
+                : (searchPromptDraft || _newMessage);
 
-        // Inject prompt and useGrounding into the correct location
-        if (searchFacts.length > 0) {
-            targetArgs.prompt = buildPromptWithFacts(basePrompt, searchFacts);
-        } else if (basePrompt && !existingPrompt) {
-            targetArgs.prompt = basePrompt;
+            // Inject prompt and useGrounding into the correct location
+            if (searchFacts.length > 0) {
+                targetArgs.prompt = buildPromptWithFacts(basePrompt, searchFacts);
+            } else if (basePrompt && !existingPrompt) {
+                targetArgs.prompt = basePrompt;
+            }
+
+            // LLM_ONLY mode: image model does NOT use grounding
+            targetArgs.useGrounding = false;
+
+            // Return the properly structured args (App.tsx will unwrap if needed)
+            const adjustedArgs = hasParametersWrapper
+                ? { ...rawArgs, parameters: targetArgs }
+                : targetArgs;
+
+            onToolCall({ toolName: pendingToolCall.toolName, args: adjustedArgs });
         }
-
-        // LLM_ONLY mode: image model does NOT use grounding
-        targetArgs.useGrounding = false;
-
-        // Return the properly structured args (App.tsx will unwrap if needed)
-        const adjustedArgs = hasParametersWrapper
-            ? { ...rawArgs, parameters: targetArgs }
-            : targetArgs;
-
-        onToolCall({ toolName: pendingToolCall.toolName, args: adjustedArgs });
     }
 };
 
