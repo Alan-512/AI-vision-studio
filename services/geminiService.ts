@@ -206,7 +206,7 @@ If the user requests a sequence, storyboard, or set of distinct images (e.g., "g
 - For pure text-to-image (no reference needed), leave empty.
 - When generating a sequence of consistent images, pass the SAME user uploaded image ID to every call.`
             },
-            thinkingLevel: { type: Type.STRING, description: 'Thinking depth for Gemini 3.1 Flash Image. Options: "Minimal" (speed), "High" (quality). Default: "Minimal".', enum: Object.values(ThinkingLevel) }
+            thinkingLevel: { type: Type.STRING, description: 'Thinking depth for Gemini 3.1 Flash Image. Options: "minimal" (speed), "high" (quality). Default: "minimal".', enum: Object.values(ThinkingLevel) }
         },
         required: [
             'prompt',

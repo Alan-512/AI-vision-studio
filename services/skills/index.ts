@@ -54,7 +54,7 @@ The user has selected the following settings in their UI. You MUST use these val
 - resolution: "${params?.imageResolution || '1K'}"
 - numberOfImages: ${params?.numberOfImages || 1}
 - useGrounding: ${params?.useGrounding ? 'true' : 'false'}
-- thinkingLevel: "${params?.thinkingLevel || 'Minimal'}"`;
+- thinkingLevel: "${params?.thinkingLevel || 'minimal'}"`;
 
 /** Reference mode selection */
 const REFERENCE_MODE_CONTENT = `[REFERENCE MODE SELECTION - Critical for multi-turn editing]
@@ -80,7 +80,8 @@ const PROTOCOL_IMAGE_GEN_CONTENT = `[PARAMETER CONTRACT]
 You MUST call 'generate_image' with ALL REQUIRED parameters:
 prompt, model, aspectRatio, resolution, useGrounding, numberOfImages, negativePrompt, assistant_mode, thinkingLevel.
 - If the user requests a sequence of distinct images, you MUST emit multiple separate 'generate_image' function calls, each with a distinct prompt and numberOfImages=1.
-- To maintain subject consistency across multiple function calls, set 'reference_image_ids' explicitly to include the required anchor image IDs in EACH call.`;
+- To maintain subject consistency across multiple function calls, set 'reference_image_ids' explicitly to include the required anchor image IDs in EACH call.
+- [INTELLIGENT THINKING UPGRADE]: While following UI default 'thinkingLevel' is preferred, you SHOULD proactively set 'thinkingLevel' to 'high' for tasks involving complex typography, precise human interaction, intricate layouts, or high-fidelity design requirements, regardless of the UI default.`;
 
 /** Search policy template */
 const SEARCH_POLICY_TEMPLATE = (useSearch: boolean, useGrounding: boolean) => {
