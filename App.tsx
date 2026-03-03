@@ -20,6 +20,7 @@ import {
     releaseBlobUrl, saveTask, loadTasks, deleteTask
 } from './services/storageService';
 import { runMemoryExtractionTask } from './services/memoryExtractor';
+import { runConsolidation } from './services/memoryConsolidator';
 import { useLanguage } from './contexts/LanguageContext';
 
 const DEFAULT_PARAMS: GenerationParams = {
@@ -968,8 +969,11 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
 
                     // Background Memory Extraction Task
                     // Don't wait for it to finish, just let it run
-                    runMemoryExtractionTask(currentProjectId, historyOverride || chatHistory, userKey).catch(err => {
-                        console.error('[App] Background memory extraction failed:', err);
+                    runMemoryExtractionTask(currentProjectId, historyOverride || chatHistory, userKey).then(() => {
+                        // V2.1: Run consolidate right after extraction finishes parsing implicit thoughts.
+                        return runConsolidation(currentProjectId);
+                    }).catch(err => {
+                        console.error('[App] Background memory extraction/consolidation failed:', err);
                     });
                 } else {
                     const videoResult = await generateVideo(genParams, async (operationName) => {

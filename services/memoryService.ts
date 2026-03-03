@@ -22,6 +22,8 @@ import {
   MemoryDoc,
   MemoryOp
 } from './storageService';
+import { generateText } from './geminiService';
+import { TextModel } from '../types';
 import { parseMemoryMarkdown, getDefaultMemoryTemplate } from '../utils/memoryMarkdown';
 import { applyMemoryPatch, MemoryPatch } from '../utils/memoryPatch';
 import { GenerationParams, ImageStyle } from '../types';
@@ -690,7 +692,9 @@ export const getTopicContent = async (
 };
 
 /**
- * Search user memory for relevant preferences and decisions (V2.1 OpenClaw-style)
+ * Search user memory for relevant preferences and decisions (V2.2 LLM Re-ranking)
+ * 1. Coarse filter: Gather top 20 candidates based on term matching or recency.
+ * 2. Fine re-ranking: Ask Gemini Flash to summarize the relevant parts for the specific query.
  */
 export const memorySearch = async (
   query: string,
@@ -698,9 +702,11 @@ export const memorySearch = async (
   limit = 5
 ): Promise<string> => {
   const allResults: { score: number; text: string; source: string; timestamp?: number }[] = [];
-  const searchTerms = query.toLowerCase().split(/\s+/).filter(t => t.length > 2);
+  const searchTerms = query.toLowerCase().split(/\s+/).filter(t => t.length > 1); // V2.2: more lenient term matching
 
-  // 1. Search Memory Docs (Global & Project)
+  // 1. PHASE 1: Coarse Filtering (Candidate Generation)
+
+  // Search Memory Docs (Global & Project)
   const docs = await getAllMemoryDocs();
   for (const doc of docs) {
     if (doc.scope === 'project' && doc.targetId !== projectId) continue;
@@ -711,13 +717,17 @@ export const memorySearch = async (
         const textToSearch = `${sectionName} ${item.key || ''} ${item.value}`.toLowerCase();
         let score = 0;
         for (const term of searchTerms) {
-          if (textToSearch.includes(term)) score++;
+          if (textToSearch.includes(term)) score += 2; // Exact term match gets higher score
         }
 
-        if (score > 0 || searchTerms.length === 0) {
+        // V2.2: Include all items with slight base score to allow LLM to judge semantic relevance
+        // if no search terms are strictly matched, but give matched items a big boost.
+        if (searchTerms.length === 0) score = 1;
+
+        if (score >= 0) {
           allResults.push({
             score,
-            text: item.value,
+            text: `[${doc.scope === 'global' ? 'Global' : 'Project'}] ${sectionName} > ${item.key ? item.key + ':' : ''} ${item.value}`,
             source: `${doc.scope}:${doc.targetId}#${sectionName}`,
             timestamp: item.timestamp ? parseInt(item.timestamp) : undefined
           });
@@ -726,36 +736,58 @@ export const memorySearch = async (
     }
   }
 
-  // 2. Search Daily Logs
-  const logs = await getMemoryLogs({ projectId: projectId || undefined, limit: 50 });
+  // Search Daily Logs
+  const logs = await getMemoryLogs({ projectId: projectId || undefined, limit: 30 });
   for (const log of logs) {
     const textToSearch = log.content.toLowerCase();
     let score = 0;
     for (const term of searchTerms) {
-      if (textToSearch.includes(term)) score++;
+      if (textToSearch.includes(term)) score += 2;
     }
 
-    if (score > 0 || searchTerms.length === 0) {
+    if (searchTerms.length === 0) score = 1;
+
+    if (score >= 0) {
       allResults.push({
-        score: score * 1.2, // Boost logs for recency (V2.1 temporal decay concept)
-        text: log.content,
+        score: score * 1.5, // Stronger boost for recent logs in V2.2
+        text: `[Recent Log] ${log.content}`,
         source: `dailyLog:${log.date}`,
         timestamp: log.timestamp
       });
     }
   }
 
-  // Sort and format
+  // Sort candidates and take top 20
   allResults.sort((a, b) => b.score - a.score || (b.timestamp || 0) - (a.timestamp || 0));
+  const candidates = allResults.slice(0, 20);
 
-  if (allResults.length === 0) {
-    return `No memory found matching: "${query}"`;
+  if (candidates.length === 0) {
+    return `No memory candidates found for: "${query}"`;
   }
 
-  const output = [
-    `Search results for "${query}":`,
-    ...allResults.slice(0, limit).map(r => `- [${r.source}] ${r.text}`)
-  ];
+  // 2. PHASE 2: LLM Semantic Re-ranking & Summarization
+  const contextBlock = candidates.map((c, i) => `[${i + 1}] ${c.text}`).join('\n');
 
-  return output.join('\n');
+  const systemInstruction = `You are a Memory Retrieval Engine.
+Your task is to analyze a raw dump of memory candidates and answer the user's query about their preferences or past context.
+Be concise, direct, and factual based ONLY on the provided memory candidates.
+If the candidates do not contain the answer or are completely irrelevant, state "No relevant information found in memory."
+Ignore candidates that are contradictory if a more recent/global candidate exists.`;
+
+  const prompt = `User's Query: "${query}"\n\nMemory Candidates (Raw Dump):\n${contextBlock}\n\nBased on these candidates, extract and synthesize the relevant memory points that answer the user's query:`;
+
+  try {
+    console.log(`[MemorySearch] Sending ${candidates.length} candidates to LLM for re-ranking...`);
+    const llmSummary = await generateText(systemInstruction, prompt, false, TextModel.FLASH);
+    return `Memory Search Results for "${query}":\n\n${llmSummary}`;
+  } catch (err) {
+    console.error('[MemorySearch] LLM re-ranking failed, falling back to raw candidates:', err);
+    // Fallback to V2.1 output if LLM fails
+    const output = [
+      `Search results for "${query}" (Fallback):`,
+      ...candidates.slice(0, limit).map(r => `- [${r.source}] ${r.text}`)
+    ];
+    return output.join('\n');
+  }
 };
+

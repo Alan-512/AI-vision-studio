@@ -11,6 +11,8 @@
 import { getMemoryLogs, MemoryLog } from './storageService';
 import { applyPatchToMemory } from './memoryService';
 import { MemoryPatch, MemoryPatchOp } from '../utils/memoryPatch';
+import { generateText } from './geminiService';
+import { TextModel } from '../types';
 
 
 /**
@@ -23,11 +25,8 @@ export const runConsolidation = async (projectId?: string): Promise<void> => {
     const logs = await getMemoryLogs({ projectId, limit: 50 });
     if (logs.length === 0) return;
 
-    // 2. Group by section/topic (heuristic attempt as logs are semi-structured)
-    // In a real OpenClaw implementation, we might use an LLM here to cluster logs.
-    // For V2.1 simple version, we'll extract "Section: Key Value" patterns.
-
-    const findings = clusterLogs(logs);
+    // 2. Use LLM to intelligently cluster and extract structured patches from raw logs
+    const findings = await clusterLogsWithLLM(logs);
 
     // 3. Apply to Project Memory
     if (projectId && findings.length > 0) {
@@ -48,54 +47,62 @@ export const runConsolidation = async (projectId?: string): Promise<void> => {
 };
 
 /**
- * Cluster raw log strings into structured patch operations
+ * Cluster raw log strings into structured patch operations using Gemini Flash
  */
-function clusterLogs(logs: MemoryLog[]): MemoryPatchOp[] {
-    const ops: MemoryPatchOp[] = [];
-    const handledKeys = new Set<string>();
+async function clusterLogsWithLLM(logs: MemoryLog[]): Promise<MemoryPatchOp[]> {
+    if (logs.length === 0) return [];
 
-    // Sort by confidence and recency
-    logs.sort((a, b) => b.confidence - a.confidence || b.timestamp - a.timestamp);
+    // Sort by recency to give LLM temporal context
+    logs.sort((a, b) => b.timestamp - a.timestamp);
 
-    for (const log of logs) {
-        // Regex to find "Section: Key Value" or "Section: Value"
-        const match = log.content.match(/^([^:>]+):\s*([^>]+?)(?:\s+([^>]+))?$/);
-        if (match) {
-            const section = match[1].trim();
-            const key = match[3] ? match[2].trim() : undefined;
-            const value = match[3] ? match[3].trim() : match[2].trim();
+    const logsText = logs.map((l, i) => `[Log ${i + 1}] Date: ${l.date}, Content: ${l.content}, Hint: ${l.scopeHint || 'none'}`).join('\n');
 
-            const compositeKey = `${section}:${key || 'default'}`;
-            if (!handledKeys.has(compositeKey)) {
-                ops.push({
-                    op: 'upsert',
-                    section,
-                    key,
-                    value
-                });
-                handledKeys.add(compositeKey);
-            }
-        } else if (log.content.includes('Prefers')) {
-            // Fallback for recordUserPreference style logs
-            const preferenceItems = log.content.split('; ');
-            for (const item of preferenceItems) {
-                const prefMatch = item.match(/Prefers\s+([^:]+):\s+(.+)/);
-                if (prefMatch) {
-                    const key = prefMatch[1].trim();
-                    const value = prefMatch[2].trim();
-                    const section = key === 'aspect ratio' || key === 'image model' ? 'Generation Defaults' : 'Visual Preferences';
+    const systemInstruction = `You are an expert Memory Storage Administrator for an AI image generation tool.
+Your task is to review a series of daily interaction logs and extract the true, underlying user preferences.
 
-                    const compositeKey = `${section}:${key}`;
-                    if (!handledKeys.has(compositeKey)) {
-                        ops.push({ op: 'upsert', section, key: `preferred_${key.replace(' ', '_')}`, value });
-                        handledKeys.add(compositeKey);
-                    }
-                }
-            }
+RULES:
+1. Filter out noise, contradictory fleeting thoughts, or low-confidence guesses.
+2. Identify core recurring patterns, stylistic preferences, and generation defaults.
+3. Consolidate duplicates. If multiple logs mention "likes dark mode", only output it once.
+4. Output EXACTLY a JSON array of MemoryPatchOp objects. No markdown formatting, no explanations.
+
+A MemoryPatchOp has this structure:
+{
+  "op": "upsert" | "delete",
+  "section": "Visual Preferences" | "Generation Defaults" | "Prompt Patterns" | "Guardrails" | string,
+  "key": string (a short unique snake_case identifier, e.g. "preferred_style"),
+  "value": string (the detailed preference)
+}`;
+
+    const prompt = `Here are the recent daily logs:\n\n${logsText}\n\nAnalyze these and output the consolidated JSON array:`;
+
+    try {
+        const jsonResponse = await generateText(systemInstruction, prompt, true, TextModel.FLASH);
+        console.log('[Consolidator] Raw LLM output received (length):', jsonResponse.length);
+
+        let parsed: any;
+        try {
+            // Handle potential markdown block wrapper from LLM
+            const cleanJson = jsonResponse.replace(/```json\n?/, '').replace(/```\n?$/, '').trim();
+            parsed = JSON.parse(cleanJson);
+        } catch (e) {
+            console.error('[Consolidator] Failed to parse LLM JSON:', jsonResponse);
+            return [];
         }
+
+        if (Array.isArray(parsed)) {
+            // Validate basic structure
+            const validOps = parsed.filter(op => op.op === 'upsert' || op.op === 'delete');
+            console.log(`[Consolidator] Extracted ${validOps.length} valid memory operations.`);
+            return validOps as MemoryPatchOp[];
+        }
+        return [];
+    } catch (err) {
+        console.error('[Consolidator] LLM clustering failed:', err);
+        return [];
     }
-    return ops;
 }
+
 
 /**
  * Check if any project findings should be promoted to Global
@@ -105,7 +112,7 @@ async function checkGlobalPromotion(projectLogs: MemoryLog[]): Promise<void> {
     // Or if the log explicitly has scopeHint: 'global'
     const globalLogs = projectLogs.filter(l => l.scopeHint === 'global');
     if (globalLogs.length > 0) {
-        const globalOps = clusterLogs(globalLogs);
+        const globalOps = await clusterLogsWithLLM(globalLogs);
         if (globalOps.length > 0) {
             await applyPatchToMemory('global', 'default', {
                 ops: globalOps,

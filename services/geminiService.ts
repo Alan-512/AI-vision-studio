@@ -1303,3 +1303,35 @@ export const extractPromptFromHistory = async (history: ChatMessage[], mode: App
     const response = await ai.models.generateContent({ model: TextModel.FLASH, contents });
     return (response.text ?? '').trim();
 };
+
+/**
+ * Utility for background tasks that require raw text or JSON generation (e.g. Memory Consolidator, Semantic Re-ranking)
+ */
+export const generateText = async (
+    systemInstruction: string,
+    prompt: string,
+    forceJson: boolean = false,
+    modelName: TextModel = TextModel.FLASH
+): Promise<string> => {
+    const ai = getAIClient();
+    const config: any = {
+        systemInstruction,
+    };
+
+    if (forceJson) {
+        config.responseMimeType = "application/json";
+    }
+
+    try {
+        const response = await ai.models.generateContent({
+            model: modelName,
+            contents: prompt,
+            config
+        });
+        return (response.text ?? '').trim();
+    } catch (err) {
+        console.error('[generateText] Failed:', err);
+        throw err;
+    }
+};
+
