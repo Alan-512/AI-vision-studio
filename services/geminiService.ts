@@ -826,6 +826,11 @@ Rules:
                             console.error('[Memory] AI failed to log memory:', e);
                         });
                     });
+                    // V2.2 FIX: If the model only emitted a tool call with no text, show a confirmation
+                    if (!fullText.trim()) {
+                        fullText = `✅ 好的，我记住了：${value}`;
+                        onChunk(fullText);
+                    }
                 }
             } else if (pendingToolCall.toolName === 'memory_search') {
                 // memory_search: perform semantic-like keyword search through logs and docs
@@ -833,9 +838,12 @@ Rules:
                 import('./memoryService').then(async ({ memorySearch }) => {
                     try {
                         const searchResult = await memorySearch(query, projectId);
-                        // In a real implementation, we'd add this back to the context.
-                        // For now, we log it. The UI/App.tsx would normally handle the tool output.
                         console.log(`[Memory] memory_search result for "${query}":`, searchResult);
+                        // V2.2 FIX: If no text was generated, show the search result to the user
+                        if (!fullText.trim() && searchResult) {
+                            fullText = searchResult;
+                            onChunk(fullText);
+                        }
                     } catch (e) {
                         console.error('[Memory] memory_search failed:', e);
                     }

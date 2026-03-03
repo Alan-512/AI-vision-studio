@@ -1,29 +1,69 @@
 /**
- * Memory Consolidator - Background process for Memory V2.1 (OpenClaw style)
+ * Memory Consolidator V2.2 - Low-frequency background process
+ * 
+ * Key Change: Consolidation now runs AT MOST once per day (not after every image generation).
+ * The primary memory channel is `update_memory` tool calls during live chat.
+ * This consolidator is a safety net for implicit/behavioral preferences only.
  * 
  * Functions:
- * - Review Daily Logs for the current/previous day
- * - Resolve conflicts and deduplicate findings
+ * - Review ONLY unconsolidated Daily Logs (incremental processing)
+ * - Resolve conflicts and deduplicate findings via LLM
  * - Promote recurring project patterns to Global memory
- * - Update structured MEMORY.md files via applyPatchToMemory
+ * - Mark processed logs as consolidated to prevent re-processing
  */
 
-import { getMemoryLogs, MemoryLog } from './storageService';
+import { getMemoryLogs, MemoryLog, markLogsConsolidated } from './storageService';
 import { applyPatchToMemory } from './memoryService';
 import { MemoryPatch, MemoryPatchOp } from '../utils/memoryPatch';
 import { generateText } from './geminiService';
 import { TextModel } from '../types';
 
+const CONSOLIDATION_KEY = 'memory_last_consolidation_date';
 
 /**
- * Run consolidation for a specific project or global scope
+ * Check if consolidation has already run today.
+ * Returns true if we should skip (already ran today).
  */
-export const runConsolidation = async (projectId?: string): Promise<void> => {
-    console.log(`[Consolidator] Starting consolidation for ${projectId || 'Global'}...`);
+function shouldSkipConsolidation(): boolean {
+    const lastDate = localStorage.getItem(CONSOLIDATION_KEY);
+    const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+    return lastDate === today;
+}
 
-    // 1. Fetch recent logs (last 50 for now)
-    const logs = await getMemoryLogs({ projectId, limit: 50 });
-    if (logs.length === 0) return;
+/**
+ * Mark today as consolidated so subsequent calls are no-ops.
+ */
+function markConsolidationDone(): void {
+    const today = new Date().toISOString().split('T')[0];
+    localStorage.setItem(CONSOLIDATION_KEY, today);
+}
+
+/**
+ * Run consolidation for a specific project or global scope.
+ * Guarded to run at most once per calendar day.
+ * Only processes logs that haven't been consolidated yet.
+ * 
+ * @param projectId - The project to consolidate. If omitted, consolidates global scope.
+ * @param force - If true, bypass the daily guard (e.g., user manually triggered).
+ */
+export const runConsolidation = async (projectId?: string, force?: boolean): Promise<void> => {
+    // Daily frequency guard
+    if (!force && shouldSkipConsolidation()) {
+        console.log('[Consolidator] Already consolidated today. Skipping.');
+        return;
+    }
+
+    console.log(`[Consolidator] Starting daily consolidation for ${projectId || 'Global'}...`);
+
+    // 1. Fetch ONLY unconsolidated logs (incremental - no redundant LLM calls)
+    const logs = await getMemoryLogs({ projectId, limit: 50, onlyUnconsolidated: true });
+    if (logs.length === 0) {
+        console.log('[Consolidator] No new unconsolidated logs found. Done.');
+        markConsolidationDone();
+        return;
+    }
+
+    console.log(`[Consolidator] Found ${logs.length} new logs to process.`);
 
     // 2. Use LLM to intelligently cluster and extract structured patches from raw logs
     const findings = await clusterLogsWithLLM(logs);
@@ -43,7 +83,14 @@ export const runConsolidation = async (projectId?: string): Promise<void> => {
         await checkGlobalPromotion(logs);
     }
 
-    console.log(`[Consolidator] Finished consolidation.`);
+    // 5. Mark all processed logs as consolidated (prevents re-processing)
+    const logIds = logs.map(l => l.id);
+    await markLogsConsolidated(logIds);
+
+    // 6. Mark today as done
+    markConsolidationDone();
+
+    console.log(`[Consolidator] Finished. Processed ${logs.length} logs, extracted ${findings.length} ops.`);
 };
 
 /**

@@ -287,6 +287,16 @@ export function App() {
         });
     }, []);
 
+    // V2.2: Daily consolidation at startup (runs at most once per calendar day)
+    useEffect(() => {
+        if (!isLoaded || !activeProjectId) return;
+        // Fire-and-forget: daily guard inside runConsolidation prevents redundant runs
+        runConsolidation(activeProjectId).catch(err => {
+            console.error('[App] Daily consolidation failed:', err);
+        });
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [isLoaded]);
+
     // CRASH PROTECTION: Warn user before closing if tasks are in progress
     useEffect(() => {
         const hasActiveTasks = tasks.some(t => t.status === 'GENERATING' || t.status === 'QUEUED');
@@ -967,13 +977,10 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
                     saveTask({ ...newTask, status: 'COMPLETED' }); // Persist completion
                     if (onSuccess) onSuccess(asset);
 
-                    // Background Memory Extraction Task
-                    // Don't wait for it to finish, just let it run
-                    runMemoryExtractionTask(currentProjectId, historyOverride || chatHistory, userKey).then(() => {
-                        // V2.1: Run consolidate right after extraction finishes parsing implicit thoughts.
-                        return runConsolidation(currentProjectId);
-                    }).catch(err => {
-                        console.error('[App] Background memory extraction/consolidation failed:', err);
+                    // Background Memory Extraction Task (writes to Daily Logs only)
+                    // Consolidation is now decoupled - runs at most once per day at app startup
+                    runMemoryExtractionTask(currentProjectId, historyOverride || chatHistory, userKey).catch(err => {
+                        console.error('[App] Background memory extraction failed:', err);
                     });
                 } else {
                     const videoResult = await generateVideo(genParams, async (operationName) => {

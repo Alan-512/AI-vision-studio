@@ -851,6 +851,7 @@ export interface MemoryLog {
   scopeHint?: 'global' | 'project';
   timestamp: number;
   metadata?: any;
+  consolidated?: boolean; // V2.2: Whether this log has been processed by consolidator
 }
 
 export const getMemoryDoc = async (scope: 'global' | 'project', targetId: string): Promise<MemoryDoc | null> => {
@@ -972,47 +973,79 @@ export const recordMemoryOp = async (op: Omit<MemoryOp, 'id' | 'timestamp'>): Pr
  * Save a new entry to the daily log stream (V2.1)
  */
 export const saveMemoryLog = async (log: Omit<MemoryLog, 'id' | 'timestamp'>): Promise<string> => {
-    const timestamp = Date.now();
-    const id = `log_${timestamp}_${Math.random().toString(36).slice(2, 7)}`;
-    const fullLog: MemoryLog = { ...log, id, timestamp };
-    
-    const transaction = await getTransaction(STORE_MEMORY_LOGS, 'readwrite');
-    return new Promise((resolve, reject) => {
-        const store = transaction.objectStore(STORE_MEMORY_LOGS);
-        const request = store.put(fullLog);
-        request.onsuccess = () => resolve(id);
-        request.onerror = () => reject(request.error);
-    });
+  const timestamp = Date.now();
+  const id = `log_${timestamp}_${Math.random().toString(36).slice(2, 7)}`;
+  const fullLog: MemoryLog = { ...log, id, timestamp };
+
+  const transaction = await getTransaction(STORE_MEMORY_LOGS, 'readwrite');
+  return new Promise((resolve, reject) => {
+    const store = transaction.objectStore(STORE_MEMORY_LOGS);
+    const request = store.put(fullLog);
+    request.onsuccess = () => resolve(id);
+    request.onerror = () => reject(request.error);
+  });
 };
 
 /**
  * Get memory logs with optional filters (V2.1)
  */
-export const getMemoryLogs = async (params: { date?: string; projectId?: string; limit?: number }): Promise<MemoryLog[]> => {
-    const transaction = await getTransaction(STORE_MEMORY_LOGS, 'readonly');
-    return new Promise((resolve, reject) => {
-        const store = transaction.objectStore(STORE_MEMORY_LOGS);
-        let request: IDBRequest;
-        
-        if (params.date) {
-            const index = store.index('date');
-            request = index.getAll(params.date);
-        } else if (params.projectId) {
-            const index = store.index('projectId');
-            request = index.getAll(params.projectId);
+export const getMemoryLogs = async (params: { date?: string; projectId?: string; limit?: number; onlyUnconsolidated?: boolean }): Promise<MemoryLog[]> => {
+  const transaction = await getTransaction(STORE_MEMORY_LOGS, 'readonly');
+  return new Promise((resolve, reject) => {
+    const store = transaction.objectStore(STORE_MEMORY_LOGS);
+    let request: IDBRequest;
+
+    if (params.date) {
+      const index = store.index('date');
+      request = index.getAll(params.date);
+    } else if (params.projectId) {
+      const index = store.index('projectId');
+      request = index.getAll(params.projectId);
+    } else {
+      request = store.getAll();
+    }
+
+    request.onsuccess = () => {
+      let logs = request.result as MemoryLog[];
+      if (params.date && params.projectId) {
+        logs = logs.filter(l => l.projectId === params.projectId);
+      }
+      // V2.2: Filter out already-consolidated logs to avoid redundant LLM calls
+      if (params.onlyUnconsolidated) {
+        logs = logs.filter(l => !l.consolidated);
+      }
+      logs.sort((a, b) => b.timestamp - a.timestamp);
+      if (params.limit) logs = logs.slice(0, params.limit);
+      resolve(logs);
+    };
+    request.onerror = () => reject(request.error);
+  });
+};
+
+/**
+ * Mark logs as consolidated after successful processing (V2.2)
+ * Prevents the same logs from being re-sent to LLM on subsequent runs.
+ */
+export const markLogsConsolidated = async (logIds: string[]): Promise<void> => {
+  if (logIds.length === 0) return;
+  const transaction = await getTransaction(STORE_MEMORY_LOGS, 'readwrite');
+  const store = transaction.objectStore(STORE_MEMORY_LOGS);
+
+  for (const id of logIds) {
+    const getReq = store.get(id);
+    await new Promise<void>((resolve, reject) => {
+      getReq.onsuccess = () => {
+        const log = getReq.result as MemoryLog | undefined;
+        if (log) {
+          log.consolidated = true;
+          const putReq = store.put(log);
+          putReq.onsuccess = () => resolve();
+          putReq.onerror = () => reject(putReq.error);
         } else {
-            request = store.getAll();
+          resolve();
         }
-        
-        request.onsuccess = () => {
-            let logs = request.result as MemoryLog[];
-            if (params.date && params.projectId) {
-                logs = logs.filter(l => l.projectId === params.projectId);
-            }
-            logs.sort((a, b) => b.timestamp - a.timestamp);
-            if (params.limit) logs = logs.slice(0, params.limit);
-            resolve(logs);
-        };
-        request.onerror = () => reject(request.error);
+      };
+      getReq.onerror = () => reject(getReq.error);
     });
+  }
 };
