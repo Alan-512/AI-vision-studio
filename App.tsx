@@ -14,7 +14,7 @@ import { CanvasView } from './components/CanvasView';
 import { generateImage, generateVideo, getUserApiKey, generateTitle } from './services/geminiService';
 import { compressImageForContext, normalizeImageUrlForChat } from './services/imageUtils';
 import {
-    initDB, loadProjects, saveProject, saveAsset, loadAssets, updateAsset,
+    initDB, loadProjects, saveProject, saveAsset, loadAssets, updateAsset, updateProject,
     deleteProjectFromDB, softDeleteAssetInDB, restoreAssetInDB,
     permanentlyDeleteAssetFromDB, bulkPermanentlyDeleteAssets, bulkSoftDeleteAssets, recoverOrphanedProjects,
     releaseBlobUrl, saveTask, loadTasks, deleteTask
@@ -252,39 +252,67 @@ export function App() {
 
     // Initialization
     useEffect(() => {
-        initDB().then(async () => {
-            await recoverOrphanedProjects();
-            const loadedProjects = await loadProjects().then(p => p.filter(proj => !proj.deletedAt));
-            // Initial sort: Newest modification first
-            loadedProjects.sort((a, b) => b.updatedAt - a.updatedAt);
+        let isMounted = true;
 
-            if (loadedProjects.length === 0) {
-                const newProject: Project = {
-                    id: crypto.randomUUID(), name: 'New Project', createdAt: Date.now(), updatedAt: Date.now(),
-                    savedMode: AppMode.IMAGE, chatHistory: [], videoChatHistory: []
-                };
-                await saveProject(newProject);
-                setProjects([newProject]);
-                setActiveProjectId(newProject.id);
-            } else {
-                setProjects(loadedProjects);
-                setActiveProjectId(loadedProjects[0].id);
-            }
+        const initializeApp = async (retryCount = 0) => {
+            try {
+                await initDB();
+                await recoverOrphanedProjects();
+                const loadedProjects = await loadProjects().then(p => p.filter(proj => !proj.deletedAt));
 
-            // Load persisted tasks and recover any that were interrupted
-            const persistedTasks = await loadTasks();
-            const recoveredTasks = persistedTasks.map(task => {
-                // Mark interrupted tasks as FAILED (they can't be resumed after refresh)
-                if (task.status === 'GENERATING' || task.status === 'QUEUED') {
-                    const failedTask = { ...task, status: 'FAILED' as const, error: 'Task interrupted by page refresh' };
-                    saveTask(failedTask); // Persist the updated status
-                    return failedTask;
+                if (!isMounted) return;
+
+                // Initial sort: Newest modification first
+                loadedProjects.sort((a, b) => b.updatedAt - a.updatedAt);
+
+                if (loadedProjects.length === 0) {
+                    const newProject: Project = {
+                        id: crypto.randomUUID(), name: 'New Project', createdAt: Date.now(), updatedAt: Date.now(),
+                        savedMode: AppMode.IMAGE, chatHistory: [], videoChatHistory: []
+                    };
+                    await saveProject(newProject);
+                    setProjects([newProject]);
+                    setActiveProjectId(newProject.id);
+                } else {
+                    setProjects(loadedProjects);
+                    setActiveProjectId(loadedProjects[0].id);
                 }
-                return task;
-            });
-            setTasks(recoveredTasks);
-            setIsLoaded(true);
-        });
+
+                // Load persisted tasks and recover any that were interrupted
+                const persistedTasks = await loadTasks();
+                const recoveredTasks = persistedTasks.map(task => {
+                    // Mark interrupted tasks as FAILED (they can't be resumed after refresh)
+                    if (task.status === 'GENERATING' || task.status === 'QUEUED') {
+                        const failedTask = { ...task, status: 'FAILED' as const, error: 'Task interrupted by page refresh' };
+                        saveTask(failedTask); // Persist the updated status
+                        return failedTask;
+                    }
+                    return task;
+                });
+
+                if (isMounted) {
+                    setTasks(recoveredTasks);
+                    setIsLoaded(true);
+                }
+            } catch (error) {
+                console.error(`[App] Initialization failed (attempt ${retryCount + 1}):`, error);
+
+                // V2.2.3: Exponential backoff instead of creating a blank project on failure
+                if (retryCount < 5 && isMounted) {
+                    const delay = Math.min(1000 * Math.pow(2, retryCount), 10000);
+                    console.warn(`[App] Retrying initialization in ${delay}ms...`);
+                    setTimeout(() => initializeApp(retryCount + 1), delay);
+                } else if (isMounted) {
+                    // We failed completely. To avoid silent complete wipes, we don't init a blank project
+                    // but we do allow the app to load into a broken state so the user can see errors / refresh.
+                    console.error("[App] Fatal database failure. Cannot load workspace.");
+                    setIsLoaded(true);
+                }
+            }
+        };
+
+        initializeApp();
+        return () => { isMounted = false; };
     }, []);
 
     // V2.2: Daily consolidation at startup (runs at most once per calendar day)
@@ -425,28 +453,17 @@ export function App() {
         // Only update time if NOT in initialization phase
         const newUpdatedAt = isInitializingRef.current ? project.updatedAt : Date.now();
 
-        const updatedProject: Project = {
-            ...project,
+        const updates: Partial<Project> = {
             updatedAt: newUpdatedAt,
             savedParams: paramsToSave,
             savedMode: mode,
-            chatHistory: mode === AppMode.IMAGE ? chatHistory : project.chatHistory,
-            videoChatHistory: mode === AppMode.VIDEO ? chatHistory : project.videoChatHistory,
+            chatHistory: mode === AppMode.IMAGE ? chatHistory : undefined,
+            videoChatHistory: mode === AppMode.VIDEO ? chatHistory : undefined,
             contextSummary: contextSummary, summaryCursor: summaryCursor
         };
 
-        saveProject(updatedProject);
+        updateProject(activeProjectId, updates);
 
-        // Update projects list in state
-        setProjects(prev => {
-            const newProjects = prev.map(p => p.id === activeProjectId ? updatedProject : p);
-            // If the project was actually updated (meaning new data user-driven), the caller expects re-sorting
-            // but we only do it if the timestamp actually moved forward relative to initialization.
-            if (!isInitializingRef.current) {
-                return newProjects.sort((a, b) => b.updatedAt - a.updatedAt);
-            }
-            return newProjects;
-        });
     }, [params, chatHistory, contextSummary, summaryCursor, mode]);
 
     const addToast = (type: 'success' | 'error' | 'info', title: string, message: string) => {
@@ -1359,7 +1376,7 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
                 </div>
             </div>
 
-            <ProjectSidebar isOpen={showProjects} onClose={() => setShowProjects(false)} projects={projects} activeProjectId={activeProjectId} generatingStates={generatingStates} onSelectProject={(id) => switchProject(id)} onCreateProject={() => createNewProject()} onRenameProject={(id, name) => { const p = projects.find(p => p.id === id); if (p) { const updated = { ...p, name }; setProjects(prev => prev.map(prj => prj.id === id ? updated : prj)); saveProject(updated); } }} onDeleteProject={openConfirmDeleteProject} />
+            <ProjectSidebar isOpen={showProjects} onClose={() => setShowProjects(false)} projects={projects} activeProjectId={activeProjectId} generatingStates={generatingStates} onSelectProject={(id) => switchProject(id)} onCreateProject={() => createNewProject()} onRenameProject={(id, name) => { const p = projects.find(p => p.id === id); if (p) { const updated = { ...p, name }; setProjects(prev => prev.map(prj => prj.id === id ? updated : prj)); updateProject(id, { name }); } }} onDeleteProject={openConfirmDeleteProject} />
 
             <div className="flex-1 flex overflow-hidden relative">
                 <GenerationForm mode={mode} params={params} setParams={setParams} chatParams={chatParams} setChatParams={setChatParams} isGenerating={tasks.some(t => t.projectId === activeProjectId && (t.status === 'GENERATING' || t.status === 'QUEUED'))} startTime={generatingStates[activeProjectId]} onGenerate={handleParamsGenerate} onVerifyVeo={handleAuthVerify} veoVerified={veoVerified} chatHistory={chatHistory} setChatHistory={setChatHistory} activeTab={activeTab} onTabChange={setActiveTab} chatSelectedImages={chatSelectedImages} setChatSelectedImages={setChatSelectedImages} projectId={activeProjectId} cooldownEndTime={videoCooldownEndTime} thoughtImages={thoughtImages} setThoughtImages={setThoughtImages} {...({ projectContextSummary: contextSummary, projectSummaryCursor: summaryCursor, onUpdateProjectContext: (s: string, c: number) => { setContextSummary(s); setSummaryCursor(c); }, onToolCall: handleAgentToolCall, agentContextAssets: mode === AppMode.IMAGE ? agentContextAssets : [], onRemoveContextAsset: (assetId: string) => setAgentContextAssets(prev => prev.filter(a => a.id !== assetId)), onClearContextAssets: () => setAgentContextAssets([]) } as any)} />
@@ -1429,7 +1446,7 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
                                             </div>
                                         ))}
                                         {displayedAssets.map(asset => (
-                                            <AssetCard key={asset.id} asset={asset} onClick={handleAssetClick} onUseAsReference={handleUseAsReference} onDelete={() => rightPanelMode === 'TRASH' ? openConfirmDeleteForever(asset.id) : openConfirmDelete(asset.id)} onAddToChat={handleAddAssetToChat} onToggleFavorite={(a) => { const updated = { ...a, isFavorite: !a.isFavorite }; setAssets(prev => prev.map(item => item.id === a.id ? updated : item)); saveAsset(updated); }} isSelectionMode={isSelectionMode} isSelected={selectedAssetIds.has(asset.id)} onToggleSelection={toggleAssetSelection} isTrashMode={rightPanelMode === 'TRASH'} onRestore={() => handleRestoreAsset(asset.id)} />
+                                            <AssetCard key={asset.id} asset={asset} onClick={handleAssetClick} onUseAsReference={handleUseAsReference} onDelete={() => rightPanelMode === 'TRASH' ? openConfirmDeleteForever(asset.id) : openConfirmDelete(asset.id)} onAddToChat={handleAddAssetToChat} onToggleFavorite={(a) => { const updated = { ...a, isFavorite: !a.isFavorite }; setAssets(prev => prev.map(item => item.id === a.id ? updated : item)); updateAsset(a.id, { isFavorite: !a.isFavorite }); }} isSelectionMode={isSelectionMode} isSelected={selectedAssetIds.has(asset.id)} onToggleSelection={toggleAssetSelection} isTrashMode={rightPanelMode === 'TRASH'} onRestore={() => handleRestoreAsset(asset.id)} />
                                         ))}
                                     </div>
                                 )}

@@ -32,18 +32,15 @@ import { GenerationParams, ImageStyle } from '../types';
 const INJECTION_MAX_CHARS = 1600;
 const GLOBAL_DEFAULT_TARGET = 'default';
 
-// Sensitive patterns that should never be stored
+// Sensitive patterns that should never be stored - optimized to avoid false positives on instructions
 const SENSITIVE_PATTERNS = [
-  /api[_-]?key/i,
-  /password/i,
-  /secret/i,
-  /token/i,
-  /credential/i,
-  /auth/i,
+  // Patterns like 'key: AIza...' or 'password = 123456'
+  /(api[_-]?key|password|secret|token|credential|auth|private[_-]?key)\s*[:=]\s*\S+/i,
+  // High-entropy strings or obvious secrets
+  /\bAIza[0-9A-Za-z-_]{35}\b/, // Google API Keys
   /\b\d{3}-\d{2}-\d{4}\b/, // SSN
   /\b\d{16}\b/, // Credit card
-  /private[_-]?key/i,
-  /-----begin\s+(rsa\s+)?private\s+key-----/i,
+  /-----begin\s+(rsa\s+)?private\s+key-----/i, // SSH Private Keys
 ];
 
 // Whitelist for allowed profile fields

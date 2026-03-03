@@ -55,10 +55,16 @@ const getDB = (): Promise<IDBDatabase> => {
     request.onsuccess = () => {
       const db = request.result;
 
-      // Robustness: Handle connection closing events
+      // V2.2.3: When another tab opens a NEWER version of the DB (after deployment),
+      // this tab MUST close its connection so the upgrade can proceed.
+      // Then auto-reload to pick up the new code + schema.
       db.onversionchange = () => {
         db.close();
         dbPromise = null;
+        // Auto-reload: the new deployment's JS is already cached by the browser.
+        // This ensures the user always runs against the latest DB schema.
+        console.warn('[LuminaDB] New version detected (deployment update). Reloading...');
+        window.location.reload();
       };
 
       db.onclose = () => {
@@ -89,10 +95,6 @@ const getDB = (): Promise<IDBDatabase> => {
         assetStore.createIndex('projectId', 'projectId', { unique: false });
       }
 
-      // Tasks store (new in v3) - persist background task state
-      if (!db.objectStoreNames.contains(STORE_TASKS)) {
-        db.createObjectStore(STORE_TASKS, { keyPath: 'id' });
-      }
       // Tasks store (new in v3) - persist background task state
       if (!db.objectStoreNames.contains(STORE_TASKS)) {
         db.createObjectStore(STORE_TASKS, { keyPath: 'id' });
@@ -160,8 +162,23 @@ const getTransaction = async (storeNames: string | string[], mode: IDBTransactio
 
 export const initDB = async (): Promise<void> => {
   await getDB();
-  // Try to enable persistence silently on init
-  initStoragePersistence().catch(console.warn);
+
+  // V2.2.3: Aggressively request persistent storage on EVERY init.
+  // This is the single most important defense against browser eviction
+  // after a Cloudflare deployment downloads new static assets.
+  try {
+    if (navigator.storage && navigator.storage.persist) {
+      const alreadyPersisted = await navigator.storage.persisted();
+      if (!alreadyPersisted) {
+        const granted = await navigator.storage.persist();
+        console.log(`[LuminaDB] Storage persistence ${granted ? 'GRANTED ✅' : 'DENIED ⚠️ (best-effort mode)'}`);
+      } else {
+        console.log('[LuminaDB] Storage persistence already active ✅');
+      }
+    }
+  } catch (e) {
+    console.warn('[LuminaDB] Failed to request storage persistence:', e);
+  }
 };
 
 // --- Orphan Recovery ---
@@ -250,41 +267,82 @@ export const loadProjects = async (): Promise<Project[]> => {
 };
 
 export const deleteProjectFromDB = async (projectId: string): Promise<void> => {
-  const transaction = await getTransaction([STORE_PROJECTS, STORE_ASSETS], 'readwrite');
-  return new Promise((resolve, reject) => {
-    // Delete project
-    const projectStore = transaction.objectStore(STORE_PROJECTS);
-    projectStore.delete(projectId);
+  const transaction = await getTransaction([STORE_PROJECTS, STORE_ASSETS, STORE_TASKS, STORE_MEMORY_LOGS], 'readwrite');
+  const projectStore = transaction.objectStore(STORE_PROJECTS);
+  const assetStore = transaction.objectStore(STORE_ASSETS);
+  const taskStore = transaction.objectStore(STORE_TASKS);
+  const logStore = transaction.objectStore(STORE_MEMORY_LOGS);
 
-    // Delete associated assets (Hard delete)
-    const assetStore = transaction.objectStore(STORE_ASSETS);
-    // Safe check for index existence before using it
+  return new Promise((resolve, reject) => {
+    // 1. Delete associated assets (Hard delete)
     if (assetStore.indexNames.contains('projectId')) {
       const index = assetStore.index('projectId');
       const request = index.getAllKeys(projectId);
-
       request.onsuccess = () => {
         const keys = request.result;
-        if (Array.isArray(keys)) {
-          keys.forEach(key => assetStore.delete(key));
-        }
+        if (Array.isArray(keys)) keys.forEach(key => assetStore.delete(key));
       };
     } else {
-      // Fallback: iterate cursor (slower but safe) if index missing
       const request = assetStore.openCursor();
       request.onsuccess = (e: any) => {
         const cursor = e.target.result;
         if (cursor) {
-          if (cursor.value.projectId === projectId) {
-            cursor.delete();
-          }
+          if (cursor.value.projectId === projectId) cursor.delete();
           cursor.continue();
         }
       };
     }
 
+    // 2. Delete tasks associated with project
+    const taskRequest = taskStore.openCursor();
+    taskRequest.onsuccess = (e: any) => {
+      const cursor = e.target.result;
+      if (cursor) {
+        if (cursor.value.projectId === projectId) cursor.delete();
+        cursor.continue();
+      }
+    };
+
+    // 3. Delete memory logs associated with project
+    if (logStore.indexNames.contains('projectId')) {
+      const index = logStore.index('projectId');
+      const request = index.getAllKeys(projectId);
+      request.onsuccess = () => {
+        const keys = request.result;
+        if (Array.isArray(keys)) keys.forEach(key => logStore.delete(key));
+      };
+    }
+
+    // 4. Finally delete the project itself
+    projectStore.delete(projectId);
+
     transaction.oncomplete = () => resolve();
     transaction.onerror = () => reject(transaction.error);
+  });
+};
+
+/**
+ * Partial update for projects to prevent overwriting metadata / chatHistory
+ */
+export const updateProject = async (id: string, updates: Partial<Project>): Promise<void> => {
+  const transaction = await getTransaction(STORE_PROJECTS, 'readwrite');
+  return new Promise((resolve, reject) => {
+    const store = transaction.objectStore(STORE_PROJECTS);
+    const request = store.get(id);
+
+    request.onsuccess = () => {
+      const data = request.result;
+      if (data) {
+        const updatedData = { ...data, ...updates };
+        const putRequest = store.put(updatedData);
+        putRequest.onsuccess = () => resolve();
+        putRequest.onerror = () => reject(putRequest.error);
+      } else {
+        console.warn(`Project ${id} not found for update.`);
+        resolve();
+      }
+    };
+    request.onerror = () => reject(request.error);
   });
 };
 
@@ -360,26 +418,38 @@ export const saveAsset = async (asset: AssetItem): Promise<void> => {
   return new Promise((resolve, reject) => {
     const store = transaction.objectStore(STORE_ASSETS);
 
-    // SAFETY CHECK: Don't save if it's missing vital data for a completed asset
-    if (storageRecord.status === 'COMPLETED' && !storageRecord.blob && (!storageRecord.url || storageRecord.url === 'blob')) {
-      reject(new Error("Cannot save asset: Missing URL and Blob data"));
-      return;
-    }
+    // CRITICAL: Prevent Data Loss in saveAsset
+    // If we are calling saveAsset on an object that was already loaded in memory,
+    // it likely has blob: undefined but url: "blob:http...".
+    // We MUST check if there is an existing binary Blob in the DB and preserve it
+    // unless the current record explicitly provides a NEW Blob.
+    const existingCheck = store.get(storageRecord.id);
+    existingCheck.onsuccess = () => {
+      const existingData = existingCheck.result;
+      if (existingData && existingData.blob && !storageRecord.blob && storageRecord.url === 'blob') {
+        storageRecord.blob = existingData.blob;
+      }
 
-    const request = store.put(storageRecord);
+      // SAFETY CHECK: Don't save if it's missing vital data for a completed asset
+      if (storageRecord.status === 'COMPLETED' && !storageRecord.blob && (!storageRecord.url || storageRecord.url === 'blob')) {
+        reject(new Error("Cannot save asset: Missing URL and Blob data"));
+        return;
+      }
 
-    request.onsuccess = () => resolve();
+      const request = store.put(storageRecord);
+      request.onsuccess = () => resolve();
+    };
 
-    request.onerror = (e: Event) => {
+    const handleError = (e: Event) => {
       const error = (e.target as IDBRequest).error;
       console.error("Asset Save Failed:", error);
-
       if (error && (error.name === 'QuotaExceededError' || error.name === 'NS_ERROR_DOM_QUOTA_REACHED')) {
         reject(new Error("STORAGE_QUOTA_EXCEEDED"));
       } else {
         reject(error);
       }
     };
+    existingCheck.onerror = handleError;
   });
 };
 
