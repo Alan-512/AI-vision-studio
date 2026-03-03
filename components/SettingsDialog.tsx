@@ -102,9 +102,9 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose,
 
   return (
     <div className="fixed inset-0 z-[60] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
-      <div className={`bg-dark-panel border border-dark-border rounded-2xl w-full shadow-2xl relative overflow-hidden flex flex-col max-h-[90vh] transition-all duration-300 ${activeTab === 'memory' ? 'max-w-3xl' : 'max-w-md'}`}>
+      <div className={`bg-dark-panel border border-dark-border rounded-2xl w-full shadow-2xl relative overflow-hidden flex flex-col h-[700px] max-h-[90vh] transition-all duration-300 ${activeTab === 'memory' ? 'max-w-3xl' : 'max-w-md'}`}>
         {/* Header */}
-        <div className="p-5 border-b border-dark-border flex items-center justify-between bg-dark-surface/50">
+        <div className="p-5 border-b border-dark-border flex items-center justify-between bg-dark-surface/50 shrink-0">
           <div className="flex items-center gap-6">
             <h2 className="text-lg font-bold text-white flex items-center gap-2">
               <Key size={18} className="text-brand-500" />
@@ -134,9 +134,9 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose,
         </div>
 
         {/* Content */}
-        <div className="flex-1 overflow-hidden flex flex-col">
+        <div className="flex-1 overflow-hidden flex flex-col min-h-0">
           {activeTab === 'general' ? (
-            <div className="p-6 space-y-6 overflow-y-auto">
+            <div className="flex-1 p-6 space-y-6 overflow-y-auto custom-scrollbar">
               {/* API Key Section */}
               <div className="space-y-4">
                 <label className="block text-sm font-medium text-gray-300">
