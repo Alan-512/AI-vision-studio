@@ -3,6 +3,7 @@ import React from 'react';
 import { AssetItem } from '../types';
 import { Download, Trash2, Star, Check, RotateCcw, Loader2, AlertCircle, Sparkles, Bookmark } from 'lucide-react';
 import { useLanguage } from '../contexts/LanguageContext';
+import { recordUserPreference } from '../services/memoryService';
 
 interface AssetCardProps {
   asset: AssetItem;
@@ -42,6 +43,11 @@ export const AssetCard: React.FC<AssetCardProps> = ({
     e.stopPropagation();
     e.preventDefault();
     if (isFailed) return;
+
+    // Record implicit preference
+    if (asset.metadata) {
+      recordUserPreference(asset.metadata as any, 'download');
+    }
 
     if (asset.type === 'IMAGE') {
       const img = new Image();
@@ -93,6 +99,12 @@ export const AssetCard: React.FC<AssetCardProps> = ({
 
   const handleFavorite = (e: React.MouseEvent) => {
     e.stopPropagation(); e.preventDefault();
+
+    // Record implicit preference if turning on favorite
+    if (!asset.isFavorite && asset.metadata) {
+      recordUserPreference(asset.metadata as any, 'favorite');
+    }
+
     if (onToggleFavorite) onToggleFavorite(asset);
   };
 
@@ -109,7 +121,7 @@ export const AssetCard: React.FC<AssetCardProps> = ({
 
   const handleDragStart = (e: React.DragEvent) => {
     if (asset.type !== 'IMAGE' || isGenerating || isPending || isFailed) return;
-    e.dataTransfer.setData('application/lumina-asset', JSON.stringify(asset));
+    e.dataTransfer.setData('application/ai-vision-studio-asset', JSON.stringify(asset));
     e.dataTransfer.effectAllowed = 'copy';
     e.dataTransfer.setData('text/plain', asset.prompt);
   };

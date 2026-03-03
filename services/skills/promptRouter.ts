@@ -48,7 +48,7 @@ function findSkillsByKeywords(message?: string): typeof SKILLS[string][] {
  * @returns ActiveSkills containing selected skills and assembled instruction
  */
 export function buildSystemInstruction(options: BuildInstructionOptions): ActiveSkills {
-  const { mode, userMessage, params, contextSummary, searchFacts, useSearch, useGrounding } = options;
+  const { mode, userMessage, params, contextSummary, searchFacts, useSearch, useGrounding, memorySnippet } = options;
 
   // Phase 3: TRUE on-demand loading - start with minimal set
   const activeSkills: typeof SKILLS[string][] = [];
@@ -95,6 +95,12 @@ export function buildSystemInstruction(options: BuildInstructionOptions): Active
     parts.push(`[PROJECT CONTEXT]\n${contextSummary}`);
   }
 
+  // 2.5. CREATIVE MEMORY (if provided) - inject natural-language creative guidance
+  // Format: [CREATIVE MEMORY] for global, [PROJECT STYLE] for project-specific
+  if (memorySnippet) {
+    parts.push(memorySnippet);
+  }
+
   // 3. Current date context (for search relevance)
   const now = new Date();
   const currentDateSection = `[CURRENT DATE]
@@ -131,7 +137,8 @@ export function buildSimpleSystemInstruction(
   contextSummary?: string,
   searchFacts?: string[],
   useSearch?: boolean,
-  useGrounding?: boolean
+  useGrounding?: boolean,
+  memorySnippet?: string
 ): string {
   return buildSystemInstruction({
     mode,
@@ -139,7 +146,8 @@ export function buildSimpleSystemInstruction(
     contextSummary,
     searchFacts,
     useSearch,
-    useGrounding
+    useGrounding,
+    memorySnippet
   }).systemInstruction;
 }
 
@@ -147,7 +155,6 @@ export function buildSimpleSystemInstruction(
  * Get active skills for current context (for debugging/display)
  */
 export function getActiveSkills(options: BuildInstructionOptions): string[] {
-  // Return skill names used
   return buildSystemInstruction(options).skills.map(s => s.name);
 }
 

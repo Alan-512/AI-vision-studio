@@ -36,6 +36,8 @@ export interface BuildInstructionOptions {
   searchFacts?: string[];
   useSearch?: boolean;
   useGrounding?: boolean;
+  /** Memory snippet for long-term memory injection */
+  memorySnippet?: string;
 }
 
 /** Active skill collection result */

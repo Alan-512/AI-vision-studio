@@ -1,11 +1,14 @@
 
 import { Project, AssetItem, AppMode, BackgroundTask } from '../types';
 
-const DB_NAME = 'LuminaDB';
-const DB_VERSION = 3; // Added tasks store // Bumped version to ensure schema upgrade runs
+const DB_NAME = 'AI-Vision-Studio-DB';
+const DB_VERSION = 5; // Added memory_logs for V2.1 Daily Log stream
 const STORE_PROJECTS = 'projects';
 const STORE_ASSETS = 'assets';
 const STORE_TASKS = 'tasks';
+const STORE_MEMORY_DOCS = 'memory_docs';
+const STORE_MEMORY_OPS = 'memory_ops';
+const STORE_MEMORY_LOGS = 'memory_logs';
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 
@@ -89,6 +92,33 @@ const getDB = (): Promise<IDBDatabase> => {
       // Tasks store (new in v3) - persist background task state
       if (!db.objectStoreNames.contains(STORE_TASKS)) {
         db.createObjectStore(STORE_TASKS, { keyPath: 'id' });
+      }
+      // Tasks store (new in v3) - persist background task state
+      if (!db.objectStoreNames.contains(STORE_TASKS)) {
+        db.createObjectStore(STORE_TASKS, { keyPath: 'id' });
+      }
+
+      // Memory docs store (new in v4) - long-term memory system
+      if (!db.objectStoreNames.contains(STORE_MEMORY_DOCS)) {
+        const memoryDocsStore = db.createObjectStore(STORE_MEMORY_DOCS, { keyPath: 'id' });
+        memoryDocsStore.createIndex('scope', 'scope', { unique: false });
+        memoryDocsStore.createIndex('targetId', 'targetId', { unique: false });
+        memoryDocsStore.createIndex('updatedAt', 'updatedAt', { unique: false });
+      }
+
+      // Memory ops store (new in v4) - audit log for memory patches
+      if (!db.objectStoreNames.contains(STORE_MEMORY_OPS)) {
+        const memoryOpsStore = db.createObjectStore(STORE_MEMORY_OPS, { keyPath: 'id' });
+        memoryOpsStore.createIndex('docId', 'docId', { unique: false });
+        memoryOpsStore.createIndex('timestamp', 'timestamp', { unique: false });
+      }
+
+      // Memory logs store (new in v5) - daily log stream for V2.1
+      if (!db.objectStoreNames.contains(STORE_MEMORY_LOGS)) {
+        const memoryLogsStore = db.createObjectStore(STORE_MEMORY_LOGS, { keyPath: 'id' });
+        memoryLogsStore.createIndex('date', 'date', { unique: false });
+        memoryLogsStore.createIndex('projectId', 'projectId', { unique: false });
+        memoryLogsStore.createIndex('timestamp', 'timestamp', { unique: false });
       }
     };
   });
@@ -781,4 +811,208 @@ export const clearCompletedTasks = async (): Promise<void> => {
     transaction.oncomplete = () => resolve();
     transaction.onerror = () => reject(transaction.error);
   });
+};
+
+
+// --- Memory Docs (Long-term Memory System) ---
+
+export interface MemoryDoc {
+  id: string;
+  scope: 'global' | 'project';
+  targetId: string;
+  path: string;
+  content: string;
+  version: number;
+  updatedAt: number;
+  createdAt: number;
+  isDeleted?: boolean;
+}
+
+export interface MemoryOp {
+  id: string;
+  docId: string;
+  operation: 'upsert' | 'append' | 'delete' | 'rollback';
+  section?: string;
+  key?: string;
+  value?: string;
+  oldValue?: string;
+  patch: string;
+  confidence: number;
+  reason: string;
+  timestamp: number;
+}
+
+export interface MemoryLog {
+  id: string;
+  date: string; // YYYY-MM-DD
+  projectId?: string;
+  content: string;
+  confidence: number;
+  scopeHint?: 'global' | 'project';
+  timestamp: number;
+  metadata?: any;
+}
+
+export const getMemoryDoc = async (scope: 'global' | 'project', targetId: string): Promise<MemoryDoc | null> => {
+  const id = `${scope}:${targetId}`;
+  const transaction = await getTransaction(STORE_MEMORY_DOCS, 'readonly');
+  return new Promise((resolve, reject) => {
+    const store = transaction.objectStore(STORE_MEMORY_DOCS);
+    const request = store.get(id);
+    request.onsuccess = () => {
+      const doc = request.result as MemoryDoc | undefined;
+      resolve(doc && !doc.isDeleted ? doc : null);
+    };
+    request.onerror = () => reject(request.error);
+  });
+};
+
+export const saveMemoryDoc = async (doc: MemoryDoc, expectedVersion?: number): Promise<void> => {
+  if (expectedVersion !== undefined) {
+    const existing = await getMemoryDoc(doc.scope, doc.targetId);
+    if (existing && existing.version !== expectedVersion) {
+      throw new Error(`VERSION_CONFLICT: Expected version ${expectedVersion}, but found ${existing.version}`);
+    }
+  }
+  const transaction = await getTransaction(STORE_MEMORY_DOCS, 'readwrite');
+  return new Promise((resolve, reject) => {
+    const store = transaction.objectStore(STORE_MEMORY_DOCS);
+    doc.updatedAt = Date.now();
+    if (!doc.createdAt) doc.createdAt = doc.updatedAt;
+    if (!doc.version) doc.version = 1;
+    else doc.version++;
+    const request = store.put(doc);
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error);
+  });
+};
+
+export const deleteMemoryDoc = async (scope: 'global' | 'project', targetId: string): Promise<void> => {
+  const existing = await getMemoryDoc(scope, targetId);
+  if (!existing) return;
+  existing.isDeleted = true;
+  existing.updatedAt = Date.now();
+  existing.version++;
+  const transaction = await getTransaction(STORE_MEMORY_DOCS, 'readwrite');
+  return new Promise((resolve, reject) => {
+    const store = transaction.objectStore(STORE_MEMORY_DOCS);
+    const request = store.put(existing);
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error);
+  });
+};
+
+export const restoreMemoryDoc = async (scope: 'global' | 'project', targetId: string): Promise<void> => {
+  const id = `${scope}:${targetId}`;
+  const transaction = await getTransaction(STORE_MEMORY_DOCS, 'readwrite');
+  return new Promise((resolve, reject) => {
+    const store = transaction.objectStore(STORE_MEMORY_DOCS);
+    const request = store.get(id);
+    request.onsuccess = () => {
+      const doc = request.result as MemoryDoc | undefined;
+      if (doc) {
+        doc.isDeleted = false;
+        doc.updatedAt = Date.now();
+        doc.version++;
+        const putRequest = store.put(doc);
+        putRequest.onsuccess = () => resolve();
+        putRequest.onerror = () => reject(putRequest.error);
+      } else {
+        resolve();
+      }
+    };
+    request.onerror = () => reject(request.error);
+  });
+};
+
+export const getAllMemoryDocs = async (includeDeleted = false): Promise<MemoryDoc[]> => {
+  const transaction = await getTransaction(STORE_MEMORY_DOCS, 'readonly');
+  return new Promise((resolve, reject) => {
+    const store = transaction.objectStore(STORE_MEMORY_DOCS);
+    const request = store.getAll();
+    request.onsuccess = () => {
+      let docs = request.result as MemoryDoc[];
+      if (!includeDeleted) docs = docs.filter(d => !d.isDeleted);
+      resolve(docs);
+    };
+    request.onerror = () => reject(request.error);
+  });
+};
+
+export const getMemoryOps = async (docId: string, limit = 50): Promise<MemoryOp[]> => {
+  const transaction = await getTransaction(STORE_MEMORY_OPS, 'readonly');
+  return new Promise((resolve, reject) => {
+    const store = transaction.objectStore(STORE_MEMORY_OPS);
+    const index = store.index('docId');
+    const request = index.getAll(docId);
+    request.onsuccess = () => {
+      const ops = request.result as MemoryOp[];
+      ops.sort((a, b) => b.timestamp - a.timestamp);
+      resolve(ops.slice(0, limit));
+    };
+    request.onerror = () => reject(request.error);
+  });
+};
+
+export const recordMemoryOp = async (op: Omit<MemoryOp, 'id' | 'timestamp'>): Promise<void> => {
+  const fullOp: MemoryOp = {
+    ...op,
+    id: `op_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+    timestamp: Date.now()
+  };
+  const transaction = await getTransaction(STORE_MEMORY_OPS, 'readwrite');
+  return new Promise((resolve, reject) => {
+    const store = transaction.objectStore(STORE_MEMORY_OPS);
+    const request = store.put(fullOp);
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error);
+  });
+};
+/**
+ * Save a new entry to the daily log stream (V2.1)
+ */
+export const saveMemoryLog = async (log: Omit<MemoryLog, 'id' | 'timestamp'>): Promise<string> => {
+    const timestamp = Date.now();
+    const id = `log_${timestamp}_${Math.random().toString(36).slice(2, 7)}`;
+    const fullLog: MemoryLog = { ...log, id, timestamp };
+    
+    const transaction = await getTransaction(STORE_MEMORY_LOGS, 'readwrite');
+    return new Promise((resolve, reject) => {
+        const store = transaction.objectStore(STORE_MEMORY_LOGS);
+        const request = store.put(fullLog);
+        request.onsuccess = () => resolve(id);
+        request.onerror = () => reject(request.error);
+    });
+};
+
+/**
+ * Get memory logs with optional filters (V2.1)
+ */
+export const getMemoryLogs = async (params: { date?: string; projectId?: string; limit?: number }): Promise<MemoryLog[]> => {
+    const transaction = await getTransaction(STORE_MEMORY_LOGS, 'readonly');
+    return new Promise((resolve, reject) => {
+        const store = transaction.objectStore(STORE_MEMORY_LOGS);
+        let request: IDBRequest;
+        
+        if (params.date) {
+            const index = store.index('date');
+            request = index.getAll(params.date);
+        } else if (params.projectId) {
+            const index = store.index('projectId');
+            request = index.getAll(params.projectId);
+        } else {
+            request = store.getAll();
+        }
+        
+        request.onsuccess = () => {
+            let logs = request.result as MemoryLog[];
+            if (params.date && params.projectId) {
+                logs = logs.filter(l => l.projectId === params.projectId);
+            }
+            logs.sort((a, b) => b.timestamp - a.timestamp);
+            if (params.limit) logs = logs.slice(0, params.limit);
+            resolve(logs);
+        };
+        request.onerror = () => reject(request.error);
+    });
 };

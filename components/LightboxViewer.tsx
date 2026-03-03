@@ -3,6 +3,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { X, ZoomIn, ZoomOut, RotateCcw, Download, MessageSquarePlus, Brush, Trash2, Video, Wand2 } from 'lucide-react';
 import { AssetItem, ImageModel, VideoModel } from '../types';
 import { useLanguage } from '../contexts/LanguageContext';
+import { recordUserPreference } from '../services/memoryService';
 
 interface LightboxViewerProps {
   asset: AssetItem;
@@ -20,6 +21,7 @@ interface LightboxViewerProps {
 export const LightboxViewer: React.FC<LightboxViewerProps> = ({ asset, onClose, onDelete, onAddToChat, onInpaint, onExtendVideo, onRemix }) => {
   const { t } = useLanguage();
   const [scale, setScale] = useState(1);
+  // ... [rest of the component state/refs] ...
   const [position, setPosition] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
@@ -127,6 +129,12 @@ export const LightboxViewer: React.FC<LightboxViewerProps> = ({ asset, onClose, 
 
   const handleDownload = (e: React.MouseEvent) => {
     e.preventDefault();
+
+    // Record implicit preference
+    if (asset.metadata) {
+      recordUserPreference(asset.metadata as any, 'download');
+    }
+
     if (asset.type === 'IMAGE') {
       const img = new Image();
       img.crossOrigin = "anonymous";

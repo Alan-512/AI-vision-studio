@@ -490,6 +490,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
     }
 
     const sendingProjectId = projectId;
+
     // Merge selectedImages with agentContextAssets (convert to data URLs)
     const contextImageUrls = (agentContextAssets || []).map(a => `data:${a.mimeType};base64,${a.data}`);
     const allImages = [...contextImageUrls, ...selectedImages];

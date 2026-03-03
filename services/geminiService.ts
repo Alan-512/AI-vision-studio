@@ -3,6 +3,7 @@ import { GoogleGenAI, Part, Content, FunctionDeclaration, Type } from "@google/g
 import { ChatMessage, AppMode, SmartAsset, GenerationParams, ImageModel, AgentAction, AssetItem, AspectRatio, ImageResolution, TextModel, AssistantMode, SmartAssetRole, SearchProgress, ThinkingLevel } from "../types";
 import { createTrackedBlobUrl } from "./storageService";
 import { buildSystemInstruction, getPromptOptimizerContent, getRoleInstruction as getSkillRoleInstruction } from "./skills/promptRouter";
+import { getCombinedMemorySnippet } from "./memoryService";
 
 // Key management
 export const saveUserApiKey = (key: string) => localStorage.setItem('user_gemini_api_key', key);
@@ -222,6 +223,33 @@ If the user requests a sequence, storyboard, or set of distinct images (e.g., "g
     }
 };
 
+const updateMemoryTool: FunctionDeclaration = {
+    name: 'update_memory',
+    description: 'Update the user\'s long-term memory (e.g. Creative Profile, Visual Preferences, Generation Defaults) based on explicit user requests or strong inferred preferences from the conversation. When the user\'s current request CONTRADICTS a stored preference, use this to OVERRIDE the old value.',
+    parameters: {
+        type: Type.OBJECT,
+        properties: {
+            scope: { type: Type.STRING, description: 'Scope of the memory.', enum: ['global', 'project'] },
+            section: { type: Type.STRING, description: 'Section to update (e.g. "Visual Preferences", "Generation Defaults", "Guardrails").' },
+            key: { type: Type.STRING, description: 'The preference key to update (e.g. "preferred_style", "color_palette"). If adding to Guardrails, leave empty.' },
+            value: { type: Type.STRING, description: 'The value to save for this preference.' }
+        },
+        required: ['scope', 'section', 'value']
+    }
+};
+
+const memorySearchTool: FunctionDeclaration = {
+    name: 'memory_search',
+    description: 'Search user memory for relevant preferences, habits, and past decisions. Use natural language query (e.g. "what is my preferred aspect ratio?").',
+    parameters: {
+        type: Type.OBJECT,
+        properties: {
+            query: { type: Type.STRING, description: 'Natural language search query.' }
+        },
+        required: ['query']
+    }
+};
+
 
 /**
  * SMART CONTEXT MANAGEMENT:
@@ -367,7 +395,8 @@ export const streamChatResponse = async (
     onThoughtSignatures?: (signatures: Array<{ partIndex: number; signature: string }>) => void,
     onThoughtImage?: (imageData: { data: string; mimeType: string; isFinal: boolean }) => void,
     onThoughtText?: (text: string) => void,  // Callback for thinking process text
-    onSearchProgress?: (progress: SearchProgress) => void  // NEW: Structured search progress callback
+    onSearchProgress?: (progress: SearchProgress) => void,  // NEW: Structured search progress callback
+    projectId?: string | null  // For memory injection
 ) => {
     const ai = getAIClient();
     const isReasoning = modelName === TextModel.PRO;
@@ -596,6 +625,14 @@ Rules:
         useGrounding: _params?.useGrounding
     });
 
+    // Get memory snippet for long-term memory injection
+    let memorySnippet = '';
+    try {
+        memorySnippet = await getCombinedMemorySnippet(projectId ?? null);
+    } catch (e) {
+        console.warn('[Memory] Failed to get memory snippet:', e);
+    }
+
     // Inject additional context that can't be handled by the skill system
     // (these require runtime values not available at skill definition time)
     let systemInstruction = builtInstruction;
@@ -610,16 +647,17 @@ Rules:
         systemInstruction += `\n\n${retrievedContextSection}`;
     }
 
+    // Inject long-term memory into system instruction
+    if (memorySnippet) {
+        systemInstruction += `\n\n${memorySnippet}`;
+    }
+
     const contents = convertHistoryToNativeFormat(history, realModelName);
 
-    /**
-     * CRITICAL FIX: Gemini does not support combining googleSearch and functionDeclarations.
-     * We MUST choose only one tool type.
-     */
     const config: any = {
         systemInstruction: systemInstruction,
         tools: isImageMode
-            ? [{ functionDeclarations: [generateImageTool] }]
+            ? [{ functionDeclarations: [generateImageTool, updateMemoryTool, memorySearchTool] }]
             : (allowSearch ? [{ googleSearch: {} }] : undefined)
     };
 
@@ -673,8 +711,10 @@ Rules:
                 // Collect function call but don't execute yet - wait for stream to complete
                 if (part.functionCall) {
                     console.log('[Stream] FunctionCall detected (deferred):', part.functionCall.name);
-                    if (part.functionCall.name === 'generate_image') {
-                        pendingToolCalls.push({ toolName: 'generate_image', args: part.functionCall.args });
+
+                    // We handle generate_image, update_memory, and read_memory
+                    if (part.functionCall.name === 'generate_image' || part.functionCall.name === 'update_memory' || part.functionCall.name === 'read_memory') {
+                        pendingToolCalls.push({ toolName: part.functionCall.name, args: part.functionCall.args });
                     }
                 }
             }
@@ -769,7 +809,41 @@ Rules:
                 ? { ...rawArgs, parameters: targetArgs }
                 : targetArgs;
 
-            onToolCall({ toolName: pendingToolCall.toolName, args: adjustedArgs });
+            // If tool is update_memory, we execute it directly here asynchronously (V2.1 Daily Log approach)
+            if (pendingToolCall.toolName === 'update_memory') {
+                const { section, key, value, scope } = targetArgs;
+                if (section && value) {
+                    import('./memoryService').then(({ appendDailyLog }) => {
+                        appendDailyLog({
+                            content: `${section}: ${key || ''} ${value}`,
+                            confidence: 1.0,
+                            projectId: projectId || undefined,
+                            scopeHint: scope as any,
+                            metadata: { source: 'ai_tool_call' }
+                        }).then(logId => {
+                            console.log(`[Memory] AI logged potential memory to Daily Log: ${logId}`);
+                        }).catch(e => {
+                            console.error('[Memory] AI failed to log memory:', e);
+                        });
+                    });
+                }
+            } else if (pendingToolCall.toolName === 'memory_search') {
+                // memory_search: perform semantic-like keyword search through logs and docs
+                const { query } = targetArgs;
+                import('./memoryService').then(async ({ memorySearch }) => {
+                    try {
+                        const searchResult = await memorySearch(query, projectId);
+                        // In a real implementation, we'd add this back to the context.
+                        // For now, we log it. The UI/App.tsx would normally handle the tool output.
+                        console.log(`[Memory] memory_search result for "${query}":`, searchResult);
+                    } catch (e) {
+                        console.error('[Memory] memory_search failed:', e);
+                    }
+                });
+            } else {
+                // Forward other tools (like generate_image) to UI
+                onToolCall({ toolName: pendingToolCall.toolName, args: adjustedArgs });
+            }
         }
     }
 };

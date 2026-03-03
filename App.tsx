@@ -19,6 +19,7 @@ import {
     permanentlyDeleteAssetFromDB, bulkPermanentlyDeleteAssets, bulkSoftDeleteAssets, recoverOrphanedProjects,
     releaseBlobUrl, saveTask, loadTasks, deleteTask
 } from './services/storageService';
+import { runMemoryExtractionTask } from './services/memoryExtractor';
 import { useLanguage } from './contexts/LanguageContext';
 
 const DEFAULT_PARAMS: GenerationParams = {
@@ -964,6 +965,12 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
                     setTasks(prev => prev.map(t => t.id === taskId ? { ...t, status: 'COMPLETED' } : t));
                     saveTask({ ...newTask, status: 'COMPLETED' }); // Persist completion
                     if (onSuccess) onSuccess(asset);
+
+                    // Background Memory Extraction Task
+                    // Don't wait for it to finish, just let it run
+                    runMemoryExtractionTask(currentProjectId, historyOverride || chatHistory, userKey).catch(err => {
+                        console.error('[App] Background memory extraction failed:', err);
+                    });
                 } else {
                     const videoResult = await generateVideo(genParams, async (operationName) => {
                         if (controller.signal.aborted) throw new Error("Cancelled");
@@ -1422,7 +1429,7 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
             </div>
 
             <TaskCenter tasks={tasks} onRemoveTask={handleCancelTask} onClearCompleted={handleClearCompletedTasks} />
-            <SettingsDialog isOpen={showSettings} onClose={() => setShowSettings(false)} onApiKeyChange={() => setVeoVerified(!!getUserApiKey())} />
+            <SettingsDialog isOpen={showSettings} onClose={() => setShowSettings(false)} onApiKeyChange={() => setVeoVerified(!!getUserApiKey())} projectId={activeProjectId} />
             <ConfirmDialog isOpen={confirmDialog.isOpen} title={confirmDialog.title} message={confirmDialog.message} onConfirm={confirmDialog.action} onCancel={() => setConfirmDialog(prev => ({ ...prev, isOpen: false }))} confirmLabel={confirmDialog.confirmLabel} cancelLabel={confirmDialog.cancelLabel} isDestructive={confirmDialog.isDestructive} />
             {comparisonAssets && <ComparisonView assetA={comparisonAssets[0]} assetB={comparisonAssets[1]} onClose={() => setComparisonAssets(null)} />}
             {editorAsset && <CanvasEditor

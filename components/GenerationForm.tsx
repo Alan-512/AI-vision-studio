@@ -511,7 +511,7 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
   const handleDrop = async (e: React.DragEvent, target: 'smart' | 'videoStart' | 'videoEnd' | 'videoStyle') => {
     e.preventDefault(); setDragTarget(null);
     try {
-      const assetStr = e.dataTransfer.getData('application/lumina-asset');
+      const assetStr = e.dataTransfer.getData('application/ai-vision-studio-asset');
       if (assetStr) {
         const asset: AssetItem = JSON.parse(assetStr);
         let data = '', mimeType = '';
