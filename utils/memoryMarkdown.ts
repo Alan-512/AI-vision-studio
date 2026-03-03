@@ -52,7 +52,7 @@ export const getDefaultMemoryTemplate = (scope: 'global' | 'project'): string =>
 - color_palette: 
 - lighting_preference: 
 - composition_style: 
-- negative_defaults: blurry, low quality, text, watermark
+- negative_defaults: blurry, low quality, watermark
 
 ## Generation Defaults
 - preferred_model: 
