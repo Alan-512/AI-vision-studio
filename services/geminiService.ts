@@ -809,11 +809,15 @@ Rules:
                 ? { ...rawArgs, parameters: targetArgs }
                 : targetArgs;
 
-            // If tool is update_memory, we execute it directly here asynchronously (V2.1 Daily Log approach)
+            // If tool is update_memory, we execute it directly here asynchronously
+            // V2.2.3 FIX: Write to BOTH daily log AND structured memory doc immediately.
+            // Previously only appendDailyLog was called, meaning preferences were invisible
+            // in Memory Management until the next-day consolidation.
             if (pendingToolCall.toolName === 'update_memory') {
                 const { section, key, value, scope } = targetArgs;
                 if (section && value) {
-                    import('./memoryService').then(({ appendDailyLog }) => {
+                    import('./memoryService').then(({ appendDailyLog, applyPatchToMemory }) => {
+                        // 1. Append to daily log (for consolidation history)
                         appendDailyLog({
                             content: `${section}: ${key || ''} ${value}`,
                             confidence: 1.0,
@@ -824,6 +828,25 @@ Rules:
                             console.log(`[Memory] AI logged potential memory to Daily Log: ${logId}`);
                         }).catch(e => {
                             console.error('[Memory] AI failed to log memory:', e);
+                        });
+
+                        // 2. V2.2.3: IMMEDIATE write-back to structured memory document
+                        // This makes the preference visible in Memory Management instantly.
+                        const targetScope = (scope === 'global' || scope === 'project') ? scope : 'project';
+                        const targetId = targetScope === 'global' ? 'default' : (projectId || 'default');
+                        applyPatchToMemory(targetScope, targetId, {
+                            ops: [{
+                                op: 'upsert',
+                                section: section,
+                                key: key || section.toLowerCase().replace(/\s+/g, '_'),
+                                value: value
+                            }],
+                            confidence: 1.0,
+                            reason: 'Real-time update from AI tool call'
+                        }).then(doc => {
+                            console.log(`[Memory] ✅ Immediately wrote to ${targetScope} memory doc (v${doc.version})`);
+                        }).catch(e => {
+                            console.error('[Memory] Failed to write to memory doc:', e);
                         });
                     });
                     // V2.2 FIX: If the model only emitted a tool call with no text, show a confirmation
