@@ -469,12 +469,12 @@ Rules:
             config: {
                 systemInstruction: searchInstruction,
                 tools: [{
-                    googleSearch: isReasoning ? {} : {
+                    googleSearch: isReasoning ? {
                         searchTypes: {
                             webSearch: {},
                             imageSearch: {}
                         }
-                    }
+                    } : {}
                 } as any],
                 abortSignal: signal
             }
