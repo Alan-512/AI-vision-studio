@@ -323,12 +323,7 @@ export function getSkill(id: string): Skill | undefined {
   return SKILLS[id];
 }
 
-/**
- * Get all skills of a specific trigger type
- */
-export function getSkillsByTriggerType(triggerType: string): Skill[] {
-  return Object.values(SKILLS).filter(s => s.triggerType === triggerType);
-}
+
 
 /**
  * Get prompt optimizer content based on mode

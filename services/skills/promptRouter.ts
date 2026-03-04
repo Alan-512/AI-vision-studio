@@ -125,38 +125,6 @@ When user asks about "recent", "latest", "this week" events, search for content 
   };
 }
 
-/**
- * Build simple system instruction (for backward compatibility)
- * Uses Phase 1 approach - loads most skills for compatibility
- *
- * @deprecated Use buildSystemInstruction for dynamic routing
- */
-export function buildSimpleSystemInstruction(
-  mode: AppMode,
-  params?: any,
-  contextSummary?: string,
-  searchFacts?: string[],
-  useSearch?: boolean,
-  useGrounding?: boolean,
-  memorySnippet?: string
-): string {
-  return buildSystemInstruction({
-    mode,
-    params,
-    contextSummary,
-    searchFacts,
-    useSearch,
-    useGrounding,
-    memorySnippet
-  }).systemInstruction;
-}
-
-/**
- * Get active skills for current context (for debugging/display)
- */
-export function getActiveSkills(options: BuildInstructionOptions): string[] {
-  return buildSystemInstruction(options).skills.map(s => s.name);
-}
 
 /**
  * Validate skill configuration

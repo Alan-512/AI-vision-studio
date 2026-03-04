@@ -243,7 +243,7 @@ export interface AgentJob {
   cost?: number; // Token usage or estimated cost
 }
 
-export interface JobStep {
+interface JobStep {
   id: string;
   name: string; // e.g., "generate_image", "optimize_prompt"
   status: 'pending' | 'running' | 'success' | 'failed';
@@ -254,7 +254,7 @@ export interface JobStep {
   endTime?: number;
 }
 
-export interface JobArtifact {
+interface JobArtifact {
   id: string;
   type: 'image' | 'video' | 'json' | 'text';
   url?: string; // Blob URL or Remote URL

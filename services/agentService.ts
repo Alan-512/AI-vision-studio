@@ -56,7 +56,7 @@ export interface AgentState {
     lastUpdated: number;
 }
 
-export interface AgentEvent {
+interface AgentEvent {
     type: 'USER_MESSAGE' | 'USER_CONFIRM' | 'USER_REJECT' | 'USER_MODIFY' |
     'ACTION_SUCCESS' | 'ACTION_FAILURE' | 'CANCEL';
     payload?: any;

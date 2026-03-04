@@ -13,7 +13,6 @@ import {
   getMemoryDoc,
   saveMemoryDoc,
   deleteMemoryDoc,
-  restoreMemoryDoc,
   getAllMemoryDocs,
   getMemoryOps,
   recordMemoryOp,
@@ -50,14 +49,14 @@ const SENSITIVE_PATTERNS = [
 /**
  * Check if content contains sensitive information
  */
-export const containsSensitiveData = (content: string): boolean => {
+const containsSensitiveData = (content: string): boolean => {
   return SENSITIVE_PATTERNS.some(pattern => pattern.test(content));
 };
 
 /**
  * Filter sensitive data from content
  */
-export const filterSensitiveData = (content: string): string => {
+const filterSensitiveData = (content: string): string => {
   let filtered = content;
   SENSITIVE_PATTERNS.forEach(pattern => {
     filtered = filtered.replace(pattern, '[REDACTED]');
@@ -252,7 +251,7 @@ export const applyPatchToMemory = async (
  * Extract memory snippet for injection into AI requests
  * Returns formatted text within character limit
  */
-export const getMemorySnippet = async (
+const getMemorySnippet = async (
   scope: 'global' | 'project',
   targetId: string,
   maxChars = INJECTION_MAX_CHARS
@@ -423,36 +422,6 @@ export const getMemoryHistory = async (
 };
 
 /**
- * Rollback memory to a previous version
- */
-export const rollbackMemory = async (
-  scope: 'global' | 'project',
-  targetId: string,
-  targetVersion: number
-): Promise<MemoryDoc> => {
-  const doc = await getMemoryDoc(scope, targetId);
-  if (!doc) {
-    throw new Error('Memory document not found');
-  }
-
-  // const ops = await getMemoryOps(doc.id, 1000);
-  // Find the state at target version by replaying ops
-  // For simplicity, we'll use the current content and create a rollback record
-  const currentContent = doc.content;
-
-  await recordMemoryOp({
-    docId: doc.id,
-    operation: 'rollback',
-    patch: JSON.stringify({ toVersion: targetVersion, currentContent }),
-    confidence: 1.0,
-    reason: 'manual_rollback'
-  });
-
-  // Note: Full rollback implementation would need content snapshots
-  // For now, this marks the rollback operation
-  return doc;
-};
-
 /**
  * Export all memory as a bundle
  */
@@ -548,11 +517,6 @@ export const softDeleteMemory = async (scope: 'global' | 'project', targetId: st
 };
 
 /**
- * Restore deleted memory
- */
-export const restoreMemory = async (scope: 'global' | 'project', targetId: string): Promise<void> => {
-  return restoreMemoryDoc(scope, targetId);
-};
 
 /**
  * Validate memory content before save
@@ -577,11 +541,6 @@ export const validateMemoryContent = (content: string): { valid: boolean; errors
 };
 
 /**
- * Get all project memories (for admin/cleanup)
- */
-export const getAllProjectMemories = async (): Promise<MemoryDoc[]> => {
-  const allDocs = await getAllMemoryDocs(false);
-  return allDocs.filter(doc => doc.scope === 'project');
 };
 
 // Re-export types for convenience
@@ -629,64 +588,6 @@ export const recordUserPreference = async (
   }
 };
 
-// --- On-Demand Topic Loading (V2) ---
-
-/** Topic name → memory scope + section mapping */
-const TOPIC_MAP: Record<string, { scope: 'global' | 'project'; sections: string[] }> = {
-  visual_prefs: { scope: 'global', sections: ['Visual Preferences'] },
-  gen_defaults: { scope: 'global', sections: ['Generation Defaults'] },
-  guardrails: { scope: 'global', sections: ['Guardrails'] },
-  style_card: { scope: 'project', sections: ['Style Card'] },
-  prompt_patterns: { scope: 'project', sections: ['Prompt Patterns'] },
-};
-
-/**
- * Get full content of a specific memory topic (for read_memory tool)
- * Returns human-readable formatted content of the requested topic
- */
-export const getTopicContent = async (
-  topic: string,
-  projectId?: string | null
-): Promise<string> => {
-  const mapping = TOPIC_MAP[topic];
-  if (!mapping) {
-    return `Unknown topic: ${topic}. Available topics: ${Object.keys(TOPIC_MAP).join(', ')}`;
-  }
-
-  const targetId = mapping.scope === 'global' ? GLOBAL_DEFAULT_TARGET : (projectId || '');
-  if (mapping.scope === 'project' && !targetId) {
-    return `No active project. Cannot load project-level topic: ${topic}`;
-  }
-
-  const doc = await getMemoryDoc(mapping.scope, targetId);
-  if (!doc || !doc.content) {
-    return `No memory found for topic: ${topic}`;
-  }
-
-  const sections = parseMemoryMarkdown(doc.content);
-  const lines: string[] = [`[Memory Topic: ${topic}]`];
-
-  for (const sectionName of mapping.sections) {
-    const items = sections[sectionName] || [];
-    if (items.length === 0) {
-      lines.push(`${sectionName}: (empty)`);
-      continue;
-    }
-    lines.push(`## ${sectionName}`);
-    for (const item of items) {
-      if (item.timestamp) {
-        lines.push(`- [${item.timestamp}] ${item.value}`);
-      } else if (item.key && item.value) {
-        const sentence = PREF_SENTENCE_MAP[item.key];
-        lines.push(sentence ? `- ${item.key}: ${item.value} → ${sentence(item.value)}` : `- ${item.key}: ${item.value}`);
-      } else if (item.value) {
-        lines.push(`- ${item.value}`);
-      }
-    }
-  }
-
-  return lines.join('\n');
-};
 
 /**
  * Search user memory for relevant preferences and decisions (V2.2 LLM Re-ranking)
