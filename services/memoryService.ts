@@ -21,6 +21,8 @@ import {
   MemoryDoc,
   MemoryOp
 } from './storageService';
+
+export type { MemoryDoc, MemoryOp };
 import { generateText } from './geminiService';
 import { TextModel } from '../types';
 import { parseMemoryMarkdown, getDefaultMemoryTemplate } from '../utils/memoryMarkdown';
@@ -539,12 +541,6 @@ export const validateMemoryContent = (content: string): { valid: boolean; errors
     errors
   };
 };
-
-/**
-};
-
-// Re-export types for convenience
-export type { MemoryDoc, MemoryOp };
 
 // --- Memory Write-Back (Passive Extraction) ---
 
