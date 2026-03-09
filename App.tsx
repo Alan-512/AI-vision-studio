@@ -1018,24 +1018,31 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
             } catch (error: any) {
                 if (error.message === 'Cancelled' || error.name === 'AbortError') {
                     setTasks(prev => prev.filter(t => t.id !== taskId));
-                    deleteTask(taskId); // Remove from DB
+                    deleteTask(taskId).catch(e => console.debug('[App] deleteTask failed:', e)); // Remove from DB
                     try {
                         await permanentlyDeleteAssetFromDB(taskId);
-                        if (activeProjectIdRef.current === currentProjectId) setAssets(prev => prev.filter(a => a.id !== taskId));
                     } catch (cleanupErr) {
                         console.debug('[App] Cleanup after cancel failed:', cleanupErr);
+                    } finally {
+                        if (activeProjectIdRef.current === currentProjectId) {
+                            setAssets(prev => prev.filter(a => a.id !== taskId));
+                        }
                     }
                 } else {
                     const errorText = error.message || "";
                     const friendlyError = getFriendlyError(errorText);
                     const failedTask = { ...newTask, status: 'FAILED' as const, error: errorText };
                     setTasks(prev => prev.map(t => t.id === taskId ? failedTask : t));
-                    saveTask(failedTask); // Persist failure
+                    saveTask(failedTask).catch(e => console.debug('[App] saveTask failed:', e)); // Persist failure (catch unhandled rejections)
                     try {
                         await permanentlyDeleteAssetFromDB(taskId);
-                        if (activeProjectIdRef.current === currentProjectId) setAssets(prev => prev.filter(a => a.id !== taskId));
                     } catch (cleanupErr) {
                         console.debug('[App] Cleanup after error failed:', cleanupErr);
+                    } finally {
+                        // Guarantee UI cleanup regardless of IndexedDB failures
+                        if (activeProjectIdRef.current === currentProjectId) {
+                            setAssets(prev => prev.filter(a => a.id !== taskId));
+                        }
                     }
                     playErrorSound();
                     addToast('error', t('task.failed'), friendlyError);
