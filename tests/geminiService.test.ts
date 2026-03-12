@@ -7,6 +7,7 @@ import {
     buildPromptWithFacts,
     runInternalToolResultLoop,
     normalizeSupportedToolName,
+    parseImageCriticReview,
     StructuredFact
 } from '../services/geminiService';
 
@@ -200,6 +201,69 @@ describe('GeminiService', () => {
                     args: { prompt: 'Minimalist poster' }
                 }
             ]);
+        });
+    });
+
+    describe('parseImageCriticReview', () => {
+        it('should parse a structured critic response', () => {
+            const review = parseImageCriticReview(JSON.stringify({
+                decision: 'auto_revise',
+                summary: 'The bottle shape is correct but the brand read is weak.',
+                reason: 'The label is not distinct enough.',
+                recommendedActionType: 'tighten_subject_match',
+                issues: [
+                    {
+                        type: 'brand_incorrect',
+                        severity: 'medium',
+                        confidence: 'high',
+                        autoFixable: true,
+                        title: 'Brand match is weak',
+                        detail: 'The product silhouette is right, but the label is not convincing.'
+                    }
+                ],
+                reviewPlan: {
+                    summary: 'Keep the composition and improve the label fidelity.',
+                    preserve: ['composition', 'lighting'],
+                    adjust: ['label fidelity'],
+                    confidence: 'high',
+                    executionMode: 'auto',
+                    issueTypes: ['brand_incorrect'],
+                    hardConstraints: ['preserve current composition'],
+                    preferredContinuity: ['lighting'],
+                    localized: {
+                        zh: {
+                            summary: '保持构图不变，提升标签还原度。',
+                            preserve: ['构图'],
+                            adjust: ['标签还原度']
+                        },
+                        en: {
+                            summary: 'Keep the composition and improve the label fidelity.',
+                            preserve: ['composition'],
+                            adjust: ['label fidelity']
+                        }
+                    }
+                },
+                revisedPrompt: 'Refine the same product shot with a more accurate label.'
+            }));
+
+            expect(review?.decision).toBe('auto_revise');
+            expect(review?.issues).toHaveLength(1);
+            expect(review?.issues[0].type).toBe('brand_incorrect');
+            expect(review?.reviewPlan.executionMode).toBe('auto');
+            expect(review?.reviewPlan.localized?.zh?.summary).toContain('构图');
+        });
+
+        it('should sanitize invalid critic response values', () => {
+            const review = parseImageCriticReview(JSON.stringify({
+                decision: 'invalid',
+                issues: [{ type: 'not_real', severity: 'extreme', confidence: 'sure', title: '', detail: '' }],
+                reviewPlan: { preserve: ['composition'] }
+            }));
+
+            expect(review?.decision).toBe('requires_action');
+            expect(review?.issues[0].type).toBe('other');
+            expect(review?.issues[0].severity).toBe('medium');
+            expect(review?.reviewPlan.summary.length).toBeGreaterThan(0);
         });
     });
 });

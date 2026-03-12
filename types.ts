@@ -259,6 +259,62 @@ export type AgentArtifactRole =
 export type AgentToolCallStatus = 'pending' | 'running' | 'success' | 'failed' | 'cancelled';
 export type AgentToolResultStatus = 'success' | 'error' | 'requires_action';
 
+export type CriticDecision = 'accept' | 'auto_revise' | 'requires_action';
+export type CriticIssueSeverity = 'low' | 'medium' | 'high';
+export type CriticIssueConfidence = 'low' | 'medium' | 'high';
+export type CriticIssueType =
+  | 'subject_mismatch'
+  | 'brand_incorrect'
+  | 'composition_weak'
+  | 'lighting_mismatch'
+  | 'material_weak'
+  | 'text_artifact'
+  | 'constraint_conflict'
+  | 'needs_reference'
+  | 'render_incomplete'
+  | 'other';
+
+export interface LocalizedRevisionPlan {
+  summary: string;
+  preserve: string[];
+  adjust: string[];
+}
+
+export interface RevisionPlan {
+  summary: string;
+  preserve: string[];
+  adjust: string[];
+  confidence: CriticIssueConfidence;
+  executionMode: 'auto' | 'guided';
+  issueTypes?: CriticIssueType[];
+  hardConstraints?: string[];
+  preferredContinuity?: string[];
+  localized?: {
+    zh?: LocalizedRevisionPlan;
+    en?: LocalizedRevisionPlan;
+  };
+}
+
+export interface CriticIssue {
+  type: CriticIssueType;
+  severity: CriticIssueSeverity;
+  confidence: CriticIssueConfidence;
+  autoFixable: boolean;
+  title: string;
+  detail: string;
+  relatedConstraint?: string;
+}
+
+export interface StructuredCriticReview {
+  decision: CriticDecision;
+  summary: string;
+  issues: CriticIssue[];
+  reviewPlan: RevisionPlan;
+  revisedPrompt?: string;
+  reason?: string;
+  recommendedActionType?: string;
+}
+
 export interface AgentToolResult {
   jobId: string;
   stepId?: string;

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { Image as ImageIcon, Video, LayoutGrid, Folder, Sparkles, Settings, Star, CheckSquare, MoveHorizontal, Languages, Trash2, Recycle, Download, RotateCcw, ArrowRight, Key, X } from 'lucide-react';
-import { AppMode, AspectRatio, GenerationParams, AssetItem, ImageResolution, VideoResolution, ImageModel, VideoModel, ImageStyle, Project, ChatMessage, BackgroundTask, SmartAsset, VideoDuration, VideoStyle, AgentAction, EditRegion, SearchPolicy, AssistantMode, SmartAssetRole, ThinkingLevel, AgentJob, AgentJobStatus, JobStep, JobArtifact, AgentToolResult, ToolCallRecord } from './types';
+import { AppMode, AspectRatio, GenerationParams, AssetItem, ImageResolution, VideoResolution, ImageModel, VideoModel, ImageStyle, Project, ChatMessage, BackgroundTask, SmartAsset, VideoDuration, VideoStyle, AgentAction, EditRegion, SearchPolicy, AssistantMode, SmartAssetRole, ThinkingLevel, AgentJob, AgentJobStatus, JobStep, JobArtifact, AgentToolResult, ToolCallRecord, CriticDecision, CriticIssue, RevisionPlan, StructuredCriticReview } from './types';
 import { GenerationForm } from './components/GenerationForm';
 import { AssetCard } from './components/AssetCard';
 import { ProjectSidebar } from './components/ProjectSidebar';
@@ -11,7 +11,7 @@ import { ConfirmDialog } from './components/ConfirmDialog';
 import { ComparisonView } from './components/ComparisonView';
 import { CanvasEditor } from './components/CanvasEditor';
 import { CanvasView } from './components/CanvasView';
-import { generateImage, generateVideo, getUserApiKey, generateTitle } from './services/geminiService';
+import { generateImage, generateVideo, getUserApiKey, generateTitle, reviewGeneratedImageWithAI } from './services/geminiService';
 import { compressImageForContext, normalizeImageUrlForChat } from './services/imageUtils';
 import {
     SelectedReferenceRecord,
@@ -162,26 +162,16 @@ const buildGeneratedArtifact = (
     ...overrides
 });
 
-type LocalReviewDecision = 'accept' | 'auto_revise' | 'requires_action';
 type BilingualText = { zh: string; en: string };
-type BilingualPlan = {
-    zh: { summary: string; preserve: string[]; adjust: string[] };
-    en: { summary: string; preserve: string[]; adjust: string[] };
-};
 
 type LocalReviewResult = {
-    decision: LocalReviewDecision;
+    decision: CriticDecision;
     summary: string;
     warnings: string[];
+    issues?: CriticIssue[];
     revisedPrompt?: string;
     revisionReason?: string;
-    reviewPlan?: {
-        summary: string;
-        preserve: string[];
-        adjust: string[];
-        confidence: 'low' | 'medium' | 'high';
-        localized?: BilingualPlan;
-    };
+    reviewPlan?: RevisionPlan;
     requiresAction?: {
         type: string;
         message: string;
@@ -212,6 +202,7 @@ const buildReviewArtifact = (reviewId: string, reviewStepId: string, review: Loc
         decision: review.decision,
         summary: review.summary,
         warnings: review.warnings,
+        issues: review.issues,
         revisedPrompt: review.revisedPrompt,
         revisionReason: review.revisionReason,
         requiresAction: review.requiresAction
@@ -260,11 +251,15 @@ const buildRevisionArtifact = (artifactId: string, stepId: string, review: Local
     }
 });
 
-const buildOptimizationPlan = (overrides?: Partial<LocalReviewResult['reviewPlan']>): NonNullable<LocalReviewResult['reviewPlan']> => ({
+const buildOptimizationPlan = (overrides?: Partial<RevisionPlan>): RevisionPlan => ({
     summary: overrides?.summary || 'I can continue optimizing the current result while preserving the overall composition and lighting.',
     preserve: overrides?.preserve || ['composition', 'lighting', 'overall visual direction'],
     adjust: overrides?.adjust || ['subject fidelity', 'product clarity'],
     confidence: overrides?.confidence || 'medium',
+    executionMode: overrides?.executionMode || 'auto',
+    issueTypes: overrides?.issueTypes || ['other'],
+    hardConstraints: overrides?.hardConstraints || [],
+    preferredContinuity: overrides?.preferredContinuity || ['composition', 'lighting', 'overall visual direction'],
     localized: overrides?.localized || {
         zh: {
             summary: '我可以继续优化当前结果，同时保持整体构图和光影方向不变。',
@@ -292,6 +287,7 @@ const buildRequiresActionPayload = (
     prompt,
     revisedPrompt: review.revisedPrompt,
     warnings: review.warnings,
+    issues: (review as LocalReviewResult).issues,
     reviewPlan: review.reviewPlan,
     messageI18n: i18n?.message,
     warningsI18n: i18n?.warnings,
@@ -303,15 +299,67 @@ const buildRequiresActionPayload = (
     ...extra
 });
 
-const reviewGeneratedAsset = (asset: AssetItem, prompt: string): LocalReviewResult => {
+const dataUrlToInlineImage = (dataUrl: string): { mimeType: string; data: string } | null => {
+    if (!dataUrl.startsWith('data:')) return null;
+    const match = dataUrl.match(/^data:(.+?);base64,(.+)$/);
+    if (!match) return null;
+    return {
+        mimeType: match[1],
+        data: match[2]
+    };
+};
+
+const criticToLocalReview = (
+    prompt: string,
+    critic: StructuredCriticReview,
+    fallbackActionType: string
+): LocalReviewResult => ({
+    decision: critic.decision,
+    summary: critic.summary,
+    warnings: critic.issues
+        .filter(issue => issue.severity !== 'low')
+        .map(issue => issue.detail),
+    issues: critic.issues,
+    revisedPrompt: critic.revisedPrompt,
+    revisionReason: critic.reason || critic.summary,
+    reviewPlan: critic.reviewPlan,
+    requiresAction: critic.decision === 'requires_action'
+        ? {
+            type: critic.recommendedActionType || fallbackActionType,
+            message: critic.summary,
+            payload: buildRequiresActionPayload(prompt, {
+                summary: critic.summary,
+                warnings: critic.issues.map(issue => issue.detail),
+                revisedPrompt: critic.revisedPrompt,
+                reviewPlan: critic.reviewPlan,
+                issues: critic.issues
+            } as LocalReviewResult, critic.recommendedActionType || fallbackActionType)
+        }
+        : undefined
+});
+
+const reviewGeneratedAssetLocally = (asset: AssetItem, prompt: string): LocalReviewResult => {
     const warnings: string[] = [];
 
     if (!asset.url) {
+        const issues: CriticIssue[] = [{
+            type: 'render_incomplete',
+            severity: 'high',
+            confidence: asset.type === 'IMAGE' ? 'medium' : 'low',
+            autoFixable: asset.type === 'IMAGE',
+            title: 'Generated asset is incomplete',
+            detail: 'The generated result is missing a renderable URL.',
+            relatedConstraint: 'render_output'
+        }];
         const reviewPlan = buildOptimizationPlan({
             summary: 'The render payload is incomplete. I can retry generation while preserving the current creative direction.',
             preserve: ['creative direction', 'composition intent'],
             adjust: ['render output validity'],
             confidence: asset.type === 'IMAGE' ? 'medium' : 'low',
+            executionMode: asset.type === 'IMAGE' ? 'auto' : 'guided',
+            issueTypes: ['render_incomplete'],
+            hardConstraints: ['return a renderable asset'],
+            preferredContinuity: ['creative direction', 'composition intent'],
             localized: {
                 zh: {
                     summary: '当前渲染结果不完整。我可以保留现有创意方向并重试生成。',
@@ -329,6 +377,7 @@ const reviewGeneratedAsset = (asset: AssetItem, prompt: string): LocalReviewResu
             decision: asset.type === 'IMAGE' ? 'auto_revise' : 'requires_action',
             summary: 'Generated asset is missing a URL and cannot be finalized.',
             warnings,
+            issues,
             revisionReason: 'The generated image payload did not contain a renderable URL.',
             revisedPrompt: `${prompt.trim()}\n\nRevision note: regenerate the same scene and ensure a valid renderable image output is returned.`,
             reviewPlan,
@@ -364,12 +413,24 @@ const reviewGeneratedAsset = (asset: AssetItem, prompt: string): LocalReviewResu
             ? 'Generated asset passed runtime review with warnings.'
             : 'Generated asset passed runtime review.',
         warnings,
+        issues: warnings.length > 0 ? [{
+            type: 'other',
+            severity: 'low',
+            confidence: 'medium',
+            autoFixable: false,
+            title: 'Follow-up extension metadata is incomplete',
+            detail: warnings[0],
+            relatedConstraint: 'video_extension'
+        }] : [],
         reviewPlan: buildOptimizationPlan({
             summary: warnings.length > 0
                 ? 'The result is usable. I would preserve the overall scene and only make minor technical cleanups if you ask.'
                 : 'The result is complete and does not need manual intervention.',
             adjust: warnings.length > 0 ? ['minor technical cleanup'] : ['none'],
             confidence: warnings.length > 0 ? 'medium' : 'high',
+            executionMode: warnings.length > 0 ? 'guided' : 'auto',
+            issueTypes: warnings.length > 0 ? ['other'] : [],
+            preferredContinuity: ['overall scene', 'visual direction'],
             localized: {
                 zh: {
                     summary: warnings.length > 0
@@ -388,6 +449,26 @@ const reviewGeneratedAsset = (asset: AssetItem, prompt: string): LocalReviewResu
             }
         })
     };
+};
+
+const reviewGeneratedAsset = async (asset: AssetItem, prompt: string): Promise<LocalReviewResult> => {
+    if (asset.type !== 'IMAGE' || !asset.url) {
+        return reviewGeneratedAssetLocally(asset, prompt);
+    }
+
+    try {
+        const normalizedUrl = await normalizeImageUrlForChat(asset.url);
+        const inlineImage = dataUrlToInlineImage(normalizedUrl);
+        if (!inlineImage) {
+            return reviewGeneratedAssetLocally(asset, prompt);
+        }
+
+        const critic = await reviewGeneratedImageWithAI(prompt, inlineImage.data, inlineImage.mimeType);
+        return criticToLocalReview(prompt, critic, 'review_output');
+    } catch (error) {
+        console.warn('[App] AI critic review failed, falling back to local review.', error);
+        return reviewGeneratedAssetLocally(asset, prompt);
+    }
 };
 
 const findLastModelMessageIndex = (messages: ChatMessage[]): number => {
@@ -1544,7 +1625,7 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
                     artifacts: [...agentJob.artifacts, generatedArtifact]
                 }).catch(console.error);
 
-                const review = reviewGeneratedAsset(asset, genParams.prompt);
+                const review = await reviewGeneratedAsset(asset, genParams.prompt);
                 const reviewEndedAt = Date.now();
                 const reviewArtifactId = crypto.randomUUID();
                 const reviewArtifact = buildReviewArtifact(reviewArtifactId, reviewStepId, review);
@@ -1553,10 +1634,11 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
                     status: (review.decision === 'accept' ? 'success' : 'failed') as const,
                     endTime: reviewEndedAt,
                     output: {
-                        decision: review.decision,
-                        summary: review.summary,
-                        warnings: review.warnings
-                    },
+                            decision: review.decision,
+                            summary: review.summary,
+                            warnings: review.warnings,
+                            issues: review.issues
+                        },
                     error: review.decision === 'accept' ? undefined : review.summary
                 };
                 const reviewedToolResult: AgentToolResult = {
@@ -1572,6 +1654,7 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
                             decision: review.decision,
                             summary: review.summary,
                             warnings: review.warnings,
+                            issues: review.issues,
                             stepId: reviewStepId
                         }
                     }
@@ -1681,7 +1764,7 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
                         artifacts: [...agentJob.artifacts, generatedArtifact, reviewArtifact, revisionArtifact, revisedGeneratedArtifact]
                     }).catch(console.error);
 
-                    const secondReview = reviewGeneratedAsset(revisedAsset, revisedPrompt);
+                    const secondReview = await reviewGeneratedAsset(revisedAsset, revisedPrompt);
                     const secondReviewArtifactId = crypto.randomUUID();
                     const secondReviewArtifact = buildReviewArtifact(secondReviewArtifactId, secondReviewStepId, secondReview);
                     const finalizedSecondReviewStep = {
@@ -1691,7 +1774,8 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
                         output: {
                             decision: secondReview.decision,
                             summary: secondReview.summary,
-                            warnings: secondReview.warnings
+                            warnings: secondReview.warnings,
+                            issues: secondReview.issues
                         },
                         error: secondReview.decision === 'accept' ? undefined : secondReview.summary
                     };
@@ -1746,6 +1830,7 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
                                 decision: secondReview.decision,
                                 summary: secondReview.summary,
                                 warnings: secondReview.warnings,
+                                issues: secondReview.issues,
                                 stepId: secondReviewStepId
                             }
                         }

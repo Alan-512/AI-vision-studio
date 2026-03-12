@@ -1,6 +1,6 @@
 
 import { GoogleGenAI, Part, Content, FunctionDeclaration, Type } from "@google/genai";
-import { ChatMessage, AppMode, SmartAsset, GenerationParams, ImageModel, AgentAction, AssetItem, AspectRatio, ImageResolution, TextModel, AssistantMode, SmartAssetRole, SearchProgress, ThinkingLevel } from "../types";
+import { ChatMessage, AppMode, SmartAsset, GenerationParams, ImageModel, AgentAction, AssetItem, AspectRatio, ImageResolution, TextModel, AssistantMode, SmartAssetRole, SearchProgress, ThinkingLevel, StructuredCriticReview, CriticDecision, CriticIssue, CriticIssueType, RevisionPlan } from "../types";
 import { createTrackedBlobUrl } from "./storageService";
 import { buildSystemInstruction, getPromptOptimizerContent, getRoleInstruction as getSkillRoleInstruction } from "./skills/promptRouter";
 import { getAlwaysOnMemorySnippet } from "./memoryService";
@@ -1510,6 +1510,218 @@ Prompt: "${prompt.slice(0, 200)}"`
     } catch (e) {
         return prompt.slice(0, 20);
     }
+};
+
+const VALID_CRITIC_DECISIONS = new Set<CriticDecision>(['accept', 'auto_revise', 'requires_action']);
+const VALID_ISSUE_SEVERITIES = new Set(['low', 'medium', 'high']);
+const VALID_ISSUE_TYPES = new Set<CriticIssueType>([
+    'subject_mismatch',
+    'brand_incorrect',
+    'composition_weak',
+    'lighting_mismatch',
+    'material_weak',
+    'text_artifact',
+    'constraint_conflict',
+    'needs_reference',
+    'render_incomplete',
+    'other'
+]);
+
+const sanitizeStringArray = (value: unknown): string[] => Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0).map(item => item.trim()).slice(0, 8)
+    : [];
+
+const sanitizeRevisionPlan = (value: unknown): RevisionPlan => {
+    const raw = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+    const localizedRaw = raw.localized && typeof raw.localized === 'object' ? raw.localized as Record<string, unknown> : {};
+    const sanitizeLocalized = (entry: unknown) => {
+        const localizedEntry = entry && typeof entry === 'object' ? entry as Record<string, unknown> : {};
+        const summary = typeof localizedEntry.summary === 'string' && localizedEntry.summary.trim().length > 0
+            ? localizedEntry.summary.trim()
+            : '';
+        const preserve = sanitizeStringArray(localizedEntry.preserve);
+        const adjust = sanitizeStringArray(localizedEntry.adjust);
+        return summary || preserve.length > 0 || adjust.length > 0
+            ? { summary, preserve, adjust }
+            : undefined;
+    };
+
+    return {
+        summary: typeof raw.summary === 'string' && raw.summary.trim().length > 0
+            ? raw.summary.trim()
+            : 'I can continue refining this result while preserving the strongest parts of the current image.',
+        preserve: sanitizeStringArray(raw.preserve),
+        adjust: sanitizeStringArray(raw.adjust),
+        confidence: typeof raw.confidence === 'string' && VALID_ISSUE_SEVERITIES.has(raw.confidence)
+            ? raw.confidence as RevisionPlan['confidence']
+            : 'medium',
+        executionMode: raw.executionMode === 'guided' ? 'guided' : 'auto',
+        issueTypes: sanitizeStringArray(raw.issueTypes).filter((type): type is CriticIssueType => VALID_ISSUE_TYPES.has(type as CriticIssueType)),
+        hardConstraints: sanitizeStringArray(raw.hardConstraints),
+        preferredContinuity: sanitizeStringArray(raw.preferredContinuity),
+        localized: {
+            zh: sanitizeLocalized(localizedRaw.zh),
+            en: sanitizeLocalized(localizedRaw.en)
+        }
+    };
+};
+
+const sanitizeCriticIssue = (value: unknown): CriticIssue | null => {
+    if (!value || typeof value !== 'object') return null;
+    const raw = value as Record<string, unknown>;
+    const type = typeof raw.type === 'string' && VALID_ISSUE_TYPES.has(raw.type as CriticIssueType)
+        ? raw.type as CriticIssueType
+        : 'other';
+    const severity = typeof raw.severity === 'string' && VALID_ISSUE_SEVERITIES.has(raw.severity)
+        ? raw.severity as CriticIssue['severity']
+        : 'medium';
+    const confidence = typeof raw.confidence === 'string' && VALID_ISSUE_SEVERITIES.has(raw.confidence)
+        ? raw.confidence as CriticIssue['confidence']
+        : 'medium';
+    const title = typeof raw.title === 'string' && raw.title.trim().length > 0
+        ? raw.title.trim()
+        : type.replace(/_/g, ' ');
+    const detail = typeof raw.detail === 'string' && raw.detail.trim().length > 0
+        ? raw.detail.trim()
+        : title;
+
+    return {
+        type,
+        severity,
+        confidence,
+        autoFixable: raw.autoFixable !== false,
+        title,
+        detail,
+        relatedConstraint: typeof raw.relatedConstraint === 'string' && raw.relatedConstraint.trim().length > 0
+            ? raw.relatedConstraint.trim()
+            : undefined
+    };
+};
+
+export const parseImageCriticReview = (rawText: string): StructuredCriticReview | null => {
+    if (!rawText.trim()) return null;
+
+    try {
+        const parsed = JSON.parse(rawText) as Record<string, unknown>;
+        const decision = typeof parsed.decision === 'string' && VALID_CRITIC_DECISIONS.has(parsed.decision as CriticDecision)
+            ? parsed.decision as CriticDecision
+            : 'requires_action';
+        const issues = Array.isArray(parsed.issues)
+            ? parsed.issues.map(sanitizeCriticIssue).filter((issue): issue is CriticIssue => !!issue)
+            : [];
+        const reviewPlan = sanitizeRevisionPlan(parsed.reviewPlan);
+
+        return {
+            decision,
+            summary: typeof parsed.summary === 'string' && parsed.summary.trim().length > 0
+                ? parsed.summary.trim()
+                : 'I reviewed the current image and prepared the next best action.',
+            issues,
+            reviewPlan,
+            revisedPrompt: typeof parsed.revisedPrompt === 'string' && parsed.revisedPrompt.trim().length > 0
+                ? parsed.revisedPrompt.trim()
+                : undefined,
+            reason: typeof parsed.reason === 'string' && parsed.reason.trim().length > 0
+                ? parsed.reason.trim()
+                : undefined,
+            recommendedActionType: typeof parsed.recommendedActionType === 'string' && parsed.recommendedActionType.trim().length > 0
+                ? parsed.recommendedActionType.trim()
+                : undefined
+        };
+    } catch (error) {
+        console.warn('[parseImageCriticReview] Failed to parse JSON review response', error);
+        return null;
+    }
+};
+
+export const reviewGeneratedImageWithAI = async (
+    prompt: string,
+    imageBase64: string,
+    mimeType: string
+): Promise<StructuredCriticReview> => {
+    const ai = getAIClient();
+    const response = await ai.models.generateContent({
+        model: TextModel.PRO,
+        contents: {
+            parts: [
+                { inlineData: { mimeType, data: imageBase64 } },
+                {
+                    text: `You are the image critic for AI Vision Studio.
+
+Review the generated image against the user's prompt. Your job is to decide whether the result should be accepted, automatically revised, or paused for user input.
+
+Decision rules:
+- choose "accept" if the image broadly satisfies the request and only minor imperfections remain
+- choose "auto_revise" if the next fix is clear, low-risk, and can be done while preserving what is already working
+- choose "requires_action" only if the user must make a directional choice, provide a new reference, clarify style/brand intent, or approve a stronger change
+
+You must focus on practical refinement quality, not abstract art critique.
+Prioritize:
+1. subject / product correctness
+2. composition and framing
+3. lighting and material rendering
+4. brand / text / artifact issues
+5. consistency with a likely follow-up edit path
+
+Return JSON only with this shape:
+{
+  "decision": "accept" | "auto_revise" | "requires_action",
+  "summary": string,
+  "reason": string,
+  "recommendedActionType": string,
+  "issues": [
+    {
+      "type": "subject_mismatch" | "brand_incorrect" | "composition_weak" | "lighting_mismatch" | "material_weak" | "text_artifact" | "constraint_conflict" | "needs_reference" | "render_incomplete" | "other",
+      "severity": "low" | "medium" | "high",
+      "confidence": "low" | "medium" | "high",
+      "autoFixable": boolean,
+      "title": string,
+      "detail": string,
+      "relatedConstraint": string
+    }
+  ],
+  "reviewPlan": {
+    "summary": string,
+    "preserve": string[],
+    "adjust": string[],
+    "confidence": "low" | "medium" | "high",
+    "executionMode": "auto" | "guided",
+    "issueTypes": string[],
+    "hardConstraints": string[],
+    "preferredContinuity": string[],
+    "localized": {
+      "zh": {
+        "summary": string,
+        "preserve": string[],
+        "adjust": string[]
+      },
+      "en": {
+        "summary": string,
+        "preserve": string[],
+        "adjust": string[]
+      }
+    }
+  },
+  "revisedPrompt": string
+}
+
+If you choose "requires_action", provide a strong plan but do not ask the user to rewrite prompts manually.
+
+User prompt:
+${prompt}`
+                }
+            ]
+        },
+        config: {
+            responseMimeType: 'application/json'
+        }
+    });
+
+    const parsed = parseImageCriticReview((response.text ?? '').trim());
+    if (!parsed) {
+        throw new Error('Image critic returned invalid JSON');
+    }
+    return parsed;
 };
 
 export const testConnection = async (apiKey: string): Promise<boolean> => {
