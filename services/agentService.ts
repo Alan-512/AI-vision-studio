@@ -249,10 +249,17 @@ export class AgentStateMachine {
     }
 
     private async handleActionSuccess(result: any): Promise<AgentState> {
-        // Store result
-        if (result?.assetId) {
+        const generatedAssetIds = Array.isArray(result?.artifactIds)
+            ? result.artifactIds.filter((assetId: unknown): assetId is string => typeof assetId === 'string' && assetId.length > 0)
+            : [];
+
+        if (typeof result?.assetId === 'string' && result.assetId.length > 0) {
+            generatedAssetIds.push(result.assetId);
+        }
+
+        if (generatedAssetIds.length > 0) {
             this.updateContext({
-                generatedAssets: [...this.state.context.generatedAssets, result.assetId]
+                generatedAssets: [...new Set([...this.state.context.generatedAssets, ...generatedAssetIds])]
             });
         }
 

@@ -3,7 +3,8 @@ import {
     createTrackedBlobUrl,
     retainBlobUrl,
     releaseBlobUrl,
-    cleanupAllBlobUrls
+    cleanupAllBlobUrls,
+    isTerminalAgentJobStatus
 } from '../services/storageService';
 
 describe('StorageService - Blob URL Management', () => {
@@ -47,6 +48,22 @@ describe('StorageService - Blob URL Management', () => {
             cleanupAllBlobUrls();
             cleanupAllBlobUrls();
             expect(true).toBe(true);
+        });
+    });
+
+    describe('isTerminalAgentJobStatus', () => {
+        it('should return true for terminal statuses', () => {
+            expect(isTerminalAgentJobStatus('completed')).toBe(true);
+            expect(isTerminalAgentJobStatus('failed')).toBe(true);
+            expect(isTerminalAgentJobStatus('interrupted')).toBe(true);
+            expect(isTerminalAgentJobStatus('cancelled')).toBe(true);
+        });
+
+        it('should return false for active statuses', () => {
+            expect(isTerminalAgentJobStatus('queued')).toBe(false);
+            expect(isTerminalAgentJobStatus('planning')).toBe(false);
+            expect(isTerminalAgentJobStatus('executing')).toBe(false);
+            expect(isTerminalAgentJobStatus('requires_action')).toBe(false);
         });
     });
 });

@@ -26,7 +26,7 @@ interface GenerationFormProps {
   setChatSelectedImages: React.Dispatch<React.SetStateAction<string[]>>;
   projectId: string;
   cooldownEndTime?: number;
-  onToolCall?: (action: AgentAction) => void;
+  onToolCall?: (action: AgentAction) => Promise<any> | any;
   projectContextSummary?: string;
   projectSummaryCursor?: number;
   onUpdateProjectContext?: (summary: string, cursor: number) => void;

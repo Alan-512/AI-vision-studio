@@ -1,11 +1,12 @@
 
-import { Project, AssetItem, AppMode, BackgroundTask } from '../types';
+import { Project, AssetItem, AppMode, BackgroundTask, AgentJob, AgentJobStatus } from '../types';
 
 const DB_NAME = 'AI-Vision-Studio-DB';
-const DB_VERSION = 5; // Added memory_logs for V2.1 Daily Log stream
+const DB_VERSION = 6; // Added agent_jobs store for image-agent runtime scaffolding
 const STORE_PROJECTS = 'projects';
 const STORE_ASSETS = 'assets';
 const STORE_TASKS = 'tasks';
+const STORE_AGENT_JOBS = 'agent_jobs';
 const STORE_MEMORY_DOCS = 'memory_docs';
 const STORE_MEMORY_OPS = 'memory_ops';
 const STORE_MEMORY_LOGS = 'memory_logs';
@@ -98,6 +99,14 @@ const getDB = (): Promise<IDBDatabase> => {
       // Tasks store (new in v3) - persist background task state
       if (!db.objectStoreNames.contains(STORE_TASKS)) {
         db.createObjectStore(STORE_TASKS, { keyPath: 'id' });
+      }
+
+      // Agent jobs store (new in v6) - explicit runtime state for image/video agent flows
+      if (!db.objectStoreNames.contains(STORE_AGENT_JOBS)) {
+        const agentJobsStore = db.createObjectStore(STORE_AGENT_JOBS, { keyPath: 'id' });
+        agentJobsStore.createIndex('projectId', 'projectId', { unique: false });
+        agentJobsStore.createIndex('status', 'status', { unique: false });
+        agentJobsStore.createIndex('updatedAt', 'updatedAt', { unique: false });
       }
 
       // Memory docs store (new in v4) - long-term memory system
@@ -267,10 +276,11 @@ export const loadProjects = async (): Promise<Project[]> => {
 };
 
 export const deleteProjectFromDB = async (projectId: string): Promise<void> => {
-  const transaction = await getTransaction([STORE_PROJECTS, STORE_ASSETS, STORE_TASKS, STORE_MEMORY_LOGS], 'readwrite');
+  const transaction = await getTransaction([STORE_PROJECTS, STORE_ASSETS, STORE_TASKS, STORE_AGENT_JOBS, STORE_MEMORY_LOGS], 'readwrite');
   const projectStore = transaction.objectStore(STORE_PROJECTS);
   const assetStore = transaction.objectStore(STORE_ASSETS);
   const taskStore = transaction.objectStore(STORE_TASKS);
+  const agentJobStore = transaction.objectStore(STORE_AGENT_JOBS);
   const logStore = transaction.objectStore(STORE_MEMORY_LOGS);
 
   return new Promise((resolve, reject) => {
@@ -303,7 +313,17 @@ export const deleteProjectFromDB = async (projectId: string): Promise<void> => {
       }
     };
 
-    // 3. Delete memory logs associated with project
+    // 3. Delete agent jobs associated with project
+    if (agentJobStore.indexNames.contains('projectId')) {
+      const index = agentJobStore.index('projectId');
+      const request = index.getAllKeys(projectId);
+      request.onsuccess = () => {
+        const keys = request.result;
+        if (Array.isArray(keys)) keys.forEach(key => agentJobStore.delete(key));
+      };
+    }
+
+    // 4. Delete memory logs associated with project
     if (logStore.indexNames.contains('projectId')) {
       const index = logStore.index('projectId');
       const request = index.getAllKeys(projectId);
@@ -313,7 +333,7 @@ export const deleteProjectFromDB = async (projectId: string): Promise<void> => {
       };
     }
 
-    // 4. Finally delete the project itself
+    // 5. Finally delete the project itself
     projectStore.delete(projectId);
 
     transaction.oncomplete = () => resolve();
@@ -881,6 +901,161 @@ export const clearCompletedTasks = async (): Promise<void> => {
     transaction.oncomplete = () => resolve();
     transaction.onerror = () => reject(transaction.error);
   });
+};
+
+// --- Agent Jobs (Runtime Persistence) ---
+
+const TERMINAL_AGENT_JOB_STATUSES: AgentJobStatus[] = ['completed', 'failed', 'interrupted', 'cancelled'];
+
+export const isTerminalAgentJobStatus = (status: AgentJobStatus): boolean =>
+  TERMINAL_AGENT_JOB_STATUSES.includes(status);
+
+export const saveAgentJob = async (job: AgentJob): Promise<void> => {
+  try {
+    const transaction = await getTransaction(STORE_AGENT_JOBS, 'readwrite');
+    return new Promise((resolve, reject) => {
+      const store = transaction.objectStore(STORE_AGENT_JOBS);
+      const request = store.put(job);
+      request.onsuccess = () => resolve();
+      request.onerror = () => reject(request.error);
+    });
+  } catch (err: any) {
+    if (err.name === 'NotFoundError' || err.message?.includes('not found')) {
+      console.warn('[Storage] Agent jobs store not found - save skipped');
+      return;
+    }
+    throw err;
+  }
+};
+
+export const loadAgentJobs = async (): Promise<AgentJob[]> => {
+  try {
+    const transaction = await getTransaction(STORE_AGENT_JOBS, 'readonly');
+    return new Promise((resolve, reject) => {
+      const store = transaction.objectStore(STORE_AGENT_JOBS);
+      const request = store.getAll();
+      request.onsuccess = () => resolve((request.result || []) as AgentJob[]);
+      request.onerror = () => reject(request.error);
+    });
+  } catch (err: any) {
+    if (err.name === 'NotFoundError' || err.message?.includes('not found')) {
+      console.warn('[Storage] Agent jobs store not found - returning empty array. Please refresh to trigger DB upgrade.');
+      return [];
+    }
+    throw err;
+  }
+};
+
+export const loadAgentJobsByProject = async (projectId: string): Promise<AgentJob[]> => {
+  try {
+    const transaction = await getTransaction(STORE_AGENT_JOBS, 'readonly');
+    return new Promise((resolve, reject) => {
+      const store = transaction.objectStore(STORE_AGENT_JOBS);
+      if (store.indexNames.contains('projectId')) {
+        const request = store.index('projectId').getAll(projectId);
+        request.onsuccess = () => resolve((request.result || []) as AgentJob[]);
+        request.onerror = () => reject(request.error);
+        return;
+      }
+
+      const request = store.getAll();
+      request.onsuccess = () => {
+        const jobs = ((request.result || []) as AgentJob[]).filter(job => job.projectId === projectId);
+        resolve(jobs);
+      };
+      request.onerror = () => reject(request.error);
+    });
+  } catch (err: any) {
+    if (err.name === 'NotFoundError' || err.message?.includes('not found')) {
+      console.warn('[Storage] Agent jobs store not found - returning empty array. Please refresh to trigger DB upgrade.');
+      return [];
+    }
+    throw err;
+  }
+};
+
+export const updateAgentJob = async (id: string, updates: Partial<AgentJob>): Promise<void> => {
+  try {
+    const transaction = await getTransaction(STORE_AGENT_JOBS, 'readwrite');
+    return new Promise((resolve, reject) => {
+      const store = transaction.objectStore(STORE_AGENT_JOBS);
+      const request = store.get(id);
+
+      request.onsuccess = () => {
+        const data = request.result as AgentJob | undefined;
+        if (!data) {
+          console.warn(`[Storage] Agent job ${id} not found for update.`);
+          resolve();
+          return;
+        }
+
+        const updatedData: AgentJob = {
+          ...data,
+          ...updates,
+          updatedAt: updates.updatedAt ?? Date.now()
+        };
+
+        const putRequest = store.put(updatedData);
+        putRequest.onsuccess = () => resolve();
+        putRequest.onerror = () => reject(putRequest.error);
+      };
+      request.onerror = () => reject(request.error);
+    });
+  } catch (err: any) {
+    if (err.name === 'NotFoundError' || err.message?.includes('not found')) {
+      console.warn('[Storage] Agent jobs store not found - update skipped');
+      return;
+    }
+    throw err;
+  }
+};
+
+export const deleteAgentJob = async (jobId: string): Promise<void> => {
+  try {
+    const transaction = await getTransaction(STORE_AGENT_JOBS, 'readwrite');
+    return new Promise((resolve, reject) => {
+      const store = transaction.objectStore(STORE_AGENT_JOBS);
+      const request = store.delete(jobId);
+      request.onsuccess = () => resolve();
+      request.onerror = () => reject(request.error);
+    });
+  } catch (err: any) {
+    if (err.name === 'NotFoundError' || err.message?.includes('not found')) {
+      console.warn('[Storage] Agent jobs store not found - delete skipped');
+      return;
+    }
+    throw err;
+  }
+};
+
+export const clearTerminalAgentJobs = async (): Promise<void> => {
+  try {
+    const transaction = await getTransaction(STORE_AGENT_JOBS, 'readwrite');
+    return new Promise((resolve, reject) => {
+      const store = transaction.objectStore(STORE_AGENT_JOBS);
+      const cursorRequest = store.openCursor();
+
+      cursorRequest.onsuccess = (e: any) => {
+        const cursor = e.target.result;
+        if (cursor) {
+          const job = cursor.value as AgentJob;
+          if (isTerminalAgentJobStatus(job.status)) {
+            cursor.delete();
+          }
+          cursor.continue();
+        }
+      };
+
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error);
+    });
+  } catch (err: any) {
+    if (err.name === 'NotFoundError' || err.message?.includes('not found')) {
+      console.warn('[Storage] Agent jobs store not found - clear skipped');
+      return;
+    }
+    throw err;
+  }
 };
 
 

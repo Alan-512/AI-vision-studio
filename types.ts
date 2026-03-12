@@ -230,36 +230,106 @@ export interface GenerationParams {
 
 // --- ARCHITECTURE UPGRADE: JOB MODEL & EVENT STREAM ---
 
+export type AgentJobType = 'IMAGE_GENERATION' | 'VIDEO_GENERATION' | 'CONTEXT_UPDATE';
+export type AgentJobStatus =
+  | 'queued'
+  | 'planning'
+  | 'executing'
+  | 'reviewing'
+  | 'revising'
+  | 'completed'
+  | 'failed'
+  | 'requires_action'
+  | 'interrupted'
+  | 'cancelled';
+
+export type AgentStepStatus = 'pending' | 'running' | 'success' | 'failed' | 'cancelled' | 'skipped';
+export type AgentStepKind = 'planning' | 'search' | 'generation' | 'review' | 'revision' | 'memory' | 'system';
+export type AgentArtifactType = 'image' | 'video' | 'json' | 'text';
+export type AgentArtifactOrigin = 'user_upload' | 'generated' | 'search' | 'review' | 'system';
+export type AgentArtifactRole =
+  | 'reference'
+  | 'candidate'
+  | 'final'
+  | 'mask'
+  | 'edit_base'
+  | 'retrieved_context'
+  | 'review_note';
+
+export type AgentToolCallStatus = 'pending' | 'running' | 'success' | 'failed' | 'cancelled';
+export type AgentToolResultStatus = 'success' | 'error' | 'requires_action';
+
+export interface AgentToolResult {
+  jobId: string;
+  stepId?: string;
+  toolName: string;
+  status: AgentToolResultStatus;
+  artifactIds?: string[];
+  message?: string;
+  error?: string;
+  retryable?: boolean;
+  metadata?: Record<string, unknown>;
+  requiresAction?: {
+    type: string;
+    message: string;
+    payload?: Record<string, unknown>;
+  };
+}
+
 // 1. The Job Model (Separating Execution State from Chat)
 export interface AgentJob {
   id: string;
   projectId: string;
-  type: 'IMAGE_GENERATION' | 'VIDEO_GENERATION' | 'CONTEXT_UPDATE';
-  status: 'planning' | 'executing' | 'completed' | 'failed' | 'requires_action';
+  type: AgentJobType;
+  status: AgentJobStatus;
   createdAt: number;
   updatedAt: number;
+  source: 'chat' | 'studio' | 'system';
+  triggerMessageTimestamp?: number;
+  currentStepId?: string;
+  lastError?: string;
+  requiresAction?: {
+    type: string;
+    message: string;
+    payload?: Record<string, unknown>;
+  };
+  searchContext?: {
+    queries?: string[];
+    facts?: Array<{ item: string; source?: string }>;
+    promptDraft?: string;
+    sources?: Array<{ title: string; url: string }>;
+  };
   steps: JobStep[];
   artifacts: JobArtifact[];
   cost?: number; // Token usage or estimated cost
 }
 
-interface JobStep {
+export interface JobStep {
   id: string;
+  kind: AgentStepKind;
   name: string; // e.g., "generate_image", "optimize_prompt"
-  status: 'pending' | 'running' | 'success' | 'failed';
+  status: AgentStepStatus;
+  toolName?: string;
   input?: any;
   output?: any;
+  result?: AgentToolResult;
   error?: string;
   startTime?: number;
   endTime?: number;
 }
 
-interface JobArtifact {
+export interface JobArtifact {
   id: string;
-  type: 'image' | 'video' | 'json' | 'text';
+  type: AgentArtifactType;
+  origin: AgentArtifactOrigin;
+  role?: AgentArtifactRole;
   url?: string; // Blob URL or Remote URL
   base64?: string; // Fallback
   mimeType?: string;
+  createdAt?: number;
+  parentArtifactId?: string;
+  relatedStepId?: string;
+  relatedMessageTimestamp?: number;
   metadata?: any;
 }
 
@@ -293,8 +363,12 @@ export interface ToolCallRecord {
   id: string;
   toolName: string;
   args: any;
-  status: 'pending' | 'success' | 'failed';
-  result?: any;
+  status: AgentToolCallStatus;
+  jobId?: string;
+  stepId?: string;
+  startedAt?: number;
+  completedAt?: number;
+  result?: AgentToolResult;
 }
 
 // 3. Project Model

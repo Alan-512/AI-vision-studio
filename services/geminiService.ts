@@ -388,7 +388,7 @@ export const streamChatResponse = async (
     contextSummary?: string,
     _summaryCursor?: number,
     _onUpdateContext?: (summary: string, cursor: number) => void,
-    onToolCall?: (action: AgentAction) => void,
+    onToolCall?: (action: AgentAction) => Promise<any> | any,
     useSearch?: boolean,
     _params?: GenerationParams,
     _agentContextAssets?: SmartAsset[],

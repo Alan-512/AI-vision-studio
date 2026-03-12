@@ -22,7 +22,7 @@ interface ChatInterfaceProps {
   projectContextSummary?: string;
   projectSummaryCursor?: number;
   onUpdateProjectContext?: (summary: string, cursor: number) => void;
-  onToolCall?: (action: AgentAction) => void;
+  onToolCall?: (action: AgentAction) => Promise<any> | any;
   agentContextAssets?: SmartAsset[];
   onRemoveContextAsset?: (assetId: string) => void;
   onClearContextAssets?: () => void;
@@ -344,14 +344,15 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         // Execute the action via onToolCall (read from ref for latest value)
         if (onToolCallRef.current && action.type === 'GENERATE_IMAGE') {
           console.log('[Agent] Calling onToolCall with params:', action.params);
-          return new Promise((resolve, reject) => {
-            try {
-              onToolCallRef.current!({ toolName: 'generate_image', args: action.params });
-              resolve({ success: true });
-            } catch (error) {
-              reject(error);
+          try {
+            const result = await onToolCallRef.current!({ toolName: 'generate_image', args: action.params });
+            if (result?.status === 'error') {
+              throw new Error(result.error || 'Tool execution failed');
             }
-          });
+            return result;
+          } catch (error) {
+            throw error;
+          }
         }
         console.warn('[Agent] onExecuteAction condition not met');
         throw new Error(`Unknown action type: ${action.type}`);

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { Image as ImageIcon, Video, LayoutGrid, Folder, Sparkles, Settings, Star, CheckSquare, MoveHorizontal, Languages, Trash2, Recycle, Download, RotateCcw, ArrowRight, Key, X } from 'lucide-react';
-import { AppMode, AspectRatio, GenerationParams, AssetItem, ImageResolution, VideoResolution, ImageModel, VideoModel, ImageStyle, Project, ChatMessage, BackgroundTask, SmartAsset, VideoDuration, VideoStyle, AgentAction, EditRegion, SearchPolicy, AssistantMode, SmartAssetRole, ThinkingLevel } from './types';
+import { AppMode, AspectRatio, GenerationParams, AssetItem, ImageResolution, VideoResolution, ImageModel, VideoModel, ImageStyle, Project, ChatMessage, BackgroundTask, SmartAsset, VideoDuration, VideoStyle, AgentAction, EditRegion, SearchPolicy, AssistantMode, SmartAssetRole, ThinkingLevel, AgentJob, AgentJobStatus, JobStep, JobArtifact, AgentToolResult, ToolCallRecord } from './types';
 import { GenerationForm } from './components/GenerationForm';
 import { AssetCard } from './components/AssetCard';
 import { ProjectSidebar } from './components/ProjectSidebar';
@@ -17,7 +17,7 @@ import {
     initDB, loadProjects, saveProject, saveAsset, loadAssets, updateAsset, updateProject,
     deleteProjectFromDB, softDeleteAssetInDB, restoreAssetInDB,
     permanentlyDeleteAssetFromDB, bulkPermanentlyDeleteAssets, bulkSoftDeleteAssets, recoverOrphanedProjects,
-    releaseBlobUrl, saveTask, loadTasks, deleteTask
+    releaseBlobUrl, saveTask, loadTasks, deleteTask, loadAgentJobs, saveAgentJob
 } from './services/storageService';
 import { runMemoryExtractionTask } from './services/memoryExtractor';
 import { runConsolidation } from './services/memoryConsolidator';
@@ -108,6 +108,49 @@ const getPlaybookDefaults = (assistantMode: AssistantMode | undefined): Playbook
             break;
     }
     return defaults;
+};
+
+const INTERRUPTIBLE_AGENT_JOB_STATUSES: AgentJobStatus[] = ['queued', 'planning', 'executing', 'reviewing', 'revising'];
+
+const createGenerationStep = (
+    stepId: string,
+    mode: AppMode,
+    params: GenerationParams,
+    toolCall?: AgentAction
+): JobStep => ({
+    id: stepId,
+    kind: 'generation',
+    name: mode === AppMode.IMAGE ? 'generate_image' : 'generate_video',
+    toolName: toolCall?.toolName || (mode === AppMode.IMAGE ? 'generate_image' : 'generate_video'),
+    status: 'pending',
+    input: {
+        prompt: params.prompt,
+        model: mode === AppMode.IMAGE ? params.imageModel : params.videoModel,
+        aspectRatio: params.aspectRatio,
+        resolution: mode === AppMode.IMAGE ? params.imageResolution : params.videoResolution,
+        duration: mode === AppMode.VIDEO ? params.videoDuration : undefined,
+        useGrounding: params.useGrounding,
+        toolArgs: toolCall?.args
+    }
+});
+
+const buildGeneratedArtifact = (asset: AssetItem, stepId: string): JobArtifact => ({
+    id: asset.id,
+    type: asset.type === 'IMAGE' ? 'image' : 'video',
+    origin: 'generated',
+    role: 'final',
+    url: asset.url,
+    mimeType: asset.type === 'IMAGE' && asset.url.startsWith('data:') ? asset.url.match(/^data:(.+);base64,/)?.[1] : undefined,
+    createdAt: asset.createdAt,
+    relatedStepId: stepId,
+    metadata: asset.metadata
+});
+
+const findLastModelMessageIndex = (messages: ChatMessage[]): number => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+        if (messages[i].role === 'model') return i;
+    }
+    return -1;
 };
 
 
@@ -290,8 +333,42 @@ export function App() {
                     return task;
                 });
 
+                const persistedAgentJobs = await loadAgentJobs();
+                const recoveredAgentJobs = persistedAgentJobs.map(job => {
+                    if (!INTERRUPTIBLE_AGENT_JOB_STATUSES.includes(job.status)) {
+                        return job;
+                    }
+
+                    const interruptedAt = Date.now();
+                    const interruptedSteps = job.steps.map(step => {
+                        if (step.status === 'running') {
+                            return {
+                                ...step,
+                                status: 'failed' as const,
+                                error: 'Job interrupted by page refresh',
+                                endTime: interruptedAt
+                            };
+                        }
+                        return step;
+                    });
+
+                    const interruptedJob: AgentJob = {
+                        ...job,
+                        status: 'interrupted',
+                        currentStepId: undefined,
+                        lastError: 'Job interrupted by page refresh',
+                        updatedAt: interruptedAt,
+                        steps: interruptedSteps
+                    };
+                    saveAgentJob(interruptedJob).catch(console.error);
+                    return interruptedJob;
+                });
+
                 if (isMounted) {
                     setTasks(recoveredTasks);
+                    if (recoveredAgentJobs.length > 0) {
+                        console.log(`[App] Recovered ${recoveredAgentJobs.length} persisted agent jobs`);
+                    }
                     setIsLoaded(true);
                 }
             } catch (error) {
@@ -471,6 +548,28 @@ export function App() {
     };
     const removeToast = (id: string) => setToasts(prev => prev.filter(t => t.id !== id));
 
+    const updateLastModelMessage = (updater: (message: ChatMessage) => ChatMessage) => {
+        setChatHistory(prev => {
+            const updated = [...prev];
+            const lastModelIndex = findLastModelMessageIndex(updated);
+            if (lastModelIndex === -1) return prev;
+            updated[lastModelIndex] = updater(updated[lastModelIndex]);
+            return updated;
+        });
+    };
+
+    const upsertLastModelToolCall = (toolCallId: string, updater: (record: ToolCallRecord | undefined) => ToolCallRecord) => {
+        updateLastModelMessage(message => {
+            const existingRecords = message.toolCalls || [];
+            const existingRecord = existingRecords.find(record => record.id === toolCallId);
+            const nextRecord = updater(existingRecord);
+            const nextRecords = existingRecord
+                ? existingRecords.map(record => record.id === toolCallId ? nextRecord : record)
+                : [...existingRecords, nextRecord];
+            return { ...message, toolCalls: nextRecords };
+        });
+    };
+
     const handleAuthVerify = async () => {
         if (window.aistudio) {
             const hasKey = await window.aistudio.hasSelectedApiKey();
@@ -554,30 +653,45 @@ export function App() {
         })();
     };
 
-    const handleAgentToolCall = async (action: AgentAction) => {
+    const handleAgentToolCall = async (action: AgentAction): Promise<AgentToolResult> => {
         const rawArgs = action.args && typeof action.args === 'object' && 'parameters' in action.args
             ? (action.args as { parameters: any }).parameters
             : action.args;
+        const toolCallId = crypto.randomUUID();
         // FIX: Generate unique key for deduplication based on action content
         const toolCallKey = `${action.toolName}-${JSON.stringify(rawArgs ?? {}).slice(0, 100)}`;
+        const createToolErrorResult = (error: string): AgentToolResult => ({
+            jobId: '',
+            toolName: action.toolName,
+            status: 'error',
+            error
+        });
 
         // Check if already processing this exact tool call
         if (processingToolCallRef.current.has(toolCallKey)) {
             console.warn('[Agent] Duplicate tool call detected, skipping:', toolCallKey.slice(0, 50));
-            return;
+            return {
+                jobId: '',
+                toolName: action.toolName,
+                status: 'success',
+                message: 'Duplicate tool call ignored.',
+                metadata: { deduplicated: true }
+            };
         }
 
-        // Mark as processing
         processingToolCallRef.current.add(toolCallKey);
 
-        // Clear after 30 seconds to allow retry if genuinely needed
-        setTimeout(() => {
-            processingToolCallRef.current.delete(toolCallKey);
-        }, 30000);
-
+        try {
         if (action.toolName === 'generate_image') {
             const toolArgs = rawArgs && typeof rawArgs === 'object' ? rawArgs : {};
             const { prompt, aspectRatio, style, resolution, thinkingLevel, negativePrompt, save_as_reference, numberOfImages } = toolArgs;
+            upsertLastModelToolCall(toolCallId, () => ({
+                id: toolCallId,
+                toolName: action.toolName,
+                args: toolArgs,
+                status: 'running',
+                startedAt: Date.now()
+            }));
             setRightPanelMode('GALLERY');
             if (mode !== AppMode.IMAGE) handleModeSwitch(AppMode.IMAGE);
 
@@ -585,8 +699,19 @@ export function App() {
             // Note: isGroundingRequested not used in Chat mode (LLM handles search)
             const normalizedPrompt = typeof prompt === 'string' ? prompt.trim() : '';
             if (!normalizedPrompt) {
+                const failedResult = createToolErrorResult('Prompt missing for generate_image tool call.');
+                upsertLastModelToolCall(toolCallId, existing => ({
+                    ...(existing || {
+                        id: toolCallId,
+                        toolName: action.toolName,
+                        args: toolArgs
+                    }),
+                    status: 'failed',
+                    completedAt: Date.now(),
+                    result: failedResult
+                }));
                 addToast('error', 'Prompt Missing', '对话生成未收到有效提示词，请重试或换句话描述。');
-                return;
+                return failedResult;
             }
             const chatDefaults = {
                 aspectRatio: AspectRatio.LANDSCAPE,
@@ -812,25 +937,68 @@ export function App() {
                 if (contextImageBase64) {
                     // Extract thoughtSignatures from asset metadata for multi-turn editing
                     const assetSignatures = (asset.metadata as any)?.thoughtSignatures;
-                    setChatHistory(prev => [
+                        setChatHistory(prev => [
                         ...prev,
                         {
                             role: 'user', content: `[SYSTEM_FEEDBACK]: Image generated successfully based on prompt: "${asset.prompt}".\nHere is the visual result (Thumbnail). Use this as context for consistency.`,
                             timestamp: Date.now(), image: contextImageBase64, isSystem: true,
+                            relatedJobId: asset.jobId,
                             // Pass thoughtSignatures for Pro model multi-turn editing stability
                             thoughtSignatures: assetSignatures
                         }
                     ]);
                 }
             };
-            await handleGenerate(executionParams as GenerationParams, {
-                modeOverride: AppMode.IMAGE,
-                onSuccess: onComplete,
-                historyOverride: chatHistory,
-                useParamsAsBase: false // CLEAN ISOLATION: Don't merge with params config page
-            });
-            // Clear AI assistant's edit params after generation (don't reuse for next generation)
-            setChatEditParams({});
+            try {
+                const toolResults = await handleGenerate(executionParams as GenerationParams, {
+                    modeOverride: AppMode.IMAGE,
+                    onSuccess: onComplete,
+                    historyOverride: chatHistory,
+                    useParamsAsBase: false, // CLEAN ISOLATION: Don't merge with params config page
+                    jobSource: 'chat',
+                    toolCall: action
+                });
+                const primaryResult = toolResults[0] || createToolErrorResult('Tool execution produced no result.');
+                upsertLastModelToolCall(toolCallId, existing => ({
+                    ...(existing || {
+                        id: toolCallId,
+                        toolName: action.toolName,
+                        args: toolArgs
+                    }),
+                    status: primaryResult.status === 'success' ? 'success' : 'failed',
+                    jobId: primaryResult.jobId,
+                    stepId: primaryResult.stepId,
+                    completedAt: Date.now(),
+                    result: primaryResult
+                }));
+                if (primaryResult.jobId) {
+                    updateLastModelMessage(message => ({
+                        ...message,
+                        relatedJobId: primaryResult.jobId
+                    }));
+                }
+                // Clear AI assistant's edit params after generation (don't reuse for next generation)
+                setChatEditParams({});
+                return primaryResult;
+            } catch (error: any) {
+                const failedResult = createToolErrorResult(error?.message || String(error));
+                upsertLastModelToolCall(toolCallId, existing => ({
+                    ...(existing || {
+                        id: toolCallId,
+                        toolName: action.toolName,
+                        args: toolArgs
+                    }),
+                    status: 'failed',
+                    completedAt: Date.now(),
+                    result: failedResult
+                }));
+                return failedResult;
+            }
+        }
+
+        return createToolErrorResult(`Unsupported tool: ${action.toolName}`);
+        } finally {
+            processingToolCallRef.current.delete(toolCallKey);
         }
     };
 
@@ -876,9 +1044,11 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
             onSuccess?: (asset: AssetItem) => void;
             historyOverride?: ChatMessage[];
             useParamsAsBase?: boolean; // Default false for isolation
+            jobSource?: AgentJob['source'];
+            toolCall?: AgentAction;
         }
-    ) => {
-        const { modeOverride, onSuccess, historyOverride, useParamsAsBase = false } = options || {};
+    ): Promise<AgentToolResult[]> => {
+        const { modeOverride, onSuccess, historyOverride, useParamsAsBase = false, jobSource, toolCall } = options || {};
 
         // RESUME AUDIO CONTEXT ON USER CLICK: Critical for browser audio policies
         const audioCtx = getAudioContext();
@@ -888,11 +1058,11 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
 
         if (Date.now() < videoCooldownEndTime) {
             addToast('error', 'System Cooled Down', 'Please wait for the timer to finish before generating again.');
-            return;
+            return [];
         }
         const userKey = getUserApiKey();
         // FIX: Use import.meta.env for Vite, or just check userKey directly
-        if (!userKey) { setShowSettings(true); return; }
+        if (!userKey) { setShowSettings(true); return []; }
 
         // Clear previous thought images for new generation (ensures isolation)
         setThoughtImages([]);
@@ -908,6 +1078,10 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
         });
         const currentProjectId = activeProjectId;
         const currentMode = modeOverride || mode;
+        const resolvedJobSource: AgentJob['source'] = jobSource || (historyOverride ? 'chat' : 'studio');
+        const triggerMessageTimestamp = historyOverride
+            ? [...historyOverride].reverse().find(message => message.role === 'user')?.timestamp
+            : undefined;
         const project = projects.find(p => p.id === currentProjectId);
         if (project && (project.name === 'New Project' || project.name === t('nav.new_project')) && activeParams.prompt) {
             generateTitle(activeParams.prompt).then(name => {
@@ -916,16 +1090,41 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
             });
         }
 
-        const launchTask = async (_index: number) => {
+        const launchTask = async (_index: number): Promise<AgentToolResult> => {
             const taskId = crypto.randomUUID();
+            const jobId = taskId;
+            const stepId = crypto.randomUUID();
             const controller = new AbortController();
             taskControllers.current[taskId] = controller;
             const newTask: BackgroundTask = {
                 id: taskId, projectId: currentProjectId, projectName: projects.find(p => p.id === currentProjectId)?.name || 'Project',
-                type: currentMode === AppMode.IMAGE ? 'IMAGE' : 'VIDEO', status: 'QUEUED', startTime: Date.now(), prompt: activeParams.prompt
+                type: currentMode === AppMode.IMAGE ? 'IMAGE' : 'VIDEO', status: 'QUEUED', startTime: Date.now(), prompt: activeParams.prompt,
+                jobId
+            };
+            let agentJob: AgentJob = {
+                id: jobId,
+                projectId: currentProjectId,
+                type: currentMode === AppMode.IMAGE ? 'IMAGE_GENERATION' : 'VIDEO_GENERATION',
+                status: 'queued',
+                createdAt: Date.now(),
+                updatedAt: Date.now(),
+                source: resolvedJobSource,
+                triggerMessageTimestamp,
+                currentStepId: undefined,
+                steps: [createGenerationStep(stepId, currentMode, activeParams, toolCall)],
+                artifacts: []
+            };
+            const persistJob = async (updates: Partial<AgentJob>) => {
+                agentJob = {
+                    ...agentJob,
+                    ...updates,
+                    updatedAt: updates.updatedAt ?? Date.now()
+                };
+                await saveAgentJob(agentJob);
             };
             setTasks(prev => [...prev, newTask]);
             saveTask(newTask); // Persist to IndexedDB
+            saveAgentJob(agentJob).catch(console.error);
 
             try {
                 const onStart = () => {
@@ -933,6 +1132,16 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
                     const updatedTask = { ...newTask, status: 'GENERATING' as const, executionStartTime: Date.now() };
                     setTasks(prev => prev.map(t => t.id === taskId ? updatedTask : t));
                     saveTask(updatedTask); // Persist status change
+                    const runningAt = Date.now();
+                    const runningSteps = agentJob.steps.map(step => step.id === stepId
+                        ? { ...step, status: 'running' as const, startTime: step.startTime ?? runningAt }
+                        : step
+                    );
+                    persistJob({
+                        status: 'executing',
+                        currentStepId: stepId,
+                        steps: runningSteps
+                    }).catch(console.error);
                     if (activeProjectIdRef.current === currentProjectId) {
                         setAssets(prev => prev.map(a => a.id === taskId ? { ...a, status: 'GENERATING' } : a));
                     }
@@ -940,6 +1149,7 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
                 const tempAsset: AssetItem = {
                     id: taskId, projectId: currentProjectId, type: currentMode === AppMode.IMAGE ? 'IMAGE' : 'VIDEO',
                     url: '', prompt: activeParams.prompt, createdAt: Date.now(), status: 'PENDING', isNew: true,
+                    jobId,
                     metadata: {
                         aspectRatio: activeParams.aspectRatio,
                         model: currentMode === AppMode.IMAGE ? activeParams.imageModel : activeParams.videoModel,
@@ -974,6 +1184,7 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
                     genParams.prompt = buildEditPrompt(activeParams.prompt, activeParams.editRegions);
                 }
                 const historyForGeneration = !isEditMode && currentMode === AppMode.IMAGE ? historyOverride : undefined;
+                let toolResult: AgentToolResult;
                 if (currentMode === AppMode.IMAGE) {
                     asset = await generateImage(genParams, currentProjectId, onStart, controller.signal, taskId, historyForGeneration,
                         // onThoughtImage callback to capture draft images (构思图)
@@ -987,11 +1198,29 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
                     );
                     if (controller.signal.aborted) throw new Error("Cancelled");
                     asset.isNew = true;
+                    asset.jobId = jobId;
                     await saveAsset(asset);
                     if (controller.signal.aborted) throw new Error("Cancelled");
                     if (activeProjectIdRef.current === currentProjectId) setAssets(prev => prev.map(a => a.id === taskId ? asset : a));
                     setTasks(prev => prev.map(t => t.id === taskId ? { ...t, status: 'COMPLETED' } : t));
                     saveTask({ ...newTask, status: 'COMPLETED' }); // Persist completion
+                    const completedAt = Date.now();
+                    const completedSteps = agentJob.steps.map(step => step.id === stepId
+                        ? {
+                            ...step,
+                            status: 'success' as const,
+                            endTime: completedAt,
+                            output: { assetId: asset.id, assetType: asset.type }
+                        }
+                        : step
+                    );
+                    persistJob({
+                        status: 'completed',
+                        currentStepId: undefined,
+                        lastError: undefined,
+                        steps: completedSteps,
+                        artifacts: [...agentJob.artifacts, buildGeneratedArtifact(asset, stepId)]
+                    }).catch(console.error);
                     if (onSuccess) onSuccess(asset);
 
                     // Background Memory Extraction Task (writes to Daily Logs only)
@@ -999,10 +1228,32 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
                     runMemoryExtractionTask(currentProjectId, historyOverride || chatHistory, userKey).catch(err => {
                         console.error('[App] Background memory extraction failed:', err);
                     });
+                    toolResult = {
+                        jobId,
+                        stepId,
+                        toolName: 'generate_image',
+                        status: 'success',
+                        artifactIds: [asset.id],
+                        message: 'Image generation completed',
+                        metadata: {
+                            assetId: asset.id,
+                            taskId,
+                            model: asset.metadata?.model,
+                            aspectRatio: asset.metadata?.aspectRatio
+                        }
+                    };
                 } else {
                     const videoResult = await generateVideo(genParams, async (operationName) => {
                         if (controller.signal.aborted) throw new Error("Cancelled");
                         await updateAsset(taskId, { operationName });
+                        const stepsWithOperation = agentJob.steps.map(step => step.id === stepId
+                            ? {
+                                ...step,
+                                output: { ...(step.output || {}), operationName }
+                            }
+                            : step
+                        );
+                        persistJob({ steps: stepsWithOperation }).catch(console.error);
                     }, onStart, controller.signal);
                     if (controller.signal.aborted) throw new Error("Cancelled");
                     // FIX: Store videoUri for video extension support
@@ -1011,12 +1262,59 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
                     if (activeProjectIdRef.current === currentProjectId) setAssets(prev => prev.map(a => a.id === taskId ? { ...a, ...updates } : a));
                     setTasks(prev => prev.map(t => t.id === taskId ? { ...t, status: 'COMPLETED' } : t));
                     saveTask({ ...newTask, status: 'COMPLETED' }); // Persist completion
-                    asset = { ...tempAsset, ...updates };
+                    asset = { ...tempAsset, ...updates, jobId };
+                    const completedAt = Date.now();
+                    const completedSteps = agentJob.steps.map(step => step.id === stepId
+                        ? {
+                            ...step,
+                            status: 'success' as const,
+                            endTime: completedAt,
+                            output: { ...(step.output || {}), assetId: asset.id, assetType: asset.type, videoUri: videoResult.videoUri }
+                        }
+                        : step
+                    );
+                    persistJob({
+                        status: 'completed',
+                        currentStepId: undefined,
+                        lastError: undefined,
+                        steps: completedSteps,
+                        artifacts: [...agentJob.artifacts, buildGeneratedArtifact(asset, stepId)]
+                    }).catch(console.error);
+                    toolResult = {
+                        jobId,
+                        stepId,
+                        toolName: 'generate_video',
+                        status: 'success',
+                        artifactIds: [asset.id],
+                        message: 'Video generation completed',
+                        metadata: {
+                            assetId: asset.id,
+                            taskId,
+                            videoUri: videoResult.videoUri
+                        }
+                    };
                 }
                 playSuccessSound();
                 if (activeParams.continuousMode && asset.type === 'IMAGE') handleUseAsReference(asset, false);
+                return toolResult;
             } catch (error: any) {
                 if (error.message === 'Cancelled' || error.name === 'AbortError') {
+                    const cancelledAt = Date.now();
+                    const cancelledSteps = agentJob.steps.map(step => step.id === stepId
+                        ? {
+                            ...step,
+                            status: 'cancelled' as const,
+                            endTime: cancelledAt,
+                            error: 'Cancelled by user'
+                        }
+                        : step
+                    );
+                    persistJob({
+                        status: 'cancelled',
+                        currentStepId: undefined,
+                        lastError: 'Cancelled by user',
+                        steps: cancelledSteps
+                    }).catch(console.error);
                     setTasks(prev => prev.filter(t => t.id !== taskId));
                     deleteTask(taskId).catch(e => console.debug('[App] deleteTask failed:', e)); // Remove from DB
                     try {
@@ -1028,10 +1326,38 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
                             setAssets(prev => prev.filter(a => a.id !== taskId));
                         }
                     }
+                    return {
+                        jobId,
+                        stepId,
+                        toolName: currentMode === AppMode.IMAGE ? 'generate_image' : 'generate_video',
+                        status: 'error',
+                        error: 'Cancelled by user',
+                        retryable: false,
+                        metadata: {
+                            taskId,
+                            lifecycleStatus: 'cancelled'
+                        }
+                    };
                 } else {
                     const errorText = error.message || "";
                     const friendlyError = getFriendlyError(errorText);
                     const failedTask = { ...newTask, status: 'FAILED' as const, error: errorText };
+                    const failedAt = Date.now();
+                    const failedSteps = agentJob.steps.map(step => step.id === stepId
+                        ? {
+                            ...step,
+                            status: 'failed' as const,
+                            endTime: failedAt,
+                            error: errorText
+                        }
+                        : step
+                    );
+                    persistJob({
+                        status: 'failed',
+                        currentStepId: undefined,
+                        lastError: errorText,
+                        steps: failedSteps
+                    }).catch(console.error);
                     setTasks(prev => prev.map(t => t.id === taskId ? failedTask : t));
                     saveTask(failedTask).catch(e => console.debug('[App] saveTask failed:', e)); // Persist failure (catch unhandled rejections)
                     try {
@@ -1049,6 +1375,18 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
                     if (errorText.includes('429') || errorText.includes('Quota') || errorText.includes('RESOURCE_EXHAUSTED')) {
                         setVideoCooldownEndTime(Date.now() + 60000);
                     }
+                    return {
+                        jobId,
+                        stepId,
+                        toolName: currentMode === AppMode.IMAGE ? 'generate_image' : 'generate_video',
+                        status: 'error',
+                        error: errorText,
+                        retryable: errorText.includes('429') || errorText.includes('Quota') || errorText.includes('RESOURCE_EXHAUSTED'),
+                        metadata: {
+                            taskId,
+                            lifecycleStatus: 'failed'
+                        }
+                    };
                 }
             } finally { delete taskControllers.current[taskId]; }
         };
@@ -1057,7 +1395,7 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
         for (let i = 0; i < count; i++) {
             tasksToLaunch.push(launchTask(i));
         }
-        await Promise.all(tasksToLaunch);
+        return Promise.all(tasksToLaunch);
     };
 
     // Wrapper for Params Config page - merges with params state (backward compatible)

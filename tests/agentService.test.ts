@@ -133,5 +133,26 @@ describe('AgentService', () => {
 
             expect(state.phase).toBe('IDLE');
         });
+
+        it('should persist generated asset ids from structured tool results', async () => {
+            const machine = new AgentStateMachine({
+                ...createInitialAgentState(),
+                phase: 'EXECUTING'
+            });
+
+            await machine.processEvent({
+                type: 'ACTION_SUCCESS',
+                payload: {
+                    jobId: 'job-1',
+                    toolName: 'generate_image',
+                    status: 'success',
+                    artifactIds: ['asset-1', 'asset-2']
+                }
+            });
+
+            const state = machine.getState();
+            expect(state.phase).toBe('COMPLETED');
+            expect(state.context.generatedAssets).toEqual(['asset-1', 'asset-2']);
+        });
     });
 });
