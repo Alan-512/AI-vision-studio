@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { Image as ImageIcon, Video, LayoutGrid, Folder, Sparkles, Settings, Star, CheckSquare, MoveHorizontal, Languages, Trash2, Recycle, Download, RotateCcw, ArrowRight, Key, X } from 'lucide-react';
-import { AppMode, AspectRatio, GenerationParams, AssetItem, ImageResolution, VideoResolution, ImageModel, VideoModel, ImageStyle, Project, ChatMessage, BackgroundTask, SmartAsset, VideoDuration, VideoStyle, AgentAction, EditRegion, SearchPolicy, AssistantMode, SmartAssetRole, ThinkingLevel, AgentJob, AgentJobStatus, JobStep, JobArtifact, AgentToolResult, ToolCallRecord, SearchProgress } from './types';
+import { AppMode, AspectRatio, GenerationParams, AssetItem, ImageResolution, VideoResolution, ImageModel, VideoModel, ImageStyle, Project, ChatMessage, BackgroundTask, SmartAsset, VideoDuration, VideoStyle, AgentAction, EditRegion, SearchPolicy, AssistantMode, SmartAssetRole, ThinkingLevel, AgentJob, AgentJobStatus, JobStep, JobArtifact, AgentToolResult, ToolCallRecord } from './types';
 import { GenerationForm } from './components/GenerationForm';
 import { AssetCard } from './components/AssetCard';
 import { ProjectSidebar } from './components/ProjectSidebar';
@@ -13,6 +13,15 @@ import { CanvasEditor } from './components/CanvasEditor';
 import { CanvasView } from './components/CanvasView';
 import { generateImage, generateVideo, getUserApiKey, generateTitle } from './services/geminiService';
 import { compressImageForContext, normalizeImageUrlForChat } from './services/imageUtils';
+import {
+    SelectedReferenceRecord,
+    artifactToSmartAsset,
+    buildArtifactReferenceCandidates,
+    buildReferenceArtifacts,
+    buildSearchArtifacts,
+    extractSearchContextFromProgress,
+    mergeRuntimeArtifacts
+} from './services/agentRuntime';
 import {
     initDB, loadProjects, saveProject, saveAsset, loadAssets, updateAsset, updateProject,
     deleteProjectFromDB, softDeleteAssetInDB, restoreAssetInDB,
@@ -153,86 +162,6 @@ const buildGeneratedArtifact = (
     },
     ...overrides
 });
-
-type SelectedReferenceRecord = {
-    asset: SmartAsset;
-    sourceRole: 'user' | 'model';
-    messageTimestamp?: number;
-};
-
-const buildReferenceArtifacts = (references: SelectedReferenceRecord[]): JobArtifact[] =>
-    references.map(reference => ({
-        id: crypto.randomUUID(),
-        type: 'image',
-        origin: 'user_upload',
-        role: 'reference',
-        base64: reference.asset.data,
-        mimeType: reference.asset.mimeType,
-        createdAt: Date.now(),
-        relatedMessageTimestamp: reference.messageTimestamp,
-        metadata: {
-            sourceImageId: reference.asset.id,
-            sourceRole: reference.sourceRole,
-            runtimeKey: `reference:${reference.asset.id}`
-        }
-    }));
-
-const extractSearchContextFromProgress = (searchProgress?: SearchProgress | null): AgentJob['searchContext'] | undefined => {
-    if (!searchProgress || searchProgress.status !== 'complete') return undefined;
-
-    const facts = (searchProgress.results || [])
-        .filter(item => item.label || item.value)
-        .map(item => ({
-            item: item.label ? `${item.label}: ${item.value}` : item.value,
-            source: undefined
-        }));
-
-    return {
-        queries: searchProgress.queries || [],
-        facts,
-        sources: searchProgress.sources || []
-    };
-};
-
-const buildSearchArtifacts = (searchContext?: AgentJob['searchContext']): JobArtifact[] => {
-    if (!searchContext) return [];
-
-    const artifacts: JobArtifact[] = [];
-    if ((searchContext.facts && searchContext.facts.length > 0) || (searchContext.sources && searchContext.sources.length > 0)) {
-        artifacts.push({
-            id: crypto.randomUUID(),
-            type: 'json',
-            origin: 'search',
-            role: 'retrieved_context',
-            createdAt: Date.now(),
-            metadata: {
-                runtimeKey: `search:${(searchContext.queries || []).join('|')}`,
-                queries: searchContext.queries || [],
-                facts: searchContext.facts || [],
-                sources: searchContext.sources || []
-            }
-        });
-    }
-    return artifacts;
-};
-
-const mergeRuntimeArtifacts = (existing: JobArtifact[], additions: JobArtifact[]): JobArtifact[] => {
-    const seen = new Set(
-        existing
-            .map(artifact => artifact.metadata?.runtimeKey)
-            .filter((value): value is string => typeof value === 'string' && value.length > 0)
-    );
-
-    const uniqueAdditions = additions.filter(artifact => {
-        const runtimeKey = artifact.metadata?.runtimeKey;
-        if (typeof runtimeKey !== 'string' || runtimeKey.length === 0) return true;
-        if (seen.has(runtimeKey)) return false;
-        seen.add(runtimeKey);
-        return true;
-    });
-
-    return [...existing, ...uniqueAdditions];
-};
 
 type LocalReviewDecision = 'accept' | 'auto_revise' | 'requires_action';
 type BilingualText = { zh: string; en: string };
@@ -1162,25 +1091,6 @@ export function App() {
                 if (message.image) return [message.image];
                 return [];
             };
-            const artifactToSmartAsset = (artifact: JobArtifact): SmartAsset | null => {
-                if (artifact.base64 && artifact.mimeType) {
-                    return {
-                        id: artifact.metadata?.sourceImageId || artifact.id,
-                        mimeType: artifact.mimeType,
-                        data: artifact.base64
-                    };
-                }
-                if (artifact.url && artifact.url.startsWith('data:')) {
-                    const match = artifact.url.match(/^data:(.+);base64,(.+)$/);
-                    if (!match) return null;
-                    return {
-                        id: artifact.metadata?.sourceImageId || artifact.id,
-                        mimeType: match[1],
-                        data: match[2]
-                    };
-                }
-                return null;
-            };
             const pushSelectedReference = (record: SelectedReferenceRecord) => {
                 const exists = selectedReferences.some(existing =>
                     existing.asset.id === record.asset.id ||
@@ -1191,27 +1101,7 @@ export function App() {
                 }
             };
             const projectAgentJobs = await loadAgentJobsByProject(activeProjectId);
-            const artifactReferenceCandidates = [...projectAgentJobs]
-                .sort((a, b) => b.updatedAt - a.updatedAt)
-                .flatMap(job => job.artifacts.map(artifact => ({ artifact, job })))
-                .filter(({ artifact }) => artifact.role === 'reference' || artifact.origin === 'generated')
-                .map(({ artifact }) => {
-                    const asset = artifactToSmartAsset(artifact);
-                    if (!asset) return null;
-                    const candidateIds = new Set<string>();
-                    if (typeof artifact.id === 'string') candidateIds.add(artifact.id);
-                    if (typeof artifact.metadata?.runtimeKey === 'string') candidateIds.add(artifact.metadata.runtimeKey);
-                    if (typeof artifact.metadata?.sourceImageId === 'string') candidateIds.add(artifact.metadata.sourceImageId);
-                    return {
-                        candidateIds,
-                        record: {
-                            asset,
-                            sourceRole: artifact.origin === 'generated' ? 'model' as const : ((artifact.metadata?.sourceRole === 'model' ? 'model' : 'user') as const),
-                            messageTimestamp: artifact.relatedMessageTimestamp
-                        }
-                    };
-                })
-                .filter((candidate): candidate is { candidateIds: Set<string>; record: SelectedReferenceRecord } => candidate !== null);
+            const artifactReferenceCandidates = buildArtifactReferenceCandidates(projectAgentJobs);
 
             // Get all messages with images from chat history
             const messagesWithImages = chatHistory.filter(m => m.image || (m.images && m.images.length > 0));
