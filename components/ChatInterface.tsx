@@ -1,7 +1,7 @@
 
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { Send, User, Sparkles, ChevronDown, BrainCircuit, Zap, X, Box, Copy, Check, Plus, MonitorPlay, Film, Bot, Square, Crop, CheckCircle2, Globe, Brain, CircuitBoard, Wrench, Image as ImageIcon, CircleDashed, Terminal, RefreshCw, AlertCircle, Search, Upload } from 'lucide-react';
-import { ChatMessage, GenerationParams, ImageResolution, AppMode, ImageModel, VideoResolution, VideoModel, AspectRatio, SmartAsset, APP_LIMITS, AgentAction, TextModel, SearchProgress, ThinkingLevel } from '../types';
+import { ChatMessage, GenerationParams, ImageResolution, AppMode, ImageModel, VideoResolution, VideoModel, AspectRatio, SmartAsset, APP_LIMITS, AgentAction, TextModel, SearchProgress, ThinkingLevel, ToolCallRecord } from '../types';
 import { streamChatResponse } from '../services/geminiService';
 import { normalizeImageUrlForChat } from '../services/imageUtils';
 import { AgentStateMachine, AgentState, createInitialAgentState, PendingAction, createGenerateAction } from '../services/agentService';
@@ -325,6 +325,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
     prompt?: string;
   } | null>(null);
   const [toolCallExpanded, setToolCallExpanded] = useState(false);
+  const [dismissedActionCardIds, setDismissedActionCardIds] = useState<Record<string, boolean>>({});
+  const [applyingActionCardId, setApplyingActionCardId] = useState<string | null>(null);
 
   // NEW: Agent state machine for workflow management and retry
   const [agentState, setAgentState] = useState<AgentState>(createInitialAgentState());
@@ -435,6 +437,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
     setInput('');
     setShowSettings(false);
     setShowModelSelector(false);
+    setDismissedActionCardIds({});
+    setApplyingActionCardId(null);
     agentMachine.reset();
   }, [projectId, agentMachine]);
   // Smart auto-scroll logic
@@ -611,6 +615,64 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   };
   const handleKeyDown = (e: React.KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); } };
 
+  const resolveSuggestedPrompt = (toolCall: ToolCallRecord): string => {
+    const payload = toolCall.result?.requiresAction?.payload as Record<string, unknown> | undefined;
+    if (typeof payload?.revisedPrompt === 'string' && payload.revisedPrompt.trim()) return payload.revisedPrompt;
+    if (typeof toolCall.result?.metadata?.revisedPrompt === 'string' && String(toolCall.result.metadata.revisedPrompt).trim()) {
+      return String(toolCall.result.metadata.revisedPrompt);
+    }
+    if (typeof payload?.prompt === 'string' && payload.prompt.trim()) return payload.prompt;
+    if (typeof toolCall.args?.prompt === 'string' && toolCall.args.prompt.trim()) return toolCall.args.prompt;
+    return '';
+  };
+
+  const handleEditActionCard = (toolCall: ToolCallRecord) => {
+    const suggestedPrompt = resolveSuggestedPrompt(toolCall);
+    if (!suggestedPrompt) return;
+    setInput(suggestedPrompt);
+    inputRef.current?.focus();
+  };
+
+  const handleDismissActionCard = (toolCallId: string) => {
+    setDismissedActionCardIds(prev => ({ ...prev, [toolCallId]: true }));
+  };
+
+  const handleApplyActionCard = async (toolCall: ToolCallRecord) => {
+    if (toolCall.toolName !== 'generate_image') return;
+    const suggestedPrompt = resolveSuggestedPrompt(toolCall);
+    if (!suggestedPrompt) return;
+    setApplyingActionCardId(toolCall.id);
+    setDismissedActionCardIds(prev => ({ ...prev, [toolCall.id]: true }));
+    setHistory(prev => [
+      ...prev,
+      {
+        role: 'user',
+        isSystem: true,
+        content: `[SYSTEM_ACTION]: Applying suggested revision for the current image job.\nPrompt:\n${suggestedPrompt}`,
+        timestamp: Date.now()
+      }
+    ]);
+
+    try {
+      await handleToolCallWithRetry({
+        toolName: toolCall.toolName,
+        args: {
+          ...(toolCall.args || {}),
+          prompt: suggestedPrompt
+        }
+      });
+    } catch (error) {
+      console.error('[ChatInterface] Failed to apply action card', error);
+      setDismissedActionCardIds(prev => {
+        const next = { ...prev };
+        delete next[toolCall.id];
+        return next;
+      });
+    } finally {
+      setApplyingActionCardId(current => current === toolCall.id ? null : current);
+    }
+  };
+
   return (
     <div
       className="flex flex-col h-full bg-dark-panel relative min-h-0"
@@ -674,6 +736,11 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                   toolCallStatus={isLastAiMessage ? toolCallStatus : undefined}
                   toolCallExpanded={isLastAiMessage ? toolCallExpanded : undefined}
                   onToolCallToggle={isLastAiMessage ? () => setToolCallExpanded(!toolCallExpanded) : undefined}
+                  dismissedActionCardIds={dismissedActionCardIds}
+                  onApplyActionCard={handleApplyActionCard}
+                  onEditActionCard={handleEditActionCard}
+                  onDismissActionCard={handleDismissActionCard}
+                  isApplyingAction={applyingActionCardId === msg.toolCalls?.find(record => record.result?.status === 'requires_action')?.id}
                 />
               );
             })}
@@ -867,6 +934,11 @@ interface ChatBubbleProps {
   toolCallStatus?: { isActive: boolean; toolName: string; model?: string; prompt?: string } | null;
   toolCallExpanded?: boolean;
   onToolCallToggle?: () => void;
+  dismissedActionCardIds?: Record<string, boolean>;
+  onApplyActionCard?: (toolCall: ToolCallRecord) => void;
+  onEditActionCard?: (toolCall: ToolCallRecord) => void;
+  onDismissActionCard?: (toolCallId: string) => void;
+  isApplyingAction?: boolean;
 }
 
 const ChatBubble: React.FC<ChatBubbleProps> = ({
@@ -877,7 +949,12 @@ const ChatBubble: React.FC<ChatBubbleProps> = ({
   onSearchToggle,
   toolCallStatus,
   toolCallExpanded,
-  onToolCallToggle
+  onToolCallToggle,
+  dismissedActionCardIds,
+  onApplyActionCard,
+  onEditActionCard,
+  onDismissActionCard,
+  isApplyingAction
 }) => {
   const { t, language } = useLanguage();
   const isUser = message.role === 'user';
@@ -908,6 +985,11 @@ const ChatBubble: React.FC<ChatBubbleProps> = ({
     setIsCopied(true);
     setTimeout(() => setIsCopied(false), 2000);
   };
+
+  const actionRequiredToolCalls = (message.toolCalls || []).filter(record => {
+    if (dismissedActionCardIds?.[record.id]) return false;
+    return record.result?.status === 'requires_action' && !!record.result.requiresAction;
+  });
 
   const MarkdownComponents = {
     p: ({ children }: any) => <p className="mb-2 last:mb-0 break-words whitespace-pre-wrap">{children}</p>,
@@ -1116,6 +1198,95 @@ const ChatBubble: React.FC<ChatBubbleProps> = ({
                 </div>
               </div>
             )}
+          </div>
+        )}
+
+        {!isUser && !isSystem && actionRequiredToolCalls.length > 0 && (
+          <div className="w-full max-w-md space-y-2">
+            {actionRequiredToolCalls.map((record) => {
+              const payload = record.result?.requiresAction?.payload as Record<string, unknown> | undefined;
+              const suggestedPrompt =
+                (typeof payload?.revisedPrompt === 'string' && payload.revisedPrompt) ||
+                (typeof record.result?.metadata?.revisedPrompt === 'string' && String(record.result.metadata.revisedPrompt)) ||
+                (typeof payload?.prompt === 'string' && payload.prompt) ||
+                (typeof record.args?.prompt === 'string' && record.args.prompt) ||
+                '';
+              const warnings = Array.isArray(payload?.warnings)
+                ? payload.warnings.filter((warning): warning is string => typeof warning === 'string')
+                : [];
+              const canApplyRevision = record.toolName === 'generate_image' && !!suggestedPrompt;
+
+              return (
+                <div key={record.id} className="bg-gradient-to-r from-amber-500/10 to-orange-500/10 border border-amber-500/30 rounded-xl p-3 animate-in fade-in">
+                  <div className="flex items-start gap-3">
+                    <div className="w-8 h-8 rounded-lg bg-amber-500/20 flex items-center justify-center shrink-0">
+                      <AlertCircle size={16} className="text-amber-400" />
+                    </div>
+                    <div className="flex-1 min-w-0 space-y-2">
+                      <div>
+                        <div className="text-xs font-semibold text-amber-300">
+                          {language === 'zh' ? '需要你的确认' : 'Action Required'}
+                        </div>
+                        <div className="text-xs text-gray-300 mt-1 whitespace-pre-wrap break-words">
+                          {record.result?.requiresAction?.message || record.result?.error || (language === 'zh' ? '当前任务需要你决定下一步。' : 'This job needs your decision before continuing.')}
+                        </div>
+                      </div>
+
+                      {suggestedPrompt && (
+                        <div className="rounded-lg bg-black/20 border border-white/5 p-2">
+                          <div className="text-[10px] uppercase tracking-wide text-gray-500 mb-1">
+                            {language === 'zh' ? '建议提示词' : 'Suggested Prompt'}
+                          </div>
+                          <div className="text-xs text-gray-300 whitespace-pre-wrap break-words max-h-24 overflow-y-auto custom-scrollbar">
+                            {suggestedPrompt}
+                          </div>
+                        </div>
+                      )}
+
+                      {warnings.length > 0 && (
+                        <div className="space-y-1">
+                          {warnings.map((warning, index) => (
+                            <div key={index} className="text-[11px] text-amber-100/80">
+                              • {warning}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      <div className="flex flex-wrap gap-2 pt-1">
+                        {canApplyRevision && onApplyActionCard && (
+                          <button
+                            onClick={() => onApplyActionCard(record)}
+                            disabled={!!isApplyingAction}
+                            className="px-3 py-1.5 rounded-lg bg-amber-500 text-black text-xs font-semibold hover:bg-amber-400 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                          >
+                            {isApplyingAction
+                              ? (language === 'zh' ? '处理中...' : 'Applying...')
+                              : (language === 'zh' ? '继续修订' : 'Apply Revision')}
+                          </button>
+                        )}
+                        {canApplyRevision && onEditActionCard && (
+                          <button
+                            onClick={() => onEditActionCard(record)}
+                            className="px-3 py-1.5 rounded-lg border border-amber-500/30 text-amber-200 text-xs hover:bg-amber-500/10 transition-colors"
+                          >
+                            {language === 'zh' ? '编辑提示词' : 'Edit Prompt'}
+                          </button>
+                        )}
+                        {onDismissActionCard && (
+                          <button
+                            onClick={() => onDismissActionCard(record.id)}
+                            className="px-3 py-1.5 rounded-lg border border-white/10 text-gray-300 text-xs hover:bg-white/5 transition-colors"
+                          >
+                            {language === 'zh' ? '忽略' : 'Dismiss'}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         )}
 
