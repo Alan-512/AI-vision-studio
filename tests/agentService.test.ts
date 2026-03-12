@@ -173,5 +173,31 @@ describe('AgentService', () => {
             expect(state.retryCount).toBe(0);
             expect(state.error).toContain('Cancelled by user');
         });
+
+        it('should pause in awaiting confirmation when tool result requires user action', async () => {
+            const machine = new AgentStateMachine({
+                ...createInitialAgentState(),
+                phase: 'EXECUTING'
+            });
+
+            await machine.processEvent({
+                type: 'ACTION_SUCCESS',
+                payload: {
+                    jobId: 'job-2',
+                    toolName: 'generate_image',
+                    status: 'requires_action',
+                    artifactIds: ['asset-preview'],
+                    requiresAction: {
+                        type: 'review_output',
+                        message: 'Need user decision'
+                    }
+                }
+            });
+
+            const state = machine.getState();
+            expect(state.phase).toBe('AWAITING_CONFIRMATION');
+            expect(state.pendingAction).toBeUndefined();
+            expect(state.context.generatedAssets).toEqual(['asset-preview']);
+        });
     });
 });

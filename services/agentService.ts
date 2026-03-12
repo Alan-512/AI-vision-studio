@@ -269,6 +269,15 @@ export class AgentStateMachine {
             });
         }
 
+        if (result?.status === 'requires_action') {
+            this.updateState({
+                pendingAction: undefined,
+                retryCount: 0
+            });
+            this.transitionTo('AWAITING_CONFIRMATION');
+            return this.state;
+        }
+
         // Check if more steps in plan
         const { planSteps, currentStepIndex } = this.state.context;
         if (planSteps && currentStepIndex < planSteps.length - 1) {
