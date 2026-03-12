@@ -1,16 +1,49 @@
+<div align="center">
+
 # AI Vision Studio
 
-一个浏览器优先的 AI 图像与视频创作工作室，基于 React、Vite、Google Gemini 和 Veo 构建。它把参数化的 Studio 工作区和对话式 AI 助手结合在一起，支持多轮生成、参考图复用、本地项目历史，以及多步骤图像任务流。
+[English](README.md) | **[中文](README_zh.md)**
 
-## 核心能力
+一个浏览器优先的 AI 图像与视频创作工作室，基于 **Google Gemini** 和 **Veo** 构建。  
+它把参数化的 Studio 工作区和对话式 AI 助手结合在一起，支持多轮生成、评审、修订和继续执行同一个图像任务。
 
-- 基于 Gemini 图像模型的图片生成与编辑
-- 基于 Veo 的视频生成与续写
-- 对话式图像 agent runtime，支持 `review -> revise -> requires_action`
-- 面向参考图和工件的图片任务流
-- 本地优先的记忆与上下文管理
+</div>
+
+## 项目简介
+
+AI Vision Studio 适合既想要手动控制参数、又希望获得 agent 辅助创作体验的用户。你可以在 Studio 面板里精细设置参数，也可以直接在聊天中描述需求，让助手去编排图片生成、参考图复用、联网检索、本地记忆和多步骤修订流程。
+
+这个仓库默认是前端优先、BYOK 的形态：API Key 保留在浏览器本地，项目历史保留在本地，不依赖专门的应用后端。如果部署环境需要代理能力，仓库中也内置了 `/api/*` 的 Cloudflare Pages Function。
+
+## 功能特性
+
+### 高级图像生成
+
+- 基于 Gemini 的图像生成与编辑流程
+- 支持宽高比、质量、负向提示词、参考图等控制项
+- 支持多轮改图、参考图复用和工件历史追踪
+- 当产品事实或外部信息重要时，可结合搜索辅助生成
+- 提供基于蒙版的局部编辑工作流
+
+### 视频创作
+
+- 基于 Veo 的视频生成
+- 视频续写工作流
+- 支持图片引导和参考驱动的视频任务
+
+### Agent 助手
+
+- 对话优先的图像助手与工具调用
+- 图像任务 runtime，支持 `review -> revise -> requires_action`
+- 当任务需要用户介入时，可通过 action card 继续当前任务
+- 以 artifact 为核心的上下文管理，处理参考图、搜索上下文和生成结果
+- 本地优先的记忆与滚动上下文管理，适合更长的创作会话
+
+### 隐私与本地持久化
+
 - BYOK 模式，API Key 仅保存在浏览器本地
-- 可选的 Cloudflare Pages Function `/api/*` 代理
+- 项目历史和素材默认本地持久化
+- 默认使用方式不依赖专门的应用后端
 
 ## 技术栈
 
@@ -21,21 +54,21 @@
 - IndexedDB / 本地持久化服务
 - Vitest + jsdom
 
-## 本地启动
+## 快速开始
 
 ### 环境要求
 
 - Node.js 18+
 - Google AI Studio API Key
 
-### 运行方式
+### 安装与启动
 
 ```bash
 npm install
 npm run dev
 ```
 
-打开 `http://localhost:5173`，然后在设置中填入 API Key。
+然后打开 `http://localhost:5173`，在应用设置中填入 API Key。
 
 ## 校验命令
 
@@ -48,20 +81,20 @@ npm run build
 
 ### 静态前端部署
 
-项目可以直接作为静态前端部署，这也是默认方式。
+大多数情况下，这个项目可以直接作为静态前端部署。
 
 - 构建命令：`npm run build`
 - 输出目录：`dist`
 
 ### Cloudflare Pages + 可选代理
 
-仓库内置了 Cloudflare Pages Function，文件在 [functions/api/[[catchall]].ts](functions/api/[[catchall]].ts)，可将 `/api/*` 请求代理到 Gemini 接口。
+仓库内置了 Cloudflare Pages Function，文件位于 [functions/api/[[catchall]].ts](functions/api/[[catchall]].ts)，可将 `/api/*` 请求代理到 Gemini 接口。
 
 适合以下场景：
 
-- 需要前端请求走边缘代理
-- 直连不稳定，希望增加一层代理
-- 仍然保持前端为主的部署方式
+- 希望浏览器请求先走边缘代理
+- 直连不稳定，希望增加一层代理路径
+- 仍然保持前端优先的部署模型
 
 项目也支持可选的 Deno 代理配置，用于更长时间的请求。
 
@@ -71,15 +104,15 @@ npm run build
 components/   React 界面组件
 contexts/     共享上下文
 functions/    Cloudflare Pages Functions
-openspec/     架构变更与规范
+openspec/     架构变更与实施规范
 services/     Gemini、agent、memory、storage、runtime 逻辑
 tests/        Vitest 测试
 docs/         架构文档
 ```
 
-## 架构文档
+## 文档
 
-主要文档已整理到 [docs/architecture](docs/architecture)：
+长文档架构说明位于 [docs/architecture](docs/architecture)：
 
 - `agent-architecture-upgrade.md`
 - `image-generation-architecture.md`
@@ -87,7 +120,7 @@ docs/         架构文档
 - `mask-editing-workflow.md`
 - `playbook-agent-mode.md`
 
-架构变更提案和实施记录在 [openspec/](openspec/)。
+结构化的变更提案和实施记录位于 [openspec/](openspec/)。
 
 ## 许可证
 
