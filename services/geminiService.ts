@@ -3,7 +3,8 @@ import { GoogleGenAI, Part, Content, FunctionDeclaration, Type } from "@google/g
 import { ChatMessage, AppMode, SmartAsset, GenerationParams, ImageModel, AgentAction, AssetItem, AspectRatio, ImageResolution, TextModel, AssistantMode, SmartAssetRole, SearchProgress, ThinkingLevel } from "../types";
 import { createTrackedBlobUrl } from "./storageService";
 import { buildSystemInstruction, getPromptOptimizerContent, getRoleInstruction as getSkillRoleInstruction } from "./skills/promptRouter";
-import { getCombinedMemorySnippet } from "./memoryService";
+import { getAlwaysOnMemorySnippet } from "./memoryService";
+import { compactConversationContext, serializeMessagesForSummary } from "./contextRuntime";
 
 // Key management
 export const saveUserApiKey = (key: string) => localStorage.setItem('user_gemini_api_key', key);
@@ -244,10 +245,123 @@ const memorySearchTool: FunctionDeclaration = {
     parameters: {
         type: Type.OBJECT,
         properties: {
-            query: { type: Type.STRING, description: 'Natural language search query.' }
+            query: { type: Type.STRING, description: 'Natural language search query.' },
+            scope: { type: Type.STRING, description: 'Search scope.', enum: ['global', 'project', 'both'] }
         },
         required: ['query']
     }
+};
+
+const MEMORY_TOOL_NAME = 'memory_search';
+const INTERNAL_TOOL_NAMES = new Set<string>([MEMORY_TOOL_NAME, 'update_memory']);
+const SUPPORTED_TOOL_NAMES = new Set<string>(['generate_image', 'update_memory', MEMORY_TOOL_NAME]);
+const ROLLING_SUMMARY_RECENT_WINDOW = 8;
+const MAX_INTERNAL_TOOL_LOOPS = 4;
+
+export const normalizeSupportedToolName = (toolName?: string): string | null => {
+    if (!toolName) return null;
+    if (toolName === 'read_memory') return MEMORY_TOOL_NAME;
+    return SUPPORTED_TOOL_NAMES.has(toolName) ? toolName : null;
+};
+
+const buildAssistantFunctionCallContent = (toolName: string, args: Record<string, any>): Content => ({
+    role: 'model',
+    parts: [{ functionCall: { name: toolName, args } } as any]
+});
+
+const buildFunctionResponseContent = (toolName: string, response: Record<string, any>): Content => ({
+    role: 'user',
+    parts: [{ functionResponse: { name: toolName, response } } as any]
+});
+
+const summarizeConversationIncrementally = async (
+    existingSummary: string,
+    historySlice: ChatMessage[]
+): Promise<string> => {
+    if (historySlice.length === 0) return existingSummary.trim();
+
+    const serializedMessages = serializeMessagesForSummary(historySlice);
+    const systemInstruction = `You maintain a rolling conversation summary for an AI creative workspace.
+Update the summary so it preserves stable user intent, active references, constraints, project decisions, and unfinished tasks.
+Keep it concise and factual. Prefer bullet-style prose without markdown bullets.
+Do not repeat low-value chatter or transient UI/system noise.`;
+
+    const prompt = `Existing summary:
+${existingSummary || '(none)'}
+
+New conversation span:
+${serializedMessages}
+
+Return the updated rolling summary only.`;
+
+    return generateText(systemInstruction, prompt, false, TextModel.FLASH);
+};
+
+const executeInternalToolCall = async (
+    toolName: string,
+    args: Record<string, any>,
+    projectId?: string | null
+): Promise<{ response: Record<string, any>; fallbackText?: string }> => {
+    if (toolName === 'update_memory') {
+        const { section, key, value, scope } = args;
+        if (!section || !value) {
+            return {
+                response: { ok: false, error: 'Missing section or value' },
+                fallbackText: ''
+            };
+        }
+
+        const { appendDailyLog, applyPatchToMemory } = await import('./memoryService');
+        const targetScope = (scope === 'global' || scope === 'project') ? scope : 'project';
+        const targetId = targetScope === 'global' ? 'default' : (projectId || 'default');
+
+        const logId = await appendDailyLog({
+            content: `${section}: ${key || ''} ${value}`.trim(),
+            confidence: 1.0,
+            projectId: projectId || undefined,
+            scopeHint: targetScope as any,
+            metadata: { source: 'ai_tool_call' }
+        });
+
+        const doc = await applyPatchToMemory(targetScope, targetId, {
+            ops: [{
+                op: 'upsert',
+                section,
+                key: key || section.toLowerCase().replace(/\s+/g, '_'),
+                value
+            }],
+            confidence: 1.0,
+            reason: 'Real-time update from AI tool call'
+        });
+
+        return {
+            response: {
+                ok: true,
+                scope: targetScope,
+                targetId,
+                docVersion: doc.version,
+                logId
+            },
+            fallbackText: `✅ 好的，我记住了：${value}`
+        };
+    }
+
+    if (toolName === MEMORY_TOOL_NAME) {
+        const { query, scope } = args;
+        const { memorySearch } = await import('./memoryService');
+        const searchResult = await memorySearch(String(query || ''), projectId, { scope });
+        return {
+            response: {
+                ok: true,
+                query: String(query || ''),
+                scope: scope || 'both',
+                result: searchResult
+            },
+            fallbackText: searchResult
+        };
+    }
+
+    return { response: { ok: false, error: `Unsupported internal tool: ${toolName}` } };
 };
 
 
@@ -405,10 +519,13 @@ export const streamChatResponse = async (
     const isImageMode = mode === AppMode.IMAGE;
     // Get language from localStorage for search progress UI
     const language = localStorage.getItem('app_language') || 'zh';
+    const compactedContext = compactConversationContext(history, contextSummary, _summaryCursor, ROLLING_SUMMARY_RECENT_WINDOW);
+    const effectiveSummary = compactedContext.effectiveSummary;
+    const activeHistory = compactedContext.recentHistory;
 
     // HYBRID SYSTEM INSTRUCTION with Context Summary
-    const contextPart = contextSummary
-        ? `\n[CONVERSATION CONTEXT]\nHere is a summary of our earlier conversation: \n${contextSummary} \n\nUse this context to maintain consistency and understand references to previous work.\n`
+    const contextPart = effectiveSummary
+        ? `\n[CONVERSATION CONTEXT]\nHere is a summary of our earlier conversation: \n${effectiveSummary} \n\nUse this context to maintain consistency and understand references to previous work.\n`
         : '';
 
     // LLM_ONLY mode: LLM searches, image model does NOT use grounding
@@ -456,7 +573,7 @@ Rules:
 - Keep your response concise (under 400 words for narrative, 5-8 facts max).
 `;
 
-        const searchContents = convertHistoryToNativeFormat(history, realModelName);
+        const searchContents = convertHistoryToNativeFormat(activeHistory, realModelName);
         if (signal.aborted) throw new Error('Cancelled');
 
         // NOTE: Don't notify UI immediately - only show search UI when actual groundingMetadata is detected
@@ -619,16 +736,16 @@ Rules:
         mode,
         userMessage: _newMessage, // For keyword-based skill triggering
         params: _params,
-        contextSummary,
+        contextSummary: effectiveSummary,
         searchFacts: searchFactsStrings,
         useSearch,
         useGrounding: _params?.useGrounding
     });
 
-    // Get memory snippet for long-term memory injection
+    // Get lightweight always-on memory snippet for long-term guidance
     let memorySnippet = '';
     try {
-        memorySnippet = await getCombinedMemorySnippet(projectId ?? null);
+        memorySnippet = await getAlwaysOnMemorySnippet(projectId ?? null);
     } catch (e) {
         console.warn('[Memory] Failed to get memory snippet:', e);
     }
@@ -652,7 +769,7 @@ Rules:
         systemInstruction += `\n\n${memorySnippet}`;
     }
 
-    const contents = convertHistoryToNativeFormat(history, realModelName);
+    const contents = convertHistoryToNativeFormat(activeHistory, realModelName);
 
     const config: any = {
         systemInstruction: systemInstruction,
@@ -679,6 +796,7 @@ Rules:
     const sourcesList: { title: string; uri: string }[] = [];
     const collectedSignatures: Array<{ partIndex: number; signature: string }> = [];
     const pendingToolCalls: Array<{ toolName: string; args: any }> = []; // Collect tool calls, execute after stream
+    const assistantTurnParts: any[] = [];
 
     console.log('[Stream] Starting stream loop...');
     let chunkCount = 0;
@@ -699,6 +817,7 @@ Rules:
                     } else {
                         // Regular answer text - accumulate and send to main chunk callback
                         fullText += part.text;
+                        assistantTurnParts.push({ text: part.text });
                         onChunk(fullText);
                     }
                 }
@@ -710,11 +829,12 @@ Rules:
             for (const part of chunk.candidates[0].content.parts) {
                 // Collect function call but don't execute yet - wait for stream to complete
                 if (part.functionCall) {
-                    console.log('[Stream] FunctionCall detected (deferred):', part.functionCall.name);
+                    const normalizedToolName = normalizeSupportedToolName(part.functionCall.name);
+                    console.log('[Stream] FunctionCall detected (deferred):', part.functionCall.name, '→', normalizedToolName);
 
-                    // We handle generate_image, update_memory, and read_memory
-                    if (part.functionCall.name === 'generate_image' || part.functionCall.name === 'update_memory' || part.functionCall.name === 'read_memory') {
-                        pendingToolCalls.push({ toolName: part.functionCall.name, args: part.functionCall.args });
+                    if (normalizedToolName) {
+                        assistantTurnParts.push({ functionCall: { name: normalizedToolName, args: part.functionCall.args } });
+                        pendingToolCalls.push({ toolName: normalizedToolName, args: part.functionCall.args });
                     }
                 }
             }
@@ -772,109 +892,115 @@ Rules:
         onThoughtSignatures(collectedSignatures);
     }
 
-    // DEFERRED TOOL CALL: Execute after stream completes so AI response is fully shown
-    // FIX [SUP-005]: Check abort signal before executing deferred tool call
-    if (pendingToolCalls.length > 0 && onToolCall && !signal?.aborted) {
+    if (pendingToolCalls.length > 0 && !signal?.aborted) {
         console.log(`[Stream] Executing ${pendingToolCalls.length} deferred tool calls`);
+        const externalToolCalls: Array<{ toolName: string; args: any }> = [];
+        const queuedToolCalls = [...pendingToolCalls];
+        let workingContents: Content[] = assistantTurnParts.length > 0
+            ? [...contents, { role: 'model', parts: assistantTurnParts } as Content]
+            : [...contents];
+        let internalLoopCount = 0;
 
-        for (const pendingToolCall of pendingToolCalls) {
-            // FIX: Handle both direct args and args wrapped in { parameters: {...} }
-            // App.tsx unwraps parameters, so we need to inject into the correct location
+        while (queuedToolCalls.length > 0 && !signal.aborted) {
+            const pendingToolCall = queuedToolCalls.shift()!;
             const rawArgs = pendingToolCall.args && typeof pendingToolCall.args === 'object'
                 ? pendingToolCall.args as Record<string, any>
                 : {};
-
-            // Check if args are wrapped in 'parameters' (some models do this)
             const hasParametersWrapper = 'parameters' in rawArgs && typeof rawArgs.parameters === 'object';
             const targetArgs = hasParametersWrapper ? rawArgs.parameters : rawArgs;
-
-            // Get base prompt from either location
             const existingPrompt = targetArgs.prompt;
             const basePrompt = typeof existingPrompt === 'string'
                 ? existingPrompt
                 : (searchPromptDraft || _newMessage);
 
-            // Inject prompt and useGrounding into the correct location
             if (searchFacts.length > 0) {
                 targetArgs.prompt = buildPromptWithFacts(basePrompt, searchFacts);
             } else if (basePrompt && !existingPrompt) {
                 targetArgs.prompt = basePrompt;
             }
 
-            // LLM_ONLY mode: image model does NOT use grounding
             targetArgs.useGrounding = false;
+            const adjustedArgs = hasParametersWrapper ? { ...rawArgs, parameters: targetArgs } : targetArgs;
 
-            // Return the properly structured args (App.tsx will unwrap if needed)
-            const adjustedArgs = hasParametersWrapper
-                ? { ...rawArgs, parameters: targetArgs }
-                : targetArgs;
+            if (!INTERNAL_TOOL_NAMES.has(pendingToolCall.toolName)) {
+                externalToolCalls.push({ toolName: pendingToolCall.toolName, args: adjustedArgs });
+                continue;
+            }
 
-            // If tool is update_memory, we execute it directly here asynchronously
-            // V2.2.3 FIX: Write to BOTH daily log AND structured memory doc immediately.
-            // Previously only appendDailyLog was called, meaning preferences were invisible
-            // in Memory Management until the next-day consolidation.
-            if (pendingToolCall.toolName === 'update_memory') {
-                const { section, key, value, scope } = targetArgs;
-                if (section && value) {
-                    import('./memoryService').then(({ appendDailyLog, applyPatchToMemory }) => {
-                        // 1. Append to daily log (for consolidation history)
-                        appendDailyLog({
-                            content: `${section}: ${key || ''} ${value}`,
-                            confidence: 1.0,
-                            projectId: projectId || undefined,
-                            scopeHint: scope as any,
-                            metadata: { source: 'ai_tool_call' }
-                        }).then(logId => {
-                            console.log(`[Memory] AI logged potential memory to Daily Log: ${logId}`);
-                        }).catch(e => {
-                            console.error('[Memory] AI failed to log memory:', e);
-                        });
+            if (internalLoopCount >= MAX_INTERNAL_TOOL_LOOPS) {
+                console.warn('[Stream] Reached max internal tool loops, stopping follow-up tool execution');
+                break;
+            }
 
-                        // 2. V2.2.3: IMMEDIATE write-back to structured memory document
-                        // This makes the preference visible in Memory Management instantly.
-                        const targetScope = (scope === 'global' || scope === 'project') ? scope : 'project';
-                        const targetId = targetScope === 'global' ? 'default' : (projectId || 'default');
-                        applyPatchToMemory(targetScope, targetId, {
-                            ops: [{
-                                op: 'upsert',
-                                section: section,
-                                key: key || section.toLowerCase().replace(/\s+/g, '_'),
-                                value: value
-                            }],
-                            confidence: 1.0,
-                            reason: 'Real-time update from AI tool call'
-                        }).then(doc => {
-                            console.log(`[Memory] ✅ Immediately wrote to ${targetScope} memory doc (v${doc.version})`);
-                        }).catch(e => {
-                            console.error('[Memory] Failed to write to memory doc:', e);
-                        });
-                    });
-                    // V2.2 FIX: If the model only emitted a tool call with no text, show a confirmation
-                    if (!fullText.trim()) {
-                        fullText = `✅ 好的，我记住了：${value}`;
-                        onChunk(fullText);
+            internalLoopCount += 1;
+            try {
+                const { response, fallbackText } = await executeInternalToolCall(pendingToolCall.toolName, targetArgs, projectId);
+                workingContents = [
+                    ...workingContents,
+                    buildAssistantFunctionCallContent(pendingToolCall.toolName, targetArgs),
+                    buildFunctionResponseContent(pendingToolCall.toolName, response)
+                ];
+
+                const followUpResponse = await ai.models.generateContent({
+                    model: realModelName,
+                    contents: workingContents,
+                    config: { ...config, abortSignal: signal }
+                });
+                const followUpParts = (followUpResponse as any).candidates?.[0]?.content?.parts || [];
+                if (followUpParts.length > 0) {
+                    workingContents = [...workingContents, { role: 'model', parts: followUpParts } as Content];
+                }
+
+                let followUpText = '';
+                for (const part of followUpParts) {
+                    if (part.text) {
+                        followUpText += part.text;
+                    }
+                    if (part.functionCall) {
+                        const nextToolName = normalizeSupportedToolName(part.functionCall.name);
+                        if (nextToolName) {
+                            queuedToolCalls.push({ toolName: nextToolName, args: part.functionCall.args });
+                        }
                     }
                 }
-            } else if (pendingToolCall.toolName === 'memory_search') {
-                // memory_search: perform semantic-like keyword search through logs and docs
-                const { query } = targetArgs;
-                import('./memoryService').then(async ({ memorySearch }) => {
-                    try {
-                        const searchResult = await memorySearch(query, projectId);
-                        console.log(`[Memory] memory_search result for "${query}":`, searchResult);
-                        // V2.2 FIX: If no text was generated, show the search result to the user
-                        if (!fullText.trim() && searchResult) {
-                            fullText = searchResult;
-                            onChunk(fullText);
-                        }
-                    } catch (e) {
-                        console.error('[Memory] memory_search failed:', e);
-                    }
-                });
-            } else {
-                // Forward other tools (like generate_image) to UI
-                onToolCall({ toolName: pendingToolCall.toolName, args: adjustedArgs });
+
+                if (followUpText.trim()) {
+                    fullText = fullText.trim().length > 0 ? `${fullText}\n${followUpText}` : followUpText;
+                    onChunk(fullText);
+                } else if (!fullText.trim() && fallbackText) {
+                    fullText = fallbackText;
+                    onChunk(fullText);
+                }
+            } catch (error) {
+                console.error(`[Stream] Internal tool execution failed for ${pendingToolCall.toolName}:`, error);
             }
+        }
+
+        if (externalToolCalls.length > 0 && onToolCall && !signal.aborted) {
+            for (const externalToolCall of externalToolCalls) {
+                onToolCall({ toolName: externalToolCall.toolName, args: externalToolCall.args });
+            }
+        }
+    }
+
+    if (_onUpdateContext && compactedContext.nextSummaryRange && !signal.aborted) {
+        try {
+            const historyForSummary = fullText.trim()
+                ? [
+                    ...history,
+                    { role: 'model', content: fullText, timestamp: Date.now() } as ChatMessage
+                ]
+                : history;
+            const summarySourceSlice = historyForSummary.slice(
+                compactedContext.nextSummaryRange.from,
+                Math.min(compactedContext.nextSummaryRange.to, historyForSummary.length)
+            );
+            if (summarySourceSlice.length > 0) {
+                const nextSummary = await summarizeConversationIncrementally(effectiveSummary, summarySourceSlice);
+                _onUpdateContext(nextSummary, compactedContext.nextSummaryRange.to);
+            }
+        } catch (error) {
+            console.warn('[Context] Failed to update rolling summary:', error);
         }
     }
 };

@@ -31,7 +31,10 @@ import { GenerationParams, ImageStyle } from '../types';
 
 // Constants
 const INJECTION_MAX_CHARS = 1600;
+const ALWAYS_ON_MEMORY_MAX_CHARS = 720;
 const GLOBAL_DEFAULT_TARGET = 'default';
+
+export type MemorySearchScope = 'global' | 'project' | 'both';
 
 // Sensitive patterns that should never be stored - optimized to avoid false positives on instructions
 const SENSITIVE_PATTERNS = [
@@ -327,7 +330,41 @@ function formatGlobalSnippet(sections: ReturnType<typeof parseMemoryMarkdown>, m
   }
 
   // Topics index: tell AI what's available for on-demand loading
-  lines.push('(Use read_memory tool to load full details for visual_prefs, gen_defaults, or guardrails.)');
+  lines.push('(Use memory_search to load more detail about visual preferences, generation defaults, or guardrails.)');
+
+  return truncateSnippet(lines, maxChars);
+}
+
+function formatAlwaysOnGlobalSnippet(sections: ReturnType<typeof parseMemoryMarkdown>, maxChars: number): string {
+  const lines: string[] = ['[CREATIVE MEMORY]'];
+
+  const guardrails = sections['Guardrails'] || [];
+  if (guardrails.length > 0) {
+    lines.push('MUST:');
+    for (const item of guardrails.slice(0, 4)) {
+      if (item.value) lines.push(`- ${item.value}`);
+    }
+  }
+
+  const profile = sections['Creative Profile'] || sections['User Profile'] || [];
+  const profileEntries = profile.filter(item => item.key && item.value).slice(0, 3);
+  if (profileEntries.length > 0) {
+    lines.push('Profile:');
+    for (const item of profileEntries) {
+      lines.push(`- ${item.key}: ${item.value}`);
+    }
+  }
+
+  const visualPrefs = sections['Visual Preferences'] || sections['Stable Preferences'] || [];
+  const genDefaults = sections['Generation Defaults'] || [];
+  const allPrefs = [...visualPrefs, ...genDefaults].filter(item => item.key && item.value).slice(0, 4);
+  if (allPrefs.length > 0) {
+    lines.push('Defaults:');
+    for (const item of allPrefs) {
+      const sentence = PREF_SENTENCE_MAP[item.key!];
+      lines.push(sentence ? `- ${sentence(item.value)}` : `- ${item.key}: ${item.value}`);
+    }
+  }
 
   return truncateSnippet(lines, maxChars);
 }
@@ -371,6 +408,26 @@ function formatProjectSnippet(sections: ReturnType<typeof parseMemoryMarkdown>, 
   return truncateSnippet(lines, maxChars);
 }
 
+function formatAlwaysOnProjectSnippet(sections: ReturnType<typeof parseMemoryMarkdown>, maxChars: number): string {
+  const lines: string[] = ['[PROJECT MEMORY]'];
+  const styleCard = sections['Style Card'] || [];
+  const recentStyleItems = styleCard.filter(item => item.key && item.value).slice(0, 4);
+  for (const item of recentStyleItems) {
+    lines.push(`- project.${item.key}: ${item.value}`);
+  }
+
+  const decisions = sections['Project Decisions'] || [];
+  const recentDecision = decisions.filter(item => item.value).slice(-1);
+  recentDecision.forEach(item => {
+    if (item.value) {
+      const text = item.value.length > 100 ? `${item.value.slice(0, 100)}...` : item.value;
+      lines.push(`- current.direction: ${text}`);
+    }
+  });
+
+  return truncateSnippet(lines, maxChars);
+}
+
 /** Shared truncation logic */
 function truncateSnippet(lines: string[], maxChars: number): string {
   let result = lines.join('\n');
@@ -405,6 +462,31 @@ export const getCombinedMemorySnippet = async (
     const projectSnippet = await getMemorySnippet('project', projectId, Math.floor(maxChars / 2));
     if (projectSnippet) {
       snippets.push(projectSnippet);
+    }
+  }
+
+  return snippets.join('\n\n');
+};
+
+export const getAlwaysOnMemorySnippet = async (
+  projectId: string | null,
+  maxChars = ALWAYS_ON_MEMORY_MAX_CHARS
+): Promise<string> => {
+  const snippets: string[] = [];
+
+  const globalDoc = await getMemoryDoc('global', GLOBAL_DEFAULT_TARGET);
+  if (globalDoc?.content) {
+    const globalSections = parseMemoryMarkdown(globalDoc.content);
+    const globalSnippet = formatAlwaysOnGlobalSnippet(globalSections, Math.floor(maxChars * 0.65));
+    if (globalSnippet) snippets.push(globalSnippet);
+  }
+
+  if (projectId) {
+    const projectDoc = await getMemoryDoc('project', projectId);
+    if (projectDoc?.content) {
+      const projectSections = parseMemoryMarkdown(projectDoc.content);
+      const projectSnippet = formatAlwaysOnProjectSnippet(projectSections, Math.floor(maxChars * 0.35));
+      if (projectSnippet) snippets.push(projectSnippet);
     }
   }
 
@@ -593,8 +675,10 @@ export const recordUserPreference = async (
 export const memorySearch = async (
   query: string,
   projectId?: string | null,
-  limit = 5
+  options: { limit?: number; scope?: MemorySearchScope } = {}
 ): Promise<string> => {
+  const limit = options.limit ?? 5;
+  const scope = options.scope ?? 'both';
   const allResults: { score: number; text: string; source: string; timestamp?: number }[] = [];
   const searchTerms = query.toLowerCase().split(/\s+/).filter(t => t.length > 1); // V2.2: more lenient term matching
 
@@ -603,6 +687,8 @@ export const memorySearch = async (
   // Search Memory Docs (Global & Project)
   const docs = await getAllMemoryDocs();
   for (const doc of docs) {
+    if (scope === 'global' && doc.scope !== 'global') continue;
+    if (scope === 'project' && doc.scope !== 'project') continue;
     if (doc.scope === 'project' && doc.targetId !== projectId) continue;
 
     const sections = parseMemoryMarkdown(doc.content);
@@ -631,8 +717,10 @@ export const memorySearch = async (
   }
 
   // Search Daily Logs
-  const logs = await getMemoryLogs({ projectId: projectId || undefined, limit: 30 });
+  const logs = await getMemoryLogs({ projectId: scope === 'global' ? undefined : (projectId || undefined), limit: 30 });
   for (const log of logs) {
+    if (scope === 'global' && log.projectId) continue;
+    if (scope === 'project' && projectId && log.projectId !== projectId) continue;
     const textToSearch = log.content.toLowerCase();
     let score = 0;
     for (const term of searchTerms) {
@@ -684,4 +772,3 @@ Ignore candidates that are contradictory if a more recent/global candidate exist
     return output.join('\n');
   }
 };
-

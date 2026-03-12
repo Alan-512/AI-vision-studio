@@ -5,6 +5,7 @@ import {
     removeUserApiKey,
     parseFactsFromLLM,
     buildPromptWithFacts,
+    normalizeSupportedToolName,
     StructuredFact
 } from '../services/geminiService';
 
@@ -125,6 +126,21 @@ describe('GeminiService', () => {
         it('should trim whitespace from prompt', () => {
             const result = buildPromptWithFacts('  spaced prompt  ', []);
             expect(result).toBe('spaced prompt');
+        });
+    });
+
+    describe('normalizeSupportedToolName', () => {
+        it('should normalize the legacy read_memory alias to memory_search', () => {
+            expect(normalizeSupportedToolName('read_memory')).toBe('memory_search');
+        });
+
+        it('should keep supported tool names unchanged', () => {
+            expect(normalizeSupportedToolName('memory_search')).toBe('memory_search');
+            expect(normalizeSupportedToolName('generate_image')).toBe('generate_image');
+        });
+
+        it('should reject unsupported tool names', () => {
+            expect(normalizeSupportedToolName('unknown_tool')).toBeNull();
         });
     });
 });
