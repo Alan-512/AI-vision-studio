@@ -8,7 +8,7 @@
 - [x] 2.3 Ensure retries and cancellation use real execution outcomes instead of synthetic success
 
 ## 3. Artifact and Context Handling
-- [ ] 3.1 Store generated images, user references, search outputs, and review outputs as stable runtime artifacts
+- [x] 3.1 Store generated images, user references, search outputs, and review outputs as stable runtime artifacts
 - [ ] 3.2 Replace transcript-only reference selection with artifact references and lineage metadata
 - [ ] 3.3 Keep compatibility adapters so existing chat history and saved projects still render correctly during migration
 - [x] 3.4 Define how interrupted in-flight browser jobs are recorded and surfaced after refresh or tab close

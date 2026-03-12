@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { Image as ImageIcon, Video, LayoutGrid, Folder, Sparkles, Settings, Star, CheckSquare, MoveHorizontal, Languages, Trash2, Recycle, Download, RotateCcw, ArrowRight, Key, X } from 'lucide-react';
-import { AppMode, AspectRatio, GenerationParams, AssetItem, ImageResolution, VideoResolution, ImageModel, VideoModel, ImageStyle, Project, ChatMessage, BackgroundTask, SmartAsset, VideoDuration, VideoStyle, AgentAction, EditRegion, SearchPolicy, AssistantMode, SmartAssetRole, ThinkingLevel, AgentJob, AgentJobStatus, JobStep, JobArtifact, AgentToolResult, ToolCallRecord } from './types';
+import { AppMode, AspectRatio, GenerationParams, AssetItem, ImageResolution, VideoResolution, ImageModel, VideoModel, ImageStyle, Project, ChatMessage, BackgroundTask, SmartAsset, VideoDuration, VideoStyle, AgentAction, EditRegion, SearchPolicy, AssistantMode, SmartAssetRole, ThinkingLevel, AgentJob, AgentJobStatus, JobStep, JobArtifact, AgentToolResult, ToolCallRecord, SearchProgress } from './types';
 import { GenerationForm } from './components/GenerationForm';
 import { AssetCard } from './components/AssetCard';
 import { ProjectSidebar } from './components/ProjectSidebar';
@@ -145,6 +145,86 @@ const buildGeneratedArtifact = (asset: AssetItem, stepId: string): JobArtifact =
     relatedStepId: stepId,
     metadata: asset.metadata
 });
+
+type SelectedReferenceRecord = {
+    asset: SmartAsset;
+    sourceRole: 'user' | 'model';
+    messageTimestamp?: number;
+};
+
+const buildReferenceArtifacts = (references: SelectedReferenceRecord[]): JobArtifact[] =>
+    references.map(reference => ({
+        id: crypto.randomUUID(),
+        type: 'image',
+        origin: 'user_upload',
+        role: 'reference',
+        base64: reference.asset.data,
+        mimeType: reference.asset.mimeType,
+        createdAt: Date.now(),
+        relatedMessageTimestamp: reference.messageTimestamp,
+        metadata: {
+            sourceImageId: reference.asset.id,
+            sourceRole: reference.sourceRole,
+            runtimeKey: `reference:${reference.asset.id}`
+        }
+    }));
+
+const extractSearchContextFromProgress = (searchProgress?: SearchProgress | null): AgentJob['searchContext'] | undefined => {
+    if (!searchProgress || searchProgress.status !== 'complete') return undefined;
+
+    const facts = (searchProgress.results || [])
+        .filter(item => item.label || item.value)
+        .map(item => ({
+            item: item.label ? `${item.label}: ${item.value}` : item.value,
+            source: undefined
+        }));
+
+    return {
+        queries: searchProgress.queries || [],
+        facts,
+        sources: searchProgress.sources || []
+    };
+};
+
+const buildSearchArtifacts = (searchContext?: AgentJob['searchContext']): JobArtifact[] => {
+    if (!searchContext) return [];
+
+    const artifacts: JobArtifact[] = [];
+    if ((searchContext.facts && searchContext.facts.length > 0) || (searchContext.sources && searchContext.sources.length > 0)) {
+        artifacts.push({
+            id: crypto.randomUUID(),
+            type: 'json',
+            origin: 'search',
+            role: 'retrieved_context',
+            createdAt: Date.now(),
+            metadata: {
+                runtimeKey: `search:${(searchContext.queries || []).join('|')}`,
+                queries: searchContext.queries || [],
+                facts: searchContext.facts || [],
+                sources: searchContext.sources || []
+            }
+        });
+    }
+    return artifacts;
+};
+
+const mergeRuntimeArtifacts = (existing: JobArtifact[], additions: JobArtifact[]): JobArtifact[] => {
+    const seen = new Set(
+        existing
+            .map(artifact => artifact.metadata?.runtimeKey)
+            .filter((value): value is string => typeof value === 'string' && value.length > 0)
+    );
+
+    const uniqueAdditions = additions.filter(artifact => {
+        const runtimeKey = artifact.metadata?.runtimeKey;
+        if (typeof runtimeKey !== 'string' || runtimeKey.length === 0) return true;
+        if (seen.has(runtimeKey)) return false;
+        seen.add(runtimeKey);
+        return true;
+    });
+
+    return [...existing, ...uniqueAdditions];
+};
 
 type LocalReviewDecision = 'accept' | 'auto_revise' | 'requires_action';
 type BilingualText = { zh: string; en: string };
@@ -1074,11 +1154,35 @@ export function App() {
                 if (message.image) return [message.image];
                 return [];
             };
+            const artifactToSmartAsset = (artifact: JobArtifact): SmartAsset | null => {
+                if (artifact.base64 && artifact.mimeType) {
+                    return {
+                        id: artifact.metadata?.sourceImageId || artifact.id,
+                        mimeType: artifact.mimeType,
+                        data: artifact.base64
+                    };
+                }
+                if (artifact.url && artifact.url.startsWith('data:')) {
+                    const match = artifact.url.match(/^data:(.+);base64,(.+)$/);
+                    if (!match) return null;
+                    return {
+                        id: artifact.metadata?.sourceImageId || artifact.id,
+                        mimeType: match[1],
+                        data: match[2]
+                    };
+                }
+                return null;
+            };
 
             // Get all messages with images from chat history
             const messagesWithImages = chatHistory.filter(m => m.image || (m.images && m.images.length > 0));
+            const projectAgentJobs = await loadAgentJobsByProject(activeProjectId);
+            const latestSearchProgress = [...chatHistory]
+                .reverse()
+                .find(m => m.role === 'model' && m.searchProgress?.status === 'complete')
+                ?.searchProgress;
 
-            let selectedReferences: SmartAsset[] = [];
+            let selectedReferences: SelectedReferenceRecord[] = [];
 
             // [DEBUG] Log reference decision
             console.log(`[Agent] Reference IDs requested by AI:`, requestedIds, `pre-extracted size: ${executionParams.smartAssets?.length ?? 0}`);
@@ -1089,14 +1193,16 @@ export function App() {
                     const prefix = m.role === 'user' ? 'user' : 'generated';
                     return extractImages(m).map((img, idx) => ({
                         id: `${prefix}-${m.timestamp}-${idx}`,
-                        img: img
+                        img: img,
+                        sourceRole: m.role === 'user' ? 'user' as const : 'model' as const,
+                        messageTimestamp: m.timestamp
                     }));
                 });
 
-                allAvailableImages.forEach(({ id, img }) => {
+                allAvailableImages.forEach(({ id, img, sourceRole, messageTimestamp }) => {
                     if (requestedIds.includes(id)) {
                         const asset = toSmartAsset(img, id);
-                        if (asset) selectedReferences.push(asset);
+                        if (asset) selectedReferences.push({ asset, sourceRole, messageTimestamp });
                     }
                 });
             } else if (requestedIds.length === 0 && Array.isArray(toolArgs.reference_image_ids)) {
@@ -1106,27 +1212,75 @@ export function App() {
                 // FALLBACK for backward compatibility or when AI hallucinates param
                 // Smart default: if user uploaded images recently, use the last one
                 if (playbookReferenceMode === 'LAST_GENERATED') {
-                    const lastGenerated = [...messagesWithImages].reverse().find(m => m.role === 'model');
-                    if (lastGenerated) {
-                        const images = extractImages(lastGenerated);
-                        const asset = toSmartAsset(images[images.length - 1], `generated-${lastGenerated.timestamp}-0`);
-                        if (asset) selectedReferences.push(asset);
+                    const latestGeneratedArtifact = [...projectAgentJobs]
+                        .sort((a, b) => b.updatedAt - a.updatedAt)
+                        .flatMap(job => [...job.artifacts].reverse())
+                        .find(artifact => artifact.origin === 'generated' && (artifact.role === 'final' || artifact.role === 'candidate'));
+                    const latestGeneratedAsset = latestGeneratedArtifact ? artifactToSmartAsset(latestGeneratedArtifact) : null;
+                    if (latestGeneratedArtifact && latestGeneratedAsset) {
+                        selectedReferences.push({
+                            asset: latestGeneratedAsset,
+                            sourceRole: 'model',
+                            messageTimestamp: latestGeneratedArtifact.relatedMessageTimestamp
+                        });
+                    } else {
+                        const lastGenerated = [...messagesWithImages].reverse().find(m => m.role === 'model');
+                        if (lastGenerated) {
+                            const images = extractImages(lastGenerated);
+                            const asset = toSmartAsset(images[images.length - 1], `generated-${lastGenerated.timestamp}-0`);
+                            if (asset) selectedReferences.push({ asset, sourceRole: 'model', messageTimestamp: lastGenerated.timestamp });
+                        }
                     }
                 } else if (hasUserUploadedImages) {
                     const lastUserMsg = [...messagesWithImages].reverse().find(m => m.role === 'user' && !m.isSystem);
                     if (lastUserMsg) {
                         const images = extractImages(lastUserMsg);
                         const asset = toSmartAsset(images[images.length - 1], `user-${lastUserMsg.timestamp}-0`);
-                        if (asset) selectedReferences.push(asset);
+                        if (asset) selectedReferences.push({ asset, sourceRole: 'user', messageTimestamp: lastUserMsg.timestamp });
+                    } else {
+                        const latestReferenceArtifact = [...projectAgentJobs]
+                            .sort((a, b) => b.updatedAt - a.updatedAt)
+                            .flatMap(job => [...job.artifacts].reverse())
+                            .find(artifact => artifact.role === 'reference');
+                        const latestReferenceAsset = latestReferenceArtifact ? artifactToSmartAsset(latestReferenceArtifact) : null;
+                        if (latestReferenceArtifact && latestReferenceAsset) {
+                            selectedReferences.push({
+                                asset: latestReferenceAsset,
+                                sourceRole: 'user',
+                                messageTimestamp: latestReferenceArtifact.relatedMessageTimestamp
+                            });
+                        }
+                    }
+                } else {
+                    const latestReferenceArtifact = [...projectAgentJobs]
+                        .sort((a, b) => b.updatedAt - a.updatedAt)
+                        .flatMap(job => [...job.artifacts].reverse())
+                        .find(artifact => artifact.role === 'reference');
+                    const latestReferenceAsset = latestReferenceArtifact ? artifactToSmartAsset(latestReferenceArtifact) : null;
+                    if (latestReferenceArtifact && latestReferenceAsset) {
+                        selectedReferences.push({
+                            asset: latestReferenceAsset,
+                            sourceRole: 'user',
+                            messageTimestamp: latestReferenceArtifact.relatedMessageTimestamp
+                        });
+                    } else {
+                        const lastUserMsg = [...messagesWithImages].reverse().find(m => m.role === 'user' && !m.isSystem);
+                        if (!lastUserMsg) {
+                            console.log('[Agent] No transcript or artifact reference fallback found.');
+                        } else {
+                            const images = extractImages(lastUserMsg);
+                            const asset = toSmartAsset(images[images.length - 1], `user-${lastUserMsg.timestamp}-0`);
+                            if (asset) selectedReferences.push({ asset, sourceRole: 'user', messageTimestamp: lastUserMsg.timestamp });
+                        }
                     }
                 }
             }
 
             // Add selected references to smartAssets (avoid duplicates)
             selectedReferences.forEach(ref => {
-                const exists = executionParams.smartAssets?.some(a => a.data.slice(0, 50) === ref.data.slice(0, 50));
+                const exists = executionParams.smartAssets?.some(a => a.data.slice(0, 50) === ref.asset.data.slice(0, 50));
                 if (!exists) {
-                    executionParams.smartAssets?.push(ref);
+                    executionParams.smartAssets?.push(ref.asset);
                 }
             });
 
@@ -1185,6 +1339,8 @@ export function App() {
                     useParamsAsBase: false, // CLEAN ISOLATION: Don't merge with params config page
                     jobSource: 'chat',
                     toolCall: action,
+                    selectedReferenceRecords: selectedReferences,
+                    searchContextOverride: extractSearchContextFromProgress(latestSearchProgress),
                     resumeJobId: typeof toolArgs.resume_job_id === 'string' && toolArgs.resume_job_id.trim() ? toolArgs.resume_job_id : undefined,
                     resumeActionType: typeof toolArgs.requires_action_type === 'string' ? toolArgs.requires_action_type : undefined
                 });
@@ -1276,11 +1432,24 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
             useParamsAsBase?: boolean; // Default false for isolation
             jobSource?: AgentJob['source'];
             toolCall?: AgentAction;
+            selectedReferenceRecords?: SelectedReferenceRecord[];
+            searchContextOverride?: AgentJob['searchContext'];
             resumeJobId?: string;
             resumeActionType?: string;
         }
     ): Promise<AgentToolResult[]> => {
-        const { modeOverride, onSuccess, historyOverride, useParamsAsBase = false, jobSource, toolCall, resumeJobId, resumeActionType } = options || {};
+        const {
+            modeOverride,
+            onSuccess,
+            historyOverride,
+            useParamsAsBase = false,
+            jobSource,
+            toolCall,
+            selectedReferenceRecords = [],
+            searchContextOverride,
+            resumeJobId,
+            resumeActionType
+        } = options || {};
 
         // RESUME AUDIO CONTEXT ON USER CLICK: Critical for browser audio policies
         const audioCtx = getAudioContext();
@@ -1335,6 +1504,9 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
             const previousTaskIds = resumeJobId
                 ? tasks.filter(task => task.jobId === jobId).map(task => task.id)
                 : [];
+            const referenceArtifacts = buildReferenceArtifacts(selectedReferenceRecords);
+            const searchArtifacts = buildSearchArtifacts(searchContextOverride);
+            const initialRuntimeArtifacts = [...referenceArtifacts, ...searchArtifacts];
             const newTask: BackgroundTask = {
                 id: taskId, projectId: currentProjectId, projectName: projects.find(p => p.id === currentProjectId)?.name || 'Project',
                 type: currentMode === AppMode.IMAGE ? 'IMAGE' : 'VIDEO', status: 'QUEUED', startTime: Date.now(), prompt: activeParams.prompt,
@@ -1350,11 +1522,13 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
                     currentStepId: undefined,
                     lastError: undefined,
                     requiresAction: undefined,
+                    searchContext: searchContextOverride || existingJob.searchContext,
                     steps: [
                         ...existingJob.steps,
                         ...(resumeStepId ? [createResumeActionStep(resumeStepId, jobId, activeParams.prompt, resumeActionType)] : []),
                         createGenerationStep(stepId, currentMode, activeParams, toolCall)
-                    ]
+                    ],
+                    artifacts: mergeRuntimeArtifacts(existingJob.artifacts, initialRuntimeArtifacts)
                 }
                 : {
                     id: jobId,
@@ -1366,8 +1540,9 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
                     source: resolvedJobSource,
                     triggerMessageTimestamp,
                     currentStepId: undefined,
+                    searchContext: searchContextOverride,
                     steps: [createGenerationStep(stepId, currentMode, activeParams, toolCall)],
-                    artifacts: []
+                    artifacts: initialRuntimeArtifacts
                 };
             const persistJob = async (updates: Partial<AgentJob>) => {
                 agentJob = {
