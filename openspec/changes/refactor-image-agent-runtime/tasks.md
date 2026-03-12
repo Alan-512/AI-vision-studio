@@ -25,5 +25,5 @@
 - [x] 5.3 Validate migration behavior for existing projects, chat history, and reference images
 
 ## Current Focus
-- Remaining work is concentrated in artifact-first reference handling, migration validation, and broader end-to-end coverage.
-- The dev-only `/debug action-card` preview remains intentionally enabled while interaction design is still being reviewed, and should be removed during release cleanup.
+- Runtime, artifact handling, compatibility adapters, and verification are now in place for the image-agent runtime refactor.
+- Remaining release work is limited to normal product QA and any future UX polish outside this change scope.
