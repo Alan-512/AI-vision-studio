@@ -199,5 +199,49 @@ describe('AgentService', () => {
             expect(state.pendingAction).toBeUndefined();
             expect(state.context.generatedAssets).toEqual(['asset-preview']);
         });
+
+        it('should transition from execution result to completed state during auto execution', async () => {
+            const onExecuteAction = vi.fn().mockResolvedValue({
+                jobId: 'job-auto-1',
+                toolName: 'generate_image',
+                status: 'success',
+                artifactIds: ['asset-auto-1']
+            });
+            const machine = new AgentStateMachine(undefined, { onExecuteAction });
+
+            await machine.setPendingAction(createGenerateAction(
+                { prompt: 'generate a poster' },
+                'Generate poster'
+            ));
+
+            const state = machine.getState();
+            expect(onExecuteAction).toHaveBeenCalledTimes(1);
+            expect(state.phase).toBe('COMPLETED');
+            expect(state.context.generatedAssets).toEqual(['asset-auto-1']);
+        });
+
+        it('should transition from execution result to awaiting confirmation during auto execution', async () => {
+            const onExecuteAction = vi.fn().mockResolvedValue({
+                jobId: 'job-auto-2',
+                toolName: 'generate_image',
+                status: 'requires_action',
+                artifactIds: ['asset-auto-preview'],
+                requiresAction: {
+                    type: 'review_output',
+                    message: 'Choose whether to continue'
+                }
+            });
+            const machine = new AgentStateMachine(undefined, { onExecuteAction });
+
+            await machine.setPendingAction(createGenerateAction(
+                { prompt: 'generate and review' },
+                'Generate and review'
+            ));
+
+            const state = machine.getState();
+            expect(onExecuteAction).toHaveBeenCalledTimes(1);
+            expect(state.phase).toBe('AWAITING_CONFIRMATION');
+            expect(state.context.generatedAssets).toEqual(['asset-auto-preview']);
+        });
     });
 });

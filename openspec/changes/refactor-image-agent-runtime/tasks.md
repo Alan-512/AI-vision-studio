@@ -20,8 +20,8 @@
 - [x] 4.4 Ensure the orchestrator consumes tool results within the same job before terminal completion is emitted
 
 ## 5. Verification
-- [ ] 5.1 Add tests for chat -> tool -> generation -> tool result -> runtime state transitions
-- [ ] 5.2 Add tests for artifact persistence and reference reuse across multi-step image jobs
+- [x] 5.1 Add tests for chat -> tool -> generation -> tool result -> runtime state transitions
+- [x] 5.2 Add tests for artifact persistence and reference reuse across multi-step image jobs
 - [x] 5.3 Validate migration behavior for existing projects, chat history, and reference images
 
 ## Current Focus
