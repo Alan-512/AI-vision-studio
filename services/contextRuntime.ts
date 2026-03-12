@@ -1,6 +1,12 @@
 import { ChatMessage } from '../types';
 
 export const DEFAULT_RECENT_MESSAGE_WINDOW = 8;
+export const CONTEXT_LAYER_ROLES = {
+  transcript: 'Recent verbatim conversation turns only',
+  summary: 'Compacted older conversation state already summarized behind the cursor',
+  artifacts: 'Authoritative runtime records for images, references, and search outputs',
+  memory: 'Durable user and project preferences with layered retrieval'
+} as const;
 
 export type SummaryRange = {
   from: number;
@@ -26,18 +32,19 @@ export const compactConversationContext = (
 ): CompactedConversationContext => {
   const normalizedCursor = clampCursor(summaryCursor, history.length);
   const trimmedSummary = (contextSummary || '').trim();
+  const effectiveSummary = normalizedCursor > 0 ? trimmedSummary : '';
   const unsummarized = history.slice(normalizedCursor);
 
   if (unsummarized.length <= recentWindow) {
     return {
-      effectiveSummary: trimmedSummary,
+      effectiveSummary,
       recentHistory: unsummarized
     };
   }
 
   const cutoff = Math.max(normalizedCursor, history.length - recentWindow);
   return {
-    effectiveSummary: trimmedSummary,
+    effectiveSummary,
     recentHistory: history.slice(cutoff),
     nextSummaryRange: cutoff > normalizedCursor ? { from: normalizedCursor, to: cutoff } : undefined
   };
@@ -64,4 +71,3 @@ export const serializeMessagesForSummary = (history: ChatMessage[]): string =>
     })
     .filter(Boolean)
     .join('\n');
-

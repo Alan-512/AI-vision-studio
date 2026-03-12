@@ -11,18 +11,18 @@
 ## 3. Rolling Short-Term Context
 - [x] 3.1 Turn `contextSummary` into an actively maintained rolling summary with cursor tracking
 - [x] 3.2 Use recent verbatim turns plus summarized older context when building model requests
-- [ ] 3.3 Ensure image-history compaction, transcript compaction, and summary injection work together without losing key references
+- [x] 3.3 Ensure image-history compaction, transcript compaction, and summary injection work together without losing key references
 
 ## 4. Source-of-Truth Boundaries
-- [ ] 4.1 Document and enforce clear roles for transcript history, runtime artifacts, rolling summary state, and long-term memory
-- [ ] 4.2 Keep compatibility fallbacks for existing projects while preferring the new layered context strategy
-- [ ] 4.3 Avoid duplicating the same context across transcript replay, summary text, and memory snippets unless intentionally required
+- [x] 4.1 Document and enforce clear roles for transcript history, runtime artifacts, rolling summary state, and long-term memory
+- [x] 4.2 Keep compatibility fallbacks for existing projects while preferring the new layered context strategy
+- [x] 4.3 Avoid duplicating the same context across transcript replay, summary text, and memory snippets unless intentionally required
 
 ## 5. Verification
-- [ ] 5.1 Add tests for memory retrieval tool execution and same-turn consumption
+- [x] 5.1 Add tests for memory retrieval tool execution and same-turn consumption
 - [x] 5.2 Add tests for rolling summary updates and compacted request building
-- [ ] 5.3 Validate compatibility behavior for existing projects, memory docs, and transcript-derived context
+- [x] 5.3 Validate compatibility behavior for existing projects, memory docs, and transcript-derived context
 
 ## Current Focus
-- The memory retrieval contract, same-turn loop, always-on memory layer, and rolling-summary request compaction are now in place.
-- Remaining work is focused on deeper verification plus explicit source-of-truth and compatibility hardening.
+- The layered memory/context runtime is now fully implemented for this change scope.
+- Remaining work is limited to normal product QA and future tuning outside this OpenSpec change.

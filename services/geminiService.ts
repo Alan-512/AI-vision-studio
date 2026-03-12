@@ -258,6 +258,16 @@ const SUPPORTED_TOOL_NAMES = new Set<string>(['generate_image', 'update_memory',
 const ROLLING_SUMMARY_RECENT_WINDOW = 8;
 const MAX_INTERNAL_TOOL_LOOPS = 4;
 
+export type DeferredToolCall = {
+    toolName: string;
+    args: Record<string, any>;
+};
+
+type InternalToolExecutionResult = {
+    response: Record<string, any>;
+    fallbackText?: string;
+};
+
 export const normalizeSupportedToolName = (toolName?: string): string | null => {
     if (!toolName) return null;
     if (toolName === 'read_memory') return MEMORY_TOOL_NAME;
@@ -297,11 +307,11 @@ Return the updated rolling summary only.`;
     return generateText(systemInstruction, prompt, false, TextModel.FLASH);
 };
 
-const executeInternalToolCall = async (
+export const executeInternalToolCall = async (
     toolName: string,
     args: Record<string, any>,
     projectId?: string | null
-): Promise<{ response: Record<string, any>; fallbackText?: string }> => {
+): Promise<InternalToolExecutionResult> => {
     if (toolName === 'update_memory') {
         const { section, key, value, scope } = args;
         if (!section || !value) {
@@ -362,6 +372,89 @@ const executeInternalToolCall = async (
     }
 
     return { response: { ok: false, error: `Unsupported internal tool: ${toolName}` } };
+};
+
+export const runInternalToolResultLoop = async ({
+    pendingToolCalls,
+    workingContents,
+    signal,
+    fullText,
+    onChunk,
+    executeToolCall,
+    generateFollowUpParts,
+    maxInternalLoops = MAX_INTERNAL_TOOL_LOOPS
+}: {
+    pendingToolCalls: DeferredToolCall[];
+    workingContents: Content[];
+    signal: AbortSignal;
+    fullText: string;
+    onChunk: (text: string) => void;
+    executeToolCall: (toolName: string, args: Record<string, any>) => Promise<InternalToolExecutionResult>;
+    generateFollowUpParts: (contents: Content[]) => Promise<any[]>;
+    maxInternalLoops?: number;
+}): Promise<{ fullText: string; workingContents: Content[]; externalToolCalls: DeferredToolCall[] }> => {
+    const externalToolCalls: DeferredToolCall[] = [];
+    const queuedToolCalls = [...pendingToolCalls];
+    let nextFullText = fullText;
+    let nextContents = [...workingContents];
+    let internalLoopCount = 0;
+
+    while (queuedToolCalls.length > 0 && !signal.aborted) {
+        const pendingToolCall = queuedToolCalls.shift()!;
+
+        if (!INTERNAL_TOOL_NAMES.has(pendingToolCall.toolName)) {
+            externalToolCalls.push(pendingToolCall);
+            continue;
+        }
+
+        if (internalLoopCount >= maxInternalLoops) {
+            console.warn('[Stream] Reached max internal tool loops, stopping follow-up tool execution');
+            break;
+        }
+
+        internalLoopCount += 1;
+        const { response, fallbackText } = await executeToolCall(pendingToolCall.toolName, pendingToolCall.args);
+        nextContents = [
+            ...nextContents,
+            buildAssistantFunctionCallContent(pendingToolCall.toolName, pendingToolCall.args),
+            buildFunctionResponseContent(pendingToolCall.toolName, response)
+        ];
+
+        const followUpParts = await generateFollowUpParts(nextContents);
+        if (followUpParts.length > 0) {
+            nextContents = [...nextContents, { role: 'model', parts: followUpParts } as Content];
+        }
+
+        let followUpText = '';
+        for (const part of followUpParts) {
+            if (part.text) {
+                followUpText += part.text;
+            }
+            if (part.functionCall) {
+                const nextToolName = normalizeSupportedToolName(part.functionCall.name);
+                if (nextToolName) {
+                    queuedToolCalls.push({
+                        toolName: nextToolName,
+                        args: (part.functionCall.args || {}) as Record<string, any>
+                    });
+                }
+            }
+        }
+
+        if (followUpText.trim()) {
+            nextFullText = nextFullText.trim().length > 0 ? `${nextFullText}\n${followUpText}` : followUpText;
+            onChunk(nextFullText);
+        } else if (!nextFullText.trim() && fallbackText) {
+            nextFullText = fallbackText;
+            onChunk(nextFullText);
+        }
+    }
+
+    return {
+        fullText: nextFullText,
+        workingContents: nextContents,
+        externalToolCalls
+    };
 };
 
 
@@ -894,15 +987,7 @@ Rules:
 
     if (pendingToolCalls.length > 0 && !signal?.aborted) {
         console.log(`[Stream] Executing ${pendingToolCalls.length} deferred tool calls`);
-        const externalToolCalls: Array<{ toolName: string; args: any }> = [];
-        const queuedToolCalls = [...pendingToolCalls];
-        let workingContents: Content[] = assistantTurnParts.length > 0
-            ? [...contents, { role: 'model', parts: assistantTurnParts } as Content]
-            : [...contents];
-        let internalLoopCount = 0;
-
-        while (queuedToolCalls.length > 0 && !signal.aborted) {
-            const pendingToolCall = queuedToolCalls.shift()!;
+        const preparedToolCalls: DeferredToolCall[] = pendingToolCalls.map(pendingToolCall => {
             const rawArgs = pendingToolCall.args && typeof pendingToolCall.args === 'object'
                 ? pendingToolCall.args as Record<string, any>
                 : {};
@@ -920,66 +1005,47 @@ Rules:
             }
 
             targetArgs.useGrounding = false;
-            const adjustedArgs = hasParametersWrapper ? { ...rawArgs, parameters: targetArgs } : targetArgs;
+            return {
+                toolName: pendingToolCall.toolName,
+                args: hasParametersWrapper ? ({ ...rawArgs, parameters: targetArgs } as any) : targetArgs
+            };
+        });
 
-            if (!INTERNAL_TOOL_NAMES.has(pendingToolCall.toolName)) {
-                externalToolCalls.push({ toolName: pendingToolCall.toolName, args: adjustedArgs });
-                continue;
-            }
-
-            if (internalLoopCount >= MAX_INTERNAL_TOOL_LOOPS) {
-                console.warn('[Stream] Reached max internal tool loops, stopping follow-up tool execution');
-                break;
-            }
-
-            internalLoopCount += 1;
-            try {
-                const { response, fallbackText } = await executeInternalToolCall(pendingToolCall.toolName, targetArgs, projectId);
-                workingContents = [
-                    ...workingContents,
-                    buildAssistantFunctionCallContent(pendingToolCall.toolName, targetArgs),
-                    buildFunctionResponseContent(pendingToolCall.toolName, response)
-                ];
-
-                const followUpResponse = await ai.models.generateContent({
-                    model: realModelName,
-                    contents: workingContents,
-                    config: { ...config, abortSignal: signal }
-                });
-                const followUpParts = (followUpResponse as any).candidates?.[0]?.content?.parts || [];
-                if (followUpParts.length > 0) {
-                    workingContents = [...workingContents, { role: 'model', parts: followUpParts } as Content];
+        let workingContents: Content[] = assistantTurnParts.length > 0
+            ? [...contents, { role: 'model', parts: assistantTurnParts } as Content]
+            : [...contents];
+        try {
+            const internalLoopResult = await runInternalToolResultLoop({
+                pendingToolCalls: preparedToolCalls,
+                workingContents,
+                signal,
+                fullText,
+                onChunk,
+                executeToolCall: (toolName, args) => {
+                    const rawArgs = args && typeof args === 'object' ? args : {};
+                    const targetArgs = 'parameters' in rawArgs && typeof (rawArgs as any).parameters === 'object'
+                        ? (rawArgs as any).parameters
+                        : rawArgs;
+                    return executeInternalToolCall(toolName, targetArgs, projectId);
+                },
+                generateFollowUpParts: async (followUpContents) => {
+                    const followUpResponse = await ai.models.generateContent({
+                        model: realModelName,
+                        contents: followUpContents,
+                        config: { ...config, abortSignal: signal }
+                    });
+                    return (followUpResponse as any).candidates?.[0]?.content?.parts || [];
                 }
+            });
+            fullText = internalLoopResult.fullText;
 
-                let followUpText = '';
-                for (const part of followUpParts) {
-                    if (part.text) {
-                        followUpText += part.text;
-                    }
-                    if (part.functionCall) {
-                        const nextToolName = normalizeSupportedToolName(part.functionCall.name);
-                        if (nextToolName) {
-                            queuedToolCalls.push({ toolName: nextToolName, args: part.functionCall.args });
-                        }
-                    }
+            if (internalLoopResult.externalToolCalls.length > 0 && onToolCall && !signal.aborted) {
+                for (const externalToolCall of internalLoopResult.externalToolCalls) {
+                    onToolCall({ toolName: externalToolCall.toolName, args: externalToolCall.args });
                 }
-
-                if (followUpText.trim()) {
-                    fullText = fullText.trim().length > 0 ? `${fullText}\n${followUpText}` : followUpText;
-                    onChunk(fullText);
-                } else if (!fullText.trim() && fallbackText) {
-                    fullText = fallbackText;
-                    onChunk(fullText);
-                }
-            } catch (error) {
-                console.error(`[Stream] Internal tool execution failed for ${pendingToolCall.toolName}:`, error);
             }
-        }
-
-        if (externalToolCalls.length > 0 && onToolCall && !signal.aborted) {
-            for (const externalToolCall of externalToolCalls) {
-                onToolCall({ toolName: externalToolCall.toolName, args: externalToolCall.args });
-            }
+        } catch (error) {
+            console.error('[Stream] Deferred tool execution loop failed:', error);
         }
     }
 
