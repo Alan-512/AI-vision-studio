@@ -28,8 +28,7 @@ dist-ssr
 .env.local
 .env.*.local
 
-# Documentation (local only)
-docs/
+# Temporary documentation / research exports
 tmp-docs/
 
 # Output/temp folders
@@ -37,5 +36,3 @@ output/
 
 # Skill files
 *.skill
-gemini_js_skill.json
-metadata.json

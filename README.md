@@ -1,88 +1,94 @@
-<div align="center">
-
 # AI Vision Studio
 
-**[English](README.md)** | [中文](README_zh.md)
+Browser-first AI image and video studio built with React, Vite, Google Gemini, and Veo. It combines a parameter-driven studio workspace with a chat assistant that can plan generations, reuse references, manage local project history, and drive multi-step image jobs.
 
-A next-generation AI Vision Studio powered by **Google Gemini 3.1** (Flash/Pro) and **Veo** models.  
-**Create, Edit, and Animate** with a professional, agentic workflow.
+## Highlights
 
-[Online Demo (Coming Soon)] • [Report Bug] • [Request Feature]
+- Image generation and editing with Gemini image models
+- Video generation and extension with Veo
+- Chat-first image agent runtime with `review -> revise -> requires_action`
+- Reference-aware image workflows and artifact-based job history
+- Local-first memory and context management for multi-turn work
+- BYOK mode with API keys stored in browser local storage
+- Optional Cloudflare Pages Function proxy for `/api/*`
 
-</div>
+## Tech Stack
 
-## ✨ Features
+- React 18 + TypeScript
+- Vite
+- Tailwind CSS via CDN in [index.html](index.html) plus custom styles
+- `@google/genai`
+- IndexedDB/local persistence services
+- Vitest + jsdom
 
-### 🎨 Advanced Image Generation
-- **Powered by Gemini 3.1**: Support for `gemini-3.1-flash-image-preview` (Nano Banana 2) and `gemini-3-pro-image-preview` (Nano Banana Pro).
-- **Pro-Level Controls**: Fine-tune Aspect Ratio (including 1:4, 1:8, etc.), Style, Resolution (0.5K, 1K, 2K, 4K), and Negative Prompts.
-- **Smart Assets**: Support for up to 14 reference images (NB2) to control **Identity (Character)**, **Structure (Pose/Layout)**, and **Style (Vibe)**.
-- **Grounding**: Built-in Google Search grounding for accurate real-world visual generation (NB2).
+## Quick Start
 
-### 🎥 Cinematic Video Creation
-- **Veo Model Integration**: Generate high-quality videos using Google's latest `Veo` model (`veo-3.1`).
-- **Video Extension**: Upload existing videos and extend them seamlessly (720p).
-- **Keyframe & Reference Control**: Use images to guide the start/end frames or lock character consistency in videos.
+### Requirements
 
-### 🤖 Deep Agent Assistant
-- **Thinking Process**: Powered by **Gemini 3.1 Pro** (`gemini-3.1-pro-preview`). The AI Assistant doesn't just reply; it *thinks*, plans, and executes complex workflows.
-- **Autonomous Control**: The Agent can autonomously control the studio interface, changing models, parameters, and initiating generation based on natural language requests.
-- **Auto-Selection**: Intelligent model selection logic that ensures the best output for your specific prompt.
+- Node.js 18+
+- A Google AI Studio API key
 
-### 🖌️ Editor & Inpainting
-- **Canvas Editor**: Integrated editor for masking and inpainting.
-- **Region-Based Editing**: Define specific regions with instructions (e.g., "Make this shirt red") while keeping the rest of the image intact.
+### Run locally
 
-### 🛡️ Privacy & Security (BYOK)
-- **Bring Your Own Key**: Your API Key is stored securely in your browser's **Local Storage**.
-- **No Middleman**: Requests go directly from your browser to Google's servers. We do not store or see your keys.
+```bash
+npm install
+npm run dev
+```
 
-## 🛠️ Tech Stack
+Open `http://localhost:5173`, then enter your API key in settings.
 
-- **Frontend**: React 18, TypeScript, Vite
-- **Styling**: Tailwind CSS
-- **AI SDK**: Google GenAI SDK (`@google/genai`)
-- **Icons**: Lucide React
+## Validation
 
-## 🚀 Getting Started
+```bash
+npm run test:run
+npm run build
+```
 
-### Prerequisites
-- Node.js (v18 or higher recommended)
-- A Google AI Studio API Key ([Get one here](https://aistudio.google.com/app/apikey))
+## Deployment
 
-### Installation
+### Static BYOK deployment
 
-1. **Clone the repository**
-   ```bash
-   git clone https://github.com/Alan-512/AI-vision-studio.git
-   cd AI-vision-studio
-   ```
+The app can be deployed as a static frontend. For most users, this is enough.
 
-2. **Install dependencies**
-   ```bash
-   npm install
-   ```
+- Build command: `npm run build`
+- Output directory: `dist`
 
-3. **Run locally**
-   ```bash
-   npm run dev
-   ```
+### Cloudflare Pages with optional proxy
 
-4. **Open in Browser**
-   Visit `http://localhost:5173` to start creating!
+This repository also includes a Cloudflare Pages Function at [functions/api/[[catchall]].ts](functions/api/[[catchall]].ts) that can proxy `/api/*` requests to Gemini endpoints.
 
-### Configuration
-On first launch, click the **Settings** (Gear icon) or follow the prompt to enter your **Google AI Studio API Key**.
+Use this when you want:
 
-## 📦 Deployment
+- an edge proxy for browser requests
+- a more stable path for regions where direct access is unreliable
+- a frontend-only deployment with optional server-side routing
 
-AI Vision Studio is ready for **Cloudflare Pages** deployment.
+The app also supports an optional Deno proxy configuration for long-running requests.
 
-1. Connect your repository to Cloudflare Pages.
-2. Set Build Command: `npm run build`
-3. Set Output Directory: `dist`
-4. **Deploy!** (No server-side environment variables needed for BYOK mode).
+## Repository Layout
 
-## 📄 License
+```text
+components/   React UI
+contexts/     shared React contexts
+functions/    Cloudflare Pages Functions
+openspec/     architecture changes and specs
+services/     Gemini, agent, memory, storage, runtime logic
+tests/        Vitest coverage
+docs/         architecture notes
+```
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+## Architecture Notes
+
+Useful docs live under [docs/architecture](docs/architecture):
+
+- `agent-architecture-upgrade.md`
+- `image-generation-architecture.md`
+- `long-term-memory-system-v1.md`
+- `mask-editing-workflow.md`
+- `playbook-agent-mode.md`
+
+Structured change history and implementation plans live under [openspec/](openspec/).
+
+## License
+
+MIT. See [LICENSE](LICENSE).

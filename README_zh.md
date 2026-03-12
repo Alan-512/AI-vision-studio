@@ -1,88 +1,94 @@
-<div align="center">
+# AI Vision Studio
 
-# AI Vision Studio (影像创意工坊)
+一个浏览器优先的 AI 图像与视频创作工作室，基于 React、Vite、Google Gemini 和 Veo 构建。它把参数化的 Studio 工作区和对话式 AI 助手结合在一起，支持多轮生成、参考图复用、本地项目历史，以及多步骤图像任务流。
 
-[English](README.md) | **[中文](README_zh.md)**
+## 核心能力
 
-基于 **Google Gemini 3.1** (Flash/Pro) 和 **Veo** 模型的新一代 AI 视觉创作工作室。  
-专业的 Agent 工作流，让你轻松**创建、编辑和动画化**内容。
+- 基于 Gemini 图像模型的图片生成与编辑
+- 基于 Veo 的视频生成与续写
+- 对话式图像 agent runtime，支持 `review -> revise -> requires_action`
+- 面向参考图和工件的图片任务流
+- 本地优先的记忆与上下文管理
+- BYOK 模式，API Key 仅保存在浏览器本地
+- 可选的 Cloudflare Pages Function `/api/*` 代理
 
-[在线演示 (即将推出)] • [报告问题] • [功能建议]
+## 技术栈
 
-</div>
+- React 18 + TypeScript
+- Vite
+- 通过 [index.html](index.html) CDN 注入的 Tailwind CSS + 自定义样式
+- `@google/genai`
+- IndexedDB / 本地持久化服务
+- Vitest + jsdom
 
-## ✨ 功能特点
+## 本地启动
 
-### 🎨 高级图像生成
-- **Gemini 3.1 驱动**：全面支持 `gemini-3.1-flash-image-preview` (Nano Banana 2) 和 `gemini-3-pro-image-preview` (Nano Banana Pro)
-- **专业级控制**：精细调节宽高比（新增 1:4, 1:8 等超宽比例）、风格、分辨率（0.5K, 1K, 2K, 4K）和负向提示词
-- **智能素材**：最高支持 14 张参考图 (NB2)，独立控制**角色一致性**、**构图结构**和**风格氛围**
-- **连网搜图**：内置 Google Search grounding，确保生成内容符合客观事实 (NB2)
+### 环境要求
 
-### 🎥 电影级视频创作
-- **Veo 模型集成**：使用 Google 最新的 `Veo` 模型 (`veo-3.1`) 生成高质量视频
-- **视频延长**：上传现有视频并无缝延长（720p）
-- **关键帧与参考控制**：使用图片引导起始/结束帧，或锁定视频中的角色一致性
+- Node.js 18+
+- Google AI Studio API Key
 
-### 🤖 深度 AI 助手
-- **思考过程可视化**：由最新的 **Gemini 3.1 Pro** (`gemini-3.1-pro-preview`) 驱动。其不仅仅是回复，还会自发执行*思考*、规划并处理复杂工作流
-- **自主控制**：Agent 可以自动控制工作室界面，根据自然语言请求更改模型、参数并发起生成
-- **智能回落**：自动化的模型选择逻辑，确保您的指令始终由最合适的引擎执行
+### 运行方式
 
-### 🖌️ 编辑器与局部重绘
-- **画布编辑器**：集成的遮罩和局部重绘编辑器
-- **区域编辑**：定义特定区域并给出指令（如"把这件衬衫变成红色"），同时保持图像其余部分不变
+```bash
+npm install
+npm run dev
+```
 
-### 🛡️ 隐私与安全 (BYOK)
-- **自带密钥**：您的 API Key 安全存储在浏览器的**本地存储**中
-- **无中间人**：请求直接从您的浏览器发送到 Google 服务器，我们不会存储或查看您的密钥
+打开 `http://localhost:5173`，然后在设置中填入 API Key。
 
-## 🛠️ 技术栈
+## 校验命令
 
-- **前端**：React 18、TypeScript、Vite
-- **样式**：Tailwind CSS
-- **AI SDK**：Google GenAI SDK (`@google/genai`)
-- **图标**：Lucide React
+```bash
+npm run test:run
+npm run build
+```
 
-## 🚀 快速开始
+## 部署方式
 
-### 前置要求
-- Node.js (推荐 v18 或更高版本)
-- Google AI Studio API Key ([在这里获取](https://aistudio.google.com/app/apikey))
+### 静态前端部署
 
-### 安装步骤
+项目可以直接作为静态前端部署，这也是默认方式。
 
-1. **克隆仓库**
-   ```bash
-   git clone https://github.com/Alan-512/AI-vision-studio.git
-   cd AI-vision-studio
-   ```
+- 构建命令：`npm run build`
+- 输出目录：`dist`
 
-2. **安装依赖**
-   ```bash
-   npm install
-   ```
+### Cloudflare Pages + 可选代理
 
-3. **本地运行**
-   ```bash
-   npm run dev
-   ```
+仓库内置了 Cloudflare Pages Function，文件在 [functions/api/[[catchall]].ts](functions/api/[[catchall]].ts)，可将 `/api/*` 请求代理到 Gemini 接口。
 
-4. **打开浏览器**
-   访问 `http://localhost:5173` 开始创作！
+适合以下场景：
 
-### 配置
-首次启动时，点击**设置**（齿轮图标）或按照提示输入您的 **Google AI Studio API Key**。
+- 需要前端请求走边缘代理
+- 直连不稳定，希望增加一层代理
+- 仍然保持前端为主的部署方式
 
-## 📦 部署
+项目也支持可选的 Deno 代理配置，用于更长时间的请求。
 
-AI Vision Studio 支持 **Cloudflare Pages** 一键部署。
+## 目录结构
 
-1. 将仓库连接到 Cloudflare Pages
-2. 设置构建命令：`npm run build`
-3. 设置输出目录：`dist`
-4. **部署成功！**（BYOK 模式无需服务器端环境变量）
+```text
+components/   React 界面组件
+contexts/     共享上下文
+functions/    Cloudflare Pages Functions
+openspec/     架构变更与规范
+services/     Gemini、agent、memory、storage、runtime 逻辑
+tests/        Vitest 测试
+docs/         架构文档
+```
 
-## 📄 许可证
+## 架构文档
 
-本项目基于 MIT 许可证开源 - 详见 [LICENSE](LICENSE) 文件。
+主要文档已整理到 [docs/architecture](docs/architecture)：
+
+- `agent-architecture-upgrade.md`
+- `image-generation-architecture.md`
+- `long-term-memory-system-v1.md`
+- `mask-editing-workflow.md`
+- `playbook-agent-mode.md`
+
+架构变更提案和实施记录在 [openspec/](openspec/)。
+
+## 许可证
+
+MIT，详见 [LICENSE](LICENSE)。

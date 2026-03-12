@@ -1,0 +1,11 @@
+# Architecture Notes
+
+This folder contains long-form architecture notes and product workflow documents that are still useful for understanding the repository history and runtime design.
+
+- `agent-architecture-upgrade.md`: dynamic skill injection and agent architecture direction
+- `image-generation-architecture.md`: chat-driven image generation flow and model constraints
+- `long-term-memory-system-v1.md`: local-first memory design background
+- `mask-editing-workflow.md`: base image, mask, and edit region workflow
+- `playbook-agent-mode.md`: earlier playbook strategy for chat image generation
+
+Authoritative implementation plans for current and future changes live under `/openspec`.
