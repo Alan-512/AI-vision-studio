@@ -1,6 +1,6 @@
 
 import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { Send, User, Sparkles, ChevronDown, BrainCircuit, Zap, X, Box, Copy, Check, Plus, MonitorPlay, Film, Bot, Square, Crop, CheckCircle2, Globe, Brain, CircuitBoard, Wrench, Image as ImageIcon, CircleDashed, Terminal, RefreshCw, AlertCircle, Search, Upload } from 'lucide-react';
+import { Send, User, Sparkles, ChevronDown, BrainCircuit, Zap, X, Box, Copy, Check, Plus, MonitorPlay, Film, Bot, Square, Crop, CheckCircle2, Globe, Brain, CircuitBoard, Wrench, Image as ImageIcon, CircleDashed, Terminal, RefreshCw, AlertCircle, Search, Upload, ShieldCheck, ArrowUpRight } from 'lucide-react';
 import { ChatMessage, GenerationParams, ImageResolution, AppMode, ImageModel, VideoResolution, VideoModel, AspectRatio, SmartAsset, APP_LIMITS, AgentAction, TextModel, SearchProgress, ThinkingLevel, ToolCallRecord } from '../types';
 import { streamChatResponse } from '../services/geminiService';
 import { normalizeImageUrlForChat } from '../services/imageUtils';
@@ -507,7 +507,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
       return;
     }
 
-    if (import.meta.env.DEV && textToSend === '/debug action-card') {
+    if ((import.meta as any).env?.DEV && textToSend === '/debug action-card') {
       const previewTimestamp = Date.now();
       const previewToolCallId = crypto.randomUUID();
       const previewJobId = `preview-job-${previewTimestamp}`;
@@ -535,6 +535,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                   : 'Minimal matte white perfume bottle on a white stone pedestal, soft window light, quiet luxury still life photography',
                 model: ImageModel.FLASH_3_1
               },
+              status: 'success',
               result: {
                 jobId: previewJobId,
                 toolName: 'generate_image',
@@ -1328,62 +1329,62 @@ const ChatBubble: React.FC<ChatBubbleProps> = ({
               const preserveList = Array.isArray(localizedPlan?.preserve)
                 ? localizedPlan!.preserve.filter((item): item is string => typeof item === 'string')
                 : Array.isArray(reviewPlan?.preserve)
-                ? reviewPlan!.preserve.filter((item): item is string => typeof item === 'string')
-                : [];
+                  ? reviewPlan!.preserve.filter((item): item is string => typeof item === 'string')
+                  : [];
               const adjustList = Array.isArray(localizedPlan?.adjust)
                 ? localizedPlan!.adjust.filter((item): item is string => typeof item === 'string')
                 : Array.isArray(reviewPlan?.adjust)
-                ? reviewPlan!.adjust.filter((item): item is string => typeof item === 'string')
-                : [];
+                  ? reviewPlan!.adjust.filter((item): item is string => typeof item === 'string')
+                  : [];
 
               return (
                 <div
                   key={record.id}
-                  className="relative overflow-hidden rounded-2xl border border-amber-400/20 bg-[linear-gradient(145deg,rgba(72,38,11,0.92),rgba(29,18,8,0.96))] p-4 shadow-[0_24px_60px_-32px_rgba(251,191,36,0.45)] backdrop-blur-sm animate-in fade-in"
+                  className="relative overflow-hidden rounded-[26px] border border-white/6 bg-[linear-gradient(180deg,rgba(25,29,36,0.96),rgba(16,19,25,0.99))] p-4 shadow-[0_28px_60px_-36px_rgba(15,23,42,0.88)] backdrop-blur-sm animate-in fade-in"
                 >
-                  <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(251,191,36,0.16),transparent_38%)]" />
-                  <div className="pointer-events-none absolute inset-x-4 top-0 h-px bg-gradient-to-r from-transparent via-amber-300/45 to-transparent" />
-                  <div className="relative flex items-start gap-3">
-                    <div className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-amber-300/15 bg-amber-300/10 shadow-inner shadow-amber-200/5">
-                      <AlertCircle size={17} className="text-amber-300" />
-                    </div>
-                    <div className="flex-1 min-w-0 space-y-3">
-                      <div className="space-y-1.5">
-                        <div className="flex items-center gap-2">
-                          <span className="inline-flex items-center rounded-full border border-amber-300/15 bg-amber-300/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.18em] text-amber-200/80">
+                  <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(96,165,250,0.08),transparent_30%)]" />
+                  <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,rgba(255,255,255,0.03),transparent_28%)]" />
+                  <div className="pointer-events-none absolute inset-x-6 top-0 h-px bg-gradient-to-r from-transparent via-white/14 to-transparent" />
+                  <div className="pointer-events-none absolute inset-0 rounded-[26px] shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]" />
+                  <div className="relative">
+                    <div className="min-w-0 space-y-4">
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-2 text-[11px] text-slate-400/80">
+                          <span className="inline-flex items-center rounded-full border border-white/6 bg-white/[0.045] px-2.5 py-1 font-medium text-slate-200/72 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
                             {language === 'zh' ? '优化建议' : 'Refinement'}
                           </span>
-                          <span className="text-[10px] uppercase tracking-[0.16em] text-amber-100/35">
+                          <span className="tracking-[0.02em] text-slate-500/70">
                             {language === 'zh' ? '已准备好下一步' : 'Next Step Ready'}
                           </span>
                         </div>
-                        <div className="text-[15px] font-semibold leading-6 text-amber-100">
+                        <div className="text-[16px] font-semibold leading-7 text-slate-50">
                           {language === 'zh' ? '我建议继续优化这一版' : 'I Have a Clear Next Step'}
                         </div>
-                        <div className="text-[13px] leading-6 text-amber-50/88 whitespace-pre-wrap break-words">
+                        <div className="max-w-[30rem] text-[13px] leading-6 text-slate-200/82 whitespace-pre-wrap break-words">
                           {localizedMessage || record.result?.requiresAction?.message || record.result?.error || (language === 'zh' ? '我已经评估过当前结果，并整理好了下一步优化方向。你决定是否继续即可。' : 'I have reviewed the current result and prepared the next refinement step. You only need to decide whether to continue.')}
                         </div>
                       </div>
 
                       {(localizedPlan?.summary || reviewPlan?.summary) && (
-                        <div className="rounded-2xl border border-white/6 bg-black/20 p-3.5 space-y-3 shadow-inner shadow-black/10">
-                          <div className="text-[10px] uppercase tracking-[0.18em] text-amber-100/35">
+                        <div className="rounded-[22px] bg-white/[0.02] p-4 space-y-4">
+                          <div className="text-[11px] font-medium tracking-[0.02em] text-slate-400/72">
                             {language === 'zh' ? '接下来我会' : "Next I'll Refine"}
                           </div>
-                          <div className="text-[13px] leading-6 text-gray-100/92 whitespace-pre-wrap break-words">
+                          <div className="text-[14px] leading-7 text-slate-100/90 whitespace-pre-wrap break-words">
                             {localizedPlan?.summary || reviewPlan?.summary}
                           </div>
-                          <div className="grid gap-2 sm:grid-cols-2">
+                          <div className="grid gap-3 sm:grid-cols-2">
                             {preserveList.length > 0 && (
-                              <div className="rounded-xl border border-emerald-300/10 bg-emerald-300/5 px-3 py-2.5">
-                                <div className="mb-2 text-[10px] uppercase tracking-[0.16em] text-emerald-200/55">
+                              <div className="rounded-[18px] bg-white/[0.02] px-3.5 py-3.5">
+                                <div className="mb-3 text-[11px] font-medium tracking-[0.02em] text-slate-300/72 flex items-center gap-1.5">
+                                  <ShieldCheck size={14} className="text-slate-400/70" />
                                   {language === 'zh' ? '保持' : 'Keep'}
                                 </div>
-                                <div className="flex flex-wrap gap-1.5">
+                                <div className="flex flex-wrap gap-2">
                                   {preserveList.map((item, index) => (
                                     <span
                                       key={`${record.id}-preserve-${index}`}
-                                      className="rounded-full border border-emerald-300/10 bg-emerald-300/8 px-2 py-1 text-[11px] leading-none text-emerald-50/85"
+                                      className="rounded-full bg-white/[0.06] px-2.5 py-1.5 text-[11px] leading-none text-slate-200/90"
                                     >
                                       {item}
                                     </span>
@@ -1392,15 +1393,16 @@ const ChatBubble: React.FC<ChatBubbleProps> = ({
                               </div>
                             )}
                             {adjustList.length > 0 && (
-                              <div className="rounded-xl border border-amber-300/10 bg-amber-300/5 px-3 py-2.5">
-                                <div className="mb-2 text-[10px] uppercase tracking-[0.16em] text-amber-100/55">
+                              <div className="rounded-[18px] bg-sky-500/[0.03] px-3.5 py-3.5">
+                                <div className="mb-3 text-[11px] font-medium tracking-[0.02em] text-sky-100/70 flex items-center gap-1.5">
+                                  <ArrowUpRight size={14} className="text-sky-400/80" />
                                   {language === 'zh' ? '重点优化' : 'Improve'}
                                 </div>
-                                <div className="flex flex-wrap gap-1.5">
+                                <div className="flex flex-wrap gap-2">
                                   {adjustList.map((item, index) => (
                                     <span
                                       key={`${record.id}-adjust-${index}`}
-                                      className="rounded-full border border-amber-300/10 bg-amber-300/8 px-2 py-1 text-[11px] leading-none text-amber-50/90"
+                                      className="rounded-full bg-sky-500/[0.12] px-2.5 py-1.5 text-[11px] leading-none text-sky-200/90 tracking-wide"
                                     >
                                       {item}
                                     </span>
@@ -1413,35 +1415,37 @@ const ChatBubble: React.FC<ChatBubbleProps> = ({
                       )}
 
                       {(localizedWarnings || warnings).length > 0 && (
-                        <div className="rounded-xl border border-amber-200/8 bg-black/15 px-3 py-2 space-y-1.5">
+                        <div className="rounded-[18px] border border-white/6 bg-white/[0.03] px-3.5 py-3 space-y-1.5">
                           {(localizedWarnings || warnings).map((warning, index) => (
-                            <div key={index} className="text-[11px] leading-5 text-amber-100/78">
+                            <div key={index} className="text-[11px] leading-5 text-slate-300/78">
                               • {warning}
                             </div>
                           ))}
                         </div>
                       )}
 
-                      <div className="flex flex-wrap gap-2 pt-1">
-                        {canApplyRevision && onApplyActionCard && (
-                          <button
-                            onClick={() => onApplyActionCard(record)}
-                            disabled={!!isApplyingAction}
-                            className="min-w-[108px] rounded-xl bg-amber-300 px-4 py-2.5 text-[12px] font-semibold text-[#241504] shadow-[0_10px_30px_-16px_rgba(251,191,36,0.8)] transition-all hover:-translate-y-0.5 hover:bg-amber-200 disabled:translate-y-0 disabled:opacity-50 disabled:cursor-not-allowed"
-                          >
-                            {isApplyingAction
-                              ? (language === 'zh' ? '正在继续优化...' : 'Continuing...')
-                              : (language === 'zh' ? '继续优化' : 'Continue')}
-                          </button>
-                        )}
-                        {onDismissActionCard && (
-                          <button
-                            onClick={() => onDismissActionCard(record.id)}
-                            className="rounded-xl border border-white/10 bg-white/[0.03] px-4 py-2.5 text-[12px] font-medium text-gray-200 transition-colors hover:bg-white/[0.06]"
-                          >
-                            {language === 'zh' ? '保留当前结果' : 'Keep Current'}
-                          </button>
-                        )}
+                      <div className="flex justify-center pt-1">
+                        <div className="grid w-full max-w-[320px] grid-cols-2 gap-3">
+                          {canApplyRevision && onApplyActionCard && (
+                            <button
+                              onClick={() => onApplyActionCard(record)}
+                              disabled={!!isApplyingAction}
+                              className="w-full rounded-[16px] bg-slate-100 px-4 py-3 text-[12px] font-bold text-slate-900 shadow-[0_4px_20px_-4px_rgba(99,102,241,0.4)] transition-all hover:-translate-y-0.5 hover:bg-white hover:shadow-[0_4px_25px_-2px_rgba(99,102,241,0.6)] disabled:translate-y-0 disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                              {isApplyingAction
+                                ? (language === 'zh' ? '正在继续优化...' : 'Continuing...')
+                                : (language === 'zh' ? '继续优化' : 'Continue')}
+                            </button>
+                          )}
+                          {onDismissActionCard && (
+                            <button
+                              onClick={() => onDismissActionCard(record.id)}
+                              className="w-full rounded-[16px] border border-white/8 bg-transparent px-4 py-3 text-[12px] font-medium text-slate-300 transition-colors hover:bg-white/[0.05]"
+                            >
+                              {language === 'zh' ? '保留当前结果' : 'Keep Current'}
+                            </button>
+                          )}
+                        </div>
                       </div>
                     </div>
                   </div>
