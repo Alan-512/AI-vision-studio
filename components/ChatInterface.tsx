@@ -507,6 +507,89 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
       return;
     }
 
+    if (import.meta.env.DEV && textToSend === '/debug action-card') {
+      const previewTimestamp = Date.now();
+      const previewToolCallId = crypto.randomUUID();
+      const previewJobId = `preview-job-${previewTimestamp}`;
+      setHistory(prev => [
+        ...prev,
+        {
+          role: 'user',
+          content: textToSend,
+          timestamp: previewTimestamp
+        },
+        {
+          role: 'model',
+          content: language === 'zh'
+            ? '我已经评估过当前结果，并整理好了下一步优化方向。你可以直接预览这张行动卡片。'
+            : 'I reviewed the current result and prepared the next refinement step. You can preview the action card below.',
+          timestamp: previewTimestamp + 1,
+          relatedJobId: previewJobId,
+          toolCalls: [
+            {
+              id: previewToolCallId,
+              toolName: 'generate_image',
+              args: {
+                prompt: language === 'zh'
+                  ? '极简白色香水瓶，柔和窗光，白色石台，保留留白与高级静物摄影感'
+                  : 'Minimal matte white perfume bottle on a white stone pedestal, soft window light, quiet luxury still life photography',
+                model: ImageModel.FLASH_3_1
+              },
+              result: {
+                jobId: previewJobId,
+                toolName: 'generate_image',
+                status: 'requires_action',
+                requiresAction: {
+                  type: 'review_output',
+                  message: language === 'zh'
+                    ? '我已经想好这一版接下来怎么优化了。如果你愿意，我可以继续。'
+                    : 'I already know how I would improve this version next. If you want, I can continue from here.',
+                  payload: {
+                    prompt: language === 'zh'
+                      ? '极简白色香水瓶，柔和窗光，白色石台，保留留白与高级静物摄影感'
+                      : 'Minimal matte white perfume bottle on a white stone pedestal, soft window light, quiet luxury still life photography',
+                    revisedPrompt: language === 'zh'
+                      ? '在保持极简构图和柔和窗光的前提下，进一步提升产品辨识度与瓶身质感，让主体更聚焦。'
+                      : 'Keep the minimal composition and soft window light, but improve subject fidelity and bottle texture so the product reads more clearly.',
+                    reviewPlan: {
+                      summary: 'Keep the current composition and lighting, then improve product clarity and material fidelity.',
+                      preserve: ['composition', 'soft lighting', 'negative space'],
+                      adjust: ['product clarity', 'material fidelity'],
+                      confidence: 'medium',
+                      localized: {
+                        zh: {
+                          summary: '我会保持当前构图和光影氛围，同时继续提升产品辨识度和瓶身材质表现。',
+                          preserve: ['当前构图', '柔和光影', '留白氛围'],
+                          adjust: ['产品辨识度', '瓶身材质感']
+                        },
+                        en: {
+                          summary: 'I will keep the current composition and lighting mood while improving product clarity and material fidelity.',
+                          preserve: ['current composition', 'soft lighting', 'negative space'],
+                          adjust: ['product clarity', 'material fidelity']
+                        }
+                      }
+                    },
+                    messageI18n: {
+                      zh: '我已经想好这一版接下来怎么优化了。如果你愿意，我可以继续。',
+                      en: 'I already know how I would improve this version next. If you want, I can continue from here.'
+                    },
+                    availableActions: [
+                      { type: 'continue_optimization', label: 'Continue' },
+                      { type: 'dismiss', label: 'Keep Current' }
+                    ],
+                    recommendedAction: 'continue_optimization'
+                  }
+                }
+              }
+            }
+          ]
+        }
+      ]);
+      setInput('');
+      if (inputRef.current) inputRef.current.style.height = 'auto';
+      return;
+    }
+
     const sendingProjectId = projectId;
 
     // Merge selectedImages with agentContextAssets (convert to data URLs)
@@ -1254,46 +1337,85 @@ const ChatBubble: React.FC<ChatBubbleProps> = ({
                 : [];
 
               return (
-                <div key={record.id} className="bg-gradient-to-r from-amber-500/10 to-orange-500/10 border border-amber-500/30 rounded-xl p-3 animate-in fade-in">
-                  <div className="flex items-start gap-3">
-                    <div className="w-8 h-8 rounded-lg bg-amber-500/20 flex items-center justify-center shrink-0">
-                      <AlertCircle size={16} className="text-amber-400" />
+                <div
+                  key={record.id}
+                  className="relative overflow-hidden rounded-2xl border border-amber-400/20 bg-[linear-gradient(145deg,rgba(72,38,11,0.92),rgba(29,18,8,0.96))] p-4 shadow-[0_24px_60px_-32px_rgba(251,191,36,0.45)] backdrop-blur-sm animate-in fade-in"
+                >
+                  <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(251,191,36,0.16),transparent_38%)]" />
+                  <div className="pointer-events-none absolute inset-x-4 top-0 h-px bg-gradient-to-r from-transparent via-amber-300/45 to-transparent" />
+                  <div className="relative flex items-start gap-3">
+                    <div className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-amber-300/15 bg-amber-300/10 shadow-inner shadow-amber-200/5">
+                      <AlertCircle size={17} className="text-amber-300" />
                     </div>
-                    <div className="flex-1 min-w-0 space-y-2">
-                      <div>
-                        <div className="text-xs font-semibold text-amber-300">
+                    <div className="flex-1 min-w-0 space-y-3">
+                      <div className="space-y-1.5">
+                        <div className="flex items-center gap-2">
+                          <span className="inline-flex items-center rounded-full border border-amber-300/15 bg-amber-300/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.18em] text-amber-200/80">
+                            {language === 'zh' ? '优化建议' : 'Refinement'}
+                          </span>
+                          <span className="text-[10px] uppercase tracking-[0.16em] text-amber-100/35">
+                            {language === 'zh' ? '已准备好下一步' : 'Next Step Ready'}
+                          </span>
+                        </div>
+                        <div className="text-[15px] font-semibold leading-6 text-amber-100">
                           {language === 'zh' ? '我建议继续优化这一版' : 'I Have a Clear Next Step'}
                         </div>
-                        <div className="text-xs text-gray-300 mt-1 whitespace-pre-wrap break-words">
+                        <div className="text-[13px] leading-6 text-amber-50/88 whitespace-pre-wrap break-words">
                           {localizedMessage || record.result?.requiresAction?.message || record.result?.error || (language === 'zh' ? '我已经评估过当前结果，并整理好了下一步优化方向。你决定是否继续即可。' : 'I have reviewed the current result and prepared the next refinement step. You only need to decide whether to continue.')}
                         </div>
                       </div>
 
                       {(localizedPlan?.summary || reviewPlan?.summary) && (
-                        <div className="rounded-lg bg-black/20 border border-white/5 p-2 space-y-2">
-                          <div className="text-[10px] uppercase tracking-wide text-gray-500">
+                        <div className="rounded-2xl border border-white/6 bg-black/20 p-3.5 space-y-3 shadow-inner shadow-black/10">
+                          <div className="text-[10px] uppercase tracking-[0.18em] text-amber-100/35">
                             {language === 'zh' ? '接下来我会' : "Next I'll Refine"}
                           </div>
-                          <div className="text-xs text-gray-200 whitespace-pre-wrap break-words">
+                          <div className="text-[13px] leading-6 text-gray-100/92 whitespace-pre-wrap break-words">
                             {localizedPlan?.summary || reviewPlan?.summary}
                           </div>
-                          {preserveList.length > 0 && (
-                            <div className="text-[11px] text-gray-400">
-                              {language === 'zh' ? '保持' : 'Keep'}: {preserveList.join(', ')}
-                            </div>
-                          )}
-                          {adjustList.length > 0 && (
-                            <div className="text-[11px] text-gray-400">
-                              {language === 'zh' ? '重点优化' : 'Improve'}: {adjustList.join(', ')}
-                            </div>
-                          )}
+                          <div className="grid gap-2 sm:grid-cols-2">
+                            {preserveList.length > 0 && (
+                              <div className="rounded-xl border border-emerald-300/10 bg-emerald-300/5 px-3 py-2.5">
+                                <div className="mb-2 text-[10px] uppercase tracking-[0.16em] text-emerald-200/55">
+                                  {language === 'zh' ? '保持' : 'Keep'}
+                                </div>
+                                <div className="flex flex-wrap gap-1.5">
+                                  {preserveList.map((item, index) => (
+                                    <span
+                                      key={`${record.id}-preserve-${index}`}
+                                      className="rounded-full border border-emerald-300/10 bg-emerald-300/8 px-2 py-1 text-[11px] leading-none text-emerald-50/85"
+                                    >
+                                      {item}
+                                    </span>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                            {adjustList.length > 0 && (
+                              <div className="rounded-xl border border-amber-300/10 bg-amber-300/5 px-3 py-2.5">
+                                <div className="mb-2 text-[10px] uppercase tracking-[0.16em] text-amber-100/55">
+                                  {language === 'zh' ? '重点优化' : 'Improve'}
+                                </div>
+                                <div className="flex flex-wrap gap-1.5">
+                                  {adjustList.map((item, index) => (
+                                    <span
+                                      key={`${record.id}-adjust-${index}`}
+                                      className="rounded-full border border-amber-300/10 bg-amber-300/8 px-2 py-1 text-[11px] leading-none text-amber-50/90"
+                                    >
+                                      {item}
+                                    </span>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
                         </div>
                       )}
 
                       {(localizedWarnings || warnings).length > 0 && (
-                        <div className="space-y-1">
+                        <div className="rounded-xl border border-amber-200/8 bg-black/15 px-3 py-2 space-y-1.5">
                           {(localizedWarnings || warnings).map((warning, index) => (
-                            <div key={index} className="text-[11px] text-amber-100/80">
+                            <div key={index} className="text-[11px] leading-5 text-amber-100/78">
                               • {warning}
                             </div>
                           ))}
@@ -1305,7 +1427,7 @@ const ChatBubble: React.FC<ChatBubbleProps> = ({
                           <button
                             onClick={() => onApplyActionCard(record)}
                             disabled={!!isApplyingAction}
-                            className="px-3 py-1.5 rounded-lg bg-amber-500 text-black text-xs font-semibold hover:bg-amber-400 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                            className="min-w-[108px] rounded-xl bg-amber-300 px-4 py-2.5 text-[12px] font-semibold text-[#241504] shadow-[0_10px_30px_-16px_rgba(251,191,36,0.8)] transition-all hover:-translate-y-0.5 hover:bg-amber-200 disabled:translate-y-0 disabled:opacity-50 disabled:cursor-not-allowed"
                           >
                             {isApplyingAction
                               ? (language === 'zh' ? '正在继续优化...' : 'Continuing...')
@@ -1315,7 +1437,7 @@ const ChatBubble: React.FC<ChatBubbleProps> = ({
                         {onDismissActionCard && (
                           <button
                             onClick={() => onDismissActionCard(record.id)}
-                            className="px-3 py-1.5 rounded-lg border border-white/10 text-gray-300 text-xs hover:bg-white/5 transition-colors"
+                            className="rounded-xl border border-white/10 bg-white/[0.03] px-4 py-2.5 text-[12px] font-medium text-gray-200 transition-colors hover:bg-white/[0.06]"
                           >
                             {language === 'zh' ? '保留当前结果' : 'Keep Current'}
                           </button>
