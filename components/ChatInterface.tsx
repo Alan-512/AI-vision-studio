@@ -658,7 +658,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         toolName: toolCall.toolName,
         args: {
           ...(toolCall.args || {}),
-          prompt: suggestedPrompt
+          prompt: suggestedPrompt,
+          resume_job_id: toolCall.result?.jobId,
+          requires_action_type: toolCall.result?.requiresAction?.type
         }
       });
     } catch (error) {

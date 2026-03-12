@@ -17,7 +17,7 @@ import {
     initDB, loadProjects, saveProject, saveAsset, loadAssets, updateAsset, updateProject,
     deleteProjectFromDB, softDeleteAssetInDB, restoreAssetInDB,
     permanentlyDeleteAssetFromDB, bulkPermanentlyDeleteAssets, bulkSoftDeleteAssets, recoverOrphanedProjects,
-    releaseBlobUrl, saveTask, loadTasks, deleteTask, loadAgentJobs, saveAgentJob
+    releaseBlobUrl, saveTask, loadTasks, deleteTask, loadAgentJobs, loadAgentJobsByProject, saveAgentJob
 } from './services/storageService';
 import { runMemoryExtractionTask } from './services/memoryExtractor';
 import { runConsolidation } from './services/memoryConsolidator';
@@ -199,6 +199,22 @@ const createRevisionStep = (stepId: string, review: LocalReviewResult, previousP
         previousPrompt,
         revisionReason: review.revisionReason || review.summary,
         revisedPrompt: review.revisedPrompt || previousPrompt
+    }
+});
+
+const createResumeActionStep = (stepId: string, jobId: string, prompt: string, actionType?: string): JobStep => ({
+    id: stepId,
+    kind: 'system',
+    name: 'resume_requires_action',
+    status: 'success',
+    input: {
+        jobId,
+        actionType: actionType || 'resume_job',
+        prompt
+    },
+    output: {
+        resumedAt: Date.now(),
+        prompt
     }
 });
 
@@ -1062,7 +1078,9 @@ export function App() {
                     historyOverride: chatHistory,
                     useParamsAsBase: false, // CLEAN ISOLATION: Don't merge with params config page
                     jobSource: 'chat',
-                    toolCall: action
+                    toolCall: action,
+                    resumeJobId: typeof toolArgs.resume_job_id === 'string' && toolArgs.resume_job_id.trim() ? toolArgs.resume_job_id : undefined,
+                    resumeActionType: typeof toolArgs.requires_action_type === 'string' ? toolArgs.requires_action_type : undefined
                 });
                 const primaryResult = toolResults[0] || createToolErrorResult('Tool execution produced no result.');
                 upsertLastModelToolCall(toolCallId, existing => ({
@@ -1152,9 +1170,11 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
             useParamsAsBase?: boolean; // Default false for isolation
             jobSource?: AgentJob['source'];
             toolCall?: AgentAction;
+            resumeJobId?: string;
+            resumeActionType?: string;
         }
     ): Promise<AgentToolResult[]> => {
-        const { modeOverride, onSuccess, historyOverride, useParamsAsBase = false, jobSource, toolCall } = options || {};
+        const { modeOverride, onSuccess, historyOverride, useParamsAsBase = false, jobSource, toolCall, resumeJobId, resumeActionType } = options || {};
 
         // RESUME AUDIO CONTEXT ON USER CLICK: Critical for browser audio policies
         const audioCtx = getAudioContext();
@@ -1198,28 +1218,51 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
 
         const launchTask = async (_index: number): Promise<AgentToolResult> => {
             const taskId = crypto.randomUUID();
-            const jobId = taskId;
+            const jobId = resumeJobId || taskId;
             const stepId = crypto.randomUUID();
+            const resumeStepId = resumeJobId ? crypto.randomUUID() : undefined;
             const controller = new AbortController();
             taskControllers.current[taskId] = controller;
+            const existingJob = resumeJobId
+                ? (await loadAgentJobsByProject(currentProjectId)).find(job => job.id === resumeJobId)
+                : undefined;
+            const previousTaskIds = resumeJobId
+                ? tasks.filter(task => task.jobId === jobId).map(task => task.id)
+                : [];
             const newTask: BackgroundTask = {
                 id: taskId, projectId: currentProjectId, projectName: projects.find(p => p.id === currentProjectId)?.name || 'Project',
                 type: currentMode === AppMode.IMAGE ? 'IMAGE' : 'VIDEO', status: 'QUEUED', startTime: Date.now(), prompt: activeParams.prompt,
                 jobId
             };
-            let agentJob: AgentJob = {
-                id: jobId,
-                projectId: currentProjectId,
-                type: currentMode === AppMode.IMAGE ? 'IMAGE_GENERATION' : 'VIDEO_GENERATION',
-                status: 'queued',
-                createdAt: Date.now(),
-                updatedAt: Date.now(),
-                source: resolvedJobSource,
-                triggerMessageTimestamp,
-                currentStepId: undefined,
-                steps: [createGenerationStep(stepId, currentMode, activeParams, toolCall)],
-                artifacts: []
-            };
+            let agentJob: AgentJob = existingJob
+                ? {
+                    ...existingJob,
+                    updatedAt: Date.now(),
+                    status: 'queued',
+                    source: existingJob.source,
+                    triggerMessageTimestamp: triggerMessageTimestamp ?? existingJob.triggerMessageTimestamp,
+                    currentStepId: undefined,
+                    lastError: undefined,
+                    requiresAction: undefined,
+                    steps: [
+                        ...existingJob.steps,
+                        ...(resumeStepId ? [createResumeActionStep(resumeStepId, jobId, activeParams.prompt, resumeActionType)] : []),
+                        createGenerationStep(stepId, currentMode, activeParams, toolCall)
+                    ]
+                }
+                : {
+                    id: jobId,
+                    projectId: currentProjectId,
+                    type: currentMode === AppMode.IMAGE ? 'IMAGE_GENERATION' : 'VIDEO_GENERATION',
+                    status: 'queued',
+                    createdAt: Date.now(),
+                    updatedAt: Date.now(),
+                    source: resolvedJobSource,
+                    triggerMessageTimestamp,
+                    currentStepId: undefined,
+                    steps: [createGenerationStep(stepId, currentMode, activeParams, toolCall)],
+                    artifacts: []
+                };
             const persistJob = async (updates: Partial<AgentJob>) => {
                 agentJob = {
                     ...agentJob,
@@ -1228,7 +1271,10 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
                 };
                 await saveAgentJob(agentJob);
             };
-            setTasks(prev => [...prev, newTask]);
+            setTasks(prev => [...prev.filter(task => task.jobId !== jobId), newTask]);
+            previousTaskIds.forEach(previousTaskId => {
+                deleteTask(previousTaskId).catch(console.error);
+            });
             saveTask(newTask); // Persist to IndexedDB
             saveAgentJob(agentJob).catch(console.error);
 
