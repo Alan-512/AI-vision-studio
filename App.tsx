@@ -134,7 +134,11 @@ const createGenerationStep = (
     }
 });
 
-const buildGeneratedArtifact = (asset: AssetItem, stepId: string): JobArtifact => ({
+const buildGeneratedArtifact = (
+    asset: AssetItem,
+    stepId: string,
+    overrides?: Partial<JobArtifact>
+): JobArtifact => ({
     id: asset.id,
     type: asset.type === 'IMAGE' ? 'image' : 'video',
     origin: 'generated',
@@ -143,7 +147,11 @@ const buildGeneratedArtifact = (asset: AssetItem, stepId: string): JobArtifact =
     mimeType: asset.type === 'IMAGE' && asset.url.startsWith('data:') ? asset.url.match(/^data:(.+);base64,/)?.[1] : undefined,
     createdAt: asset.createdAt,
     relatedStepId: stepId,
-    metadata: asset.metadata
+    metadata: {
+        ...asset.metadata,
+        runtimeKey: `generated:${asset.id}`
+    },
+    ...overrides
 });
 
 type SelectedReferenceRecord = {
@@ -1173,10 +1181,40 @@ export function App() {
                 }
                 return null;
             };
+            const pushSelectedReference = (record: SelectedReferenceRecord) => {
+                const exists = selectedReferences.some(existing =>
+                    existing.asset.id === record.asset.id ||
+                    existing.asset.data.slice(0, 80) === record.asset.data.slice(0, 80)
+                );
+                if (!exists) {
+                    selectedReferences.push(record);
+                }
+            };
+            const projectAgentJobs = await loadAgentJobsByProject(activeProjectId);
+            const artifactReferenceCandidates = [...projectAgentJobs]
+                .sort((a, b) => b.updatedAt - a.updatedAt)
+                .flatMap(job => job.artifacts.map(artifact => ({ artifact, job })))
+                .filter(({ artifact }) => artifact.role === 'reference' || artifact.origin === 'generated')
+                .map(({ artifact }) => {
+                    const asset = artifactToSmartAsset(artifact);
+                    if (!asset) return null;
+                    const candidateIds = new Set<string>();
+                    if (typeof artifact.id === 'string') candidateIds.add(artifact.id);
+                    if (typeof artifact.metadata?.runtimeKey === 'string') candidateIds.add(artifact.metadata.runtimeKey);
+                    if (typeof artifact.metadata?.sourceImageId === 'string') candidateIds.add(artifact.metadata.sourceImageId);
+                    return {
+                        candidateIds,
+                        record: {
+                            asset,
+                            sourceRole: artifact.origin === 'generated' ? 'model' as const : ((artifact.metadata?.sourceRole === 'model' ? 'model' : 'user') as const),
+                            messageTimestamp: artifact.relatedMessageTimestamp
+                        }
+                    };
+                })
+                .filter((candidate): candidate is { candidateIds: Set<string>; record: SelectedReferenceRecord } => candidate !== null);
 
             // Get all messages with images from chat history
             const messagesWithImages = chatHistory.filter(m => m.image || (m.images && m.images.length > 0));
-            const projectAgentJobs = await loadAgentJobsByProject(activeProjectId);
             const latestSearchProgress = [...chatHistory]
                 .reverse()
                 .find(m => m.role === 'model' && m.searchProgress?.status === 'complete')
@@ -1189,6 +1227,12 @@ export function App() {
 
             if (requestedIds.length > 0) {
                 // EXPLICIT ID TARGETING
+                artifactReferenceCandidates.forEach(candidate => {
+                    if (requestedIds.some(id => candidate.candidateIds.has(id))) {
+                        pushSelectedReference(candidate.record);
+                    }
+                });
+
                 const allAvailableImages = messagesWithImages.flatMap(m => {
                     const prefix = m.role === 'user' ? 'user' : 'generated';
                     return extractImages(m).map((img, idx) => ({
@@ -1202,7 +1246,7 @@ export function App() {
                 allAvailableImages.forEach(({ id, img, sourceRole, messageTimestamp }) => {
                     if (requestedIds.includes(id)) {
                         const asset = toSmartAsset(img, id);
-                        if (asset) selectedReferences.push({ asset, sourceRole, messageTimestamp });
+                        if (asset) pushSelectedReference({ asset, sourceRole, messageTimestamp });
                     }
                 });
             } else if (requestedIds.length === 0 && Array.isArray(toolArgs.reference_image_ids)) {
@@ -1218,7 +1262,7 @@ export function App() {
                         .find(artifact => artifact.origin === 'generated' && (artifact.role === 'final' || artifact.role === 'candidate'));
                     const latestGeneratedAsset = latestGeneratedArtifact ? artifactToSmartAsset(latestGeneratedArtifact) : null;
                     if (latestGeneratedArtifact && latestGeneratedAsset) {
-                        selectedReferences.push({
+                        pushSelectedReference({
                             asset: latestGeneratedAsset,
                             sourceRole: 'model',
                             messageTimestamp: latestGeneratedArtifact.relatedMessageTimestamp
@@ -1228,7 +1272,7 @@ export function App() {
                         if (lastGenerated) {
                             const images = extractImages(lastGenerated);
                             const asset = toSmartAsset(images[images.length - 1], `generated-${lastGenerated.timestamp}-0`);
-                            if (asset) selectedReferences.push({ asset, sourceRole: 'model', messageTimestamp: lastGenerated.timestamp });
+                            if (asset) pushSelectedReference({ asset, sourceRole: 'model', messageTimestamp: lastGenerated.timestamp });
                         }
                     }
                 } else if (hasUserUploadedImages) {
@@ -1236,7 +1280,7 @@ export function App() {
                     if (lastUserMsg) {
                         const images = extractImages(lastUserMsg);
                         const asset = toSmartAsset(images[images.length - 1], `user-${lastUserMsg.timestamp}-0`);
-                        if (asset) selectedReferences.push({ asset, sourceRole: 'user', messageTimestamp: lastUserMsg.timestamp });
+                        if (asset) pushSelectedReference({ asset, sourceRole: 'user', messageTimestamp: lastUserMsg.timestamp });
                     } else {
                         const latestReferenceArtifact = [...projectAgentJobs]
                             .sort((a, b) => b.updatedAt - a.updatedAt)
@@ -1244,7 +1288,7 @@ export function App() {
                             .find(artifact => artifact.role === 'reference');
                         const latestReferenceAsset = latestReferenceArtifact ? artifactToSmartAsset(latestReferenceArtifact) : null;
                         if (latestReferenceArtifact && latestReferenceAsset) {
-                            selectedReferences.push({
+                            pushSelectedReference({
                                 asset: latestReferenceAsset,
                                 sourceRole: 'user',
                                 messageTimestamp: latestReferenceArtifact.relatedMessageTimestamp
@@ -1258,7 +1302,7 @@ export function App() {
                         .find(artifact => artifact.role === 'reference');
                     const latestReferenceAsset = latestReferenceArtifact ? artifactToSmartAsset(latestReferenceArtifact) : null;
                     if (latestReferenceArtifact && latestReferenceAsset) {
-                        selectedReferences.push({
+                        pushSelectedReference({
                             asset: latestReferenceAsset,
                             sourceRole: 'user',
                             messageTimestamp: latestReferenceArtifact.relatedMessageTimestamp
@@ -1270,7 +1314,7 @@ export function App() {
                         } else {
                             const images = extractImages(lastUserMsg);
                             const asset = toSmartAsset(images[images.length - 1], `user-${lastUserMsg.timestamp}-0`);
-                            if (asset) selectedReferences.push({ asset, sourceRole: 'user', messageTimestamp: lastUserMsg.timestamp });
+                            if (asset) pushSelectedReference({ asset, sourceRole: 'user', messageTimestamp: lastUserMsg.timestamp });
                         }
                     }
                 }
@@ -1831,7 +1875,14 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
                         endTime: revisedGenerationEndedAt,
                         output: { assetId: revisedAsset.id, assetType: revisedAsset.type }
                     };
-                    const revisedGeneratedArtifact = buildGeneratedArtifact(revisedAsset, revisedGenerationStepId);
+                    const revisedGeneratedArtifact = buildGeneratedArtifact(revisedAsset, revisedGenerationStepId, {
+                        parentArtifactId: generatedArtifact.id,
+                        metadata: {
+                            ...(revisedAsset.metadata || {}),
+                            runtimeKey: `generated:${revisedAsset.id}`,
+                            derivedFrom: generatedArtifact.id
+                        }
+                    });
                     const secondReviewStepId = crypto.randomUUID();
                     const secondReviewStep = {
                         ...createReviewStep(secondReviewStepId, {
