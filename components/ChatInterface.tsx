@@ -626,13 +626,6 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
     return '';
   };
 
-  const handleEditActionCard = (toolCall: ToolCallRecord) => {
-    const suggestedPrompt = resolveSuggestedPrompt(toolCall);
-    if (!suggestedPrompt) return;
-    setInput(suggestedPrompt);
-    inputRef.current?.focus();
-  };
-
   const handleDismissActionCard = (toolCallId: string) => {
     setDismissedActionCardIds(prev => ({ ...prev, [toolCallId]: true }));
   };
@@ -641,6 +634,11 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
     if (toolCall.toolName !== 'generate_image') return;
     const suggestedPrompt = resolveSuggestedPrompt(toolCall);
     if (!suggestedPrompt) return;
+    const payload = toolCall.result?.requiresAction?.payload as Record<string, unknown> | undefined;
+    const reviewPlan = payload?.reviewPlan as { summary?: string; localized?: { zh?: { summary?: string }; en?: { summary?: string } } } | undefined;
+    const localizedPlanSummary = language === 'zh'
+      ? reviewPlan?.localized?.zh?.summary
+      : reviewPlan?.localized?.en?.summary;
     setApplyingActionCardId(toolCall.id);
     setDismissedActionCardIds(prev => ({ ...prev, [toolCall.id]: true }));
     setHistory(prev => [
@@ -648,7 +646,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
       {
         role: 'user',
         isSystem: true,
-        content: `[SYSTEM_ACTION]: Applying suggested revision for the current image job.\nPrompt:\n${suggestedPrompt}`,
+        content: language === 'zh'
+          ? `继续按当前优化方向处理这一版。${localizedPlanSummary ? `\n${localizedPlanSummary}` : ''}`
+          : `Continuing with the current refinement plan.${localizedPlanSummary ? `\n${localizedPlanSummary}` : ''}`,
         timestamp: Date.now()
       }
     ]);
@@ -740,7 +740,6 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                   onToolCallToggle={isLastAiMessage ? () => setToolCallExpanded(!toolCallExpanded) : undefined}
                   dismissedActionCardIds={dismissedActionCardIds}
                   onApplyActionCard={handleApplyActionCard}
-                  onEditActionCard={handleEditActionCard}
                   onDismissActionCard={handleDismissActionCard}
                   isApplyingAction={applyingActionCardId === msg.toolCalls?.find(record => record.result?.status === 'requires_action')?.id}
                 />
@@ -938,7 +937,6 @@ interface ChatBubbleProps {
   onToolCallToggle?: () => void;
   dismissedActionCardIds?: Record<string, boolean>;
   onApplyActionCard?: (toolCall: ToolCallRecord) => void;
-  onEditActionCard?: (toolCall: ToolCallRecord) => void;
   onDismissActionCard?: (toolCallId: string) => void;
   isApplyingAction?: boolean;
 }
@@ -954,7 +952,6 @@ const ChatBubble: React.FC<ChatBubbleProps> = ({
   onToolCallToggle,
   dismissedActionCardIds,
   onApplyActionCard,
-  onEditActionCard,
   onDismissActionCard,
   isApplyingAction
 }) => {
@@ -1207,16 +1204,41 @@ const ChatBubble: React.FC<ChatBubbleProps> = ({
           <div className="w-full max-w-md space-y-2">
             {actionRequiredToolCalls.map((record) => {
               const payload = record.result?.requiresAction?.payload as Record<string, unknown> | undefined;
-              const suggestedPrompt =
-                (typeof payload?.revisedPrompt === 'string' && payload.revisedPrompt) ||
-                (typeof record.result?.metadata?.revisedPrompt === 'string' && String(record.result.metadata.revisedPrompt)) ||
-                (typeof payload?.prompt === 'string' && payload.prompt) ||
-                (typeof record.args?.prompt === 'string' && record.args.prompt) ||
-                '';
+              const reviewPlan = payload?.reviewPlan as {
+                summary?: string;
+                preserve?: string[];
+                adjust?: string[];
+                localized?: {
+                  zh?: { summary?: string; preserve?: string[]; adjust?: string[] };
+                  en?: { summary?: string; preserve?: string[]; adjust?: string[] };
+                };
+              } | undefined;
+              const localizedMessage = (() => {
+                const messageI18n = payload?.messageI18n as { zh?: string; en?: string } | undefined;
+                return language === 'zh' ? messageI18n?.zh : messageI18n?.en;
+              })();
+              const localizedWarnings = (() => {
+                const warningsI18n = payload?.warningsI18n as { zh?: string[]; en?: string[] } | undefined;
+                const localized = language === 'zh' ? warningsI18n?.zh : warningsI18n?.en;
+                return Array.isArray(localized)
+                  ? localized.filter((warning): warning is string => typeof warning === 'string')
+                  : null;
+              })();
               const warnings = Array.isArray(payload?.warnings)
                 ? payload.warnings.filter((warning): warning is string => typeof warning === 'string')
                 : [];
-              const canApplyRevision = record.toolName === 'generate_image' && !!suggestedPrompt;
+              const canApplyRevision = record.toolName === 'generate_image';
+              const localizedPlan = language === 'zh' ? reviewPlan?.localized?.zh : reviewPlan?.localized?.en;
+              const preserveList = Array.isArray(localizedPlan?.preserve)
+                ? localizedPlan!.preserve.filter((item): item is string => typeof item === 'string')
+                : Array.isArray(reviewPlan?.preserve)
+                ? reviewPlan!.preserve.filter((item): item is string => typeof item === 'string')
+                : [];
+              const adjustList = Array.isArray(localizedPlan?.adjust)
+                ? localizedPlan!.adjust.filter((item): item is string => typeof item === 'string')
+                : Array.isArray(reviewPlan?.adjust)
+                ? reviewPlan!.adjust.filter((item): item is string => typeof item === 'string')
+                : [];
 
               return (
                 <div key={record.id} className="bg-gradient-to-r from-amber-500/10 to-orange-500/10 border border-amber-500/30 rounded-xl p-3 animate-in fade-in">
@@ -1227,27 +1249,37 @@ const ChatBubble: React.FC<ChatBubbleProps> = ({
                     <div className="flex-1 min-w-0 space-y-2">
                       <div>
                         <div className="text-xs font-semibold text-amber-300">
-                          {language === 'zh' ? '需要你的确认' : 'Action Required'}
+                          {language === 'zh' ? '我建议继续优化这一版' : 'I Have a Clear Next Step'}
                         </div>
                         <div className="text-xs text-gray-300 mt-1 whitespace-pre-wrap break-words">
-                          {record.result?.requiresAction?.message || record.result?.error || (language === 'zh' ? '当前任务需要你决定下一步。' : 'This job needs your decision before continuing.')}
+                          {localizedMessage || record.result?.requiresAction?.message || record.result?.error || (language === 'zh' ? '我已经评估过当前结果，并整理好了下一步优化方向。你决定是否继续即可。' : 'I have reviewed the current result and prepared the next refinement step. You only need to decide whether to continue.')}
                         </div>
                       </div>
 
-                      {suggestedPrompt && (
-                        <div className="rounded-lg bg-black/20 border border-white/5 p-2">
-                          <div className="text-[10px] uppercase tracking-wide text-gray-500 mb-1">
-                            {language === 'zh' ? '建议提示词' : 'Suggested Prompt'}
+                      {(localizedPlan?.summary || reviewPlan?.summary) && (
+                        <div className="rounded-lg bg-black/20 border border-white/5 p-2 space-y-2">
+                          <div className="text-[10px] uppercase tracking-wide text-gray-500">
+                            {language === 'zh' ? '接下来我会' : "Next I'll Refine"}
                           </div>
-                          <div className="text-xs text-gray-300 whitespace-pre-wrap break-words max-h-24 overflow-y-auto custom-scrollbar">
-                            {suggestedPrompt}
+                          <div className="text-xs text-gray-200 whitespace-pre-wrap break-words">
+                            {localizedPlan?.summary || reviewPlan?.summary}
                           </div>
+                          {preserveList.length > 0 && (
+                            <div className="text-[11px] text-gray-400">
+                              {language === 'zh' ? '保持' : 'Keep'}: {preserveList.join(', ')}
+                            </div>
+                          )}
+                          {adjustList.length > 0 && (
+                            <div className="text-[11px] text-gray-400">
+                              {language === 'zh' ? '重点优化' : 'Improve'}: {adjustList.join(', ')}
+                            </div>
+                          )}
                         </div>
                       )}
 
-                      {warnings.length > 0 && (
+                      {(localizedWarnings || warnings).length > 0 && (
                         <div className="space-y-1">
-                          {warnings.map((warning, index) => (
+                          {(localizedWarnings || warnings).map((warning, index) => (
                             <div key={index} className="text-[11px] text-amber-100/80">
                               • {warning}
                             </div>
@@ -1263,16 +1295,8 @@ const ChatBubble: React.FC<ChatBubbleProps> = ({
                             className="px-3 py-1.5 rounded-lg bg-amber-500 text-black text-xs font-semibold hover:bg-amber-400 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                           >
                             {isApplyingAction
-                              ? (language === 'zh' ? '处理中...' : 'Applying...')
-                              : (language === 'zh' ? '继续修订' : 'Apply Revision')}
-                          </button>
-                        )}
-                        {canApplyRevision && onEditActionCard && (
-                          <button
-                            onClick={() => onEditActionCard(record)}
-                            className="px-3 py-1.5 rounded-lg border border-amber-500/30 text-amber-200 text-xs hover:bg-amber-500/10 transition-colors"
-                          >
-                            {language === 'zh' ? '编辑提示词' : 'Edit Prompt'}
+                              ? (language === 'zh' ? '正在继续优化...' : 'Continuing...')
+                              : (language === 'zh' ? '继续优化' : 'Continue')}
                           </button>
                         )}
                         {onDismissActionCard && (
@@ -1280,7 +1304,7 @@ const ChatBubble: React.FC<ChatBubbleProps> = ({
                             onClick={() => onDismissActionCard(record.id)}
                             className="px-3 py-1.5 rounded-lg border border-white/10 text-gray-300 text-xs hover:bg-white/5 transition-colors"
                           >
-                            {language === 'zh' ? '忽略' : 'Dismiss'}
+                            {language === 'zh' ? '保留当前结果' : 'Keep Current'}
                           </button>
                         )}
                       </div>

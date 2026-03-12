@@ -147,6 +147,11 @@ const buildGeneratedArtifact = (asset: AssetItem, stepId: string): JobArtifact =
 });
 
 type LocalReviewDecision = 'accept' | 'auto_revise' | 'requires_action';
+type BilingualText = { zh: string; en: string };
+type BilingualPlan = {
+    zh: { summary: string; preserve: string[]; adjust: string[] };
+    en: { summary: string; preserve: string[]; adjust: string[] };
+};
 
 type LocalReviewResult = {
     decision: LocalReviewDecision;
@@ -154,6 +159,13 @@ type LocalReviewResult = {
     warnings: string[];
     revisedPrompt?: string;
     revisionReason?: string;
+    reviewPlan?: {
+        summary: string;
+        preserve: string[];
+        adjust: string[];
+        confidence: 'low' | 'medium' | 'high';
+        localized?: BilingualPlan;
+    };
     requiresAction?: {
         type: string;
         message: string;
@@ -232,25 +244,96 @@ const buildRevisionArtifact = (artifactId: string, stepId: string, review: Local
     }
 });
 
+const buildOptimizationPlan = (overrides?: Partial<LocalReviewResult['reviewPlan']>): NonNullable<LocalReviewResult['reviewPlan']> => ({
+    summary: overrides?.summary || 'I can continue optimizing the current result while preserving the overall composition and lighting.',
+    preserve: overrides?.preserve || ['composition', 'lighting', 'overall visual direction'],
+    adjust: overrides?.adjust || ['subject fidelity', 'product clarity'],
+    confidence: overrides?.confidence || 'medium',
+    localized: overrides?.localized || {
+        zh: {
+            summary: '我可以继续优化当前结果，同时保持整体构图和光影方向不变。',
+            preserve: ['构图', '光影', '整体视觉方向'],
+            adjust: ['主体还原度', '产品清晰度']
+        },
+        en: {
+            summary: 'I can continue optimizing the current result while preserving the overall composition and lighting.',
+            preserve: ['composition', 'lighting', 'overall visual direction'],
+            adjust: ['subject fidelity', 'product clarity']
+        }
+    }
+});
+
+const buildRequiresActionPayload = (
+    prompt: string,
+    review: Pick<LocalReviewResult, 'summary' | 'warnings' | 'revisedPrompt' | 'reviewPlan'>,
+    actionType: string,
+    i18n?: {
+        message?: BilingualText;
+        warnings?: { zh: string[]; en: string[] };
+    },
+    extra?: Record<string, unknown>
+): Record<string, unknown> => ({
+    prompt,
+    revisedPrompt: review.revisedPrompt,
+    warnings: review.warnings,
+    reviewPlan: review.reviewPlan,
+    messageI18n: i18n?.message,
+    warningsI18n: i18n?.warnings,
+    availableActions: [
+        { type: 'continue_optimization', label: 'Continue' },
+        { type: 'dismiss', label: 'Keep Current' }
+    ],
+    recommendedAction: 'continue_optimization',
+    ...extra
+});
+
 const reviewGeneratedAsset = (asset: AssetItem, prompt: string): LocalReviewResult => {
     const warnings: string[] = [];
 
     if (!asset.url) {
+        const reviewPlan = buildOptimizationPlan({
+            summary: 'The render payload is incomplete. I can retry generation while preserving the current creative direction.',
+            preserve: ['creative direction', 'composition intent'],
+            adjust: ['render output validity'],
+            confidence: asset.type === 'IMAGE' ? 'medium' : 'low',
+            localized: {
+                zh: {
+                    summary: '当前渲染结果不完整。我可以保留现有创意方向并重试生成。',
+                    preserve: ['创意方向', '构图意图'],
+                    adjust: ['渲染输出完整性']
+                },
+                en: {
+                    summary: 'The render payload is incomplete. I can retry generation while preserving the current creative direction.',
+                    preserve: ['creative direction', 'composition intent'],
+                    adjust: ['render output validity']
+                }
+            }
+        });
         return {
             decision: asset.type === 'IMAGE' ? 'auto_revise' : 'requires_action',
             summary: 'Generated asset is missing a URL and cannot be finalized.',
             warnings,
             revisionReason: 'The generated image payload did not contain a renderable URL.',
             revisedPrompt: `${prompt.trim()}\n\nRevision note: regenerate the same scene and ensure a valid renderable image output is returned.`,
+            reviewPlan,
             requiresAction: asset.type === 'IMAGE'
                 ? undefined
                 : {
                     type: 'inspect_generation_payload',
-                    message: 'The generated video payload is incomplete and needs manual inspection.',
-                    payload: {
-                        prompt,
+                    message: 'This result is incomplete. I have a recovery path, and you can decide whether I should continue.',
+                    payload: buildRequiresActionPayload(prompt, {
+                        summary: 'The result payload is incomplete. I can keep the intended direction, but this case needs a manual decision before I continue.',
+                        warnings,
+                        revisedPrompt: undefined,
+                        reviewPlan
+                    }, 'inspect_generation_payload', {
+                        message: {
+                            zh: '这次结果输出不完整。我已经想好恢复方案，你决定是否让我继续即可。',
+                            en: 'This result is incomplete. I have a recovery path, and you can decide whether I should continue.'
+                        }
+                    }, {
                         assetType: asset.type
-                    }
+                    })
                 }
         };
     }
@@ -264,7 +347,30 @@ const reviewGeneratedAsset = (asset: AssetItem, prompt: string): LocalReviewResu
         summary: warnings.length > 0
             ? 'Generated asset passed runtime review with warnings.'
             : 'Generated asset passed runtime review.',
-        warnings
+        warnings,
+        reviewPlan: buildOptimizationPlan({
+            summary: warnings.length > 0
+                ? 'The result is usable. I would preserve the overall scene and only make minor technical cleanups if you ask.'
+                : 'The result is complete and does not need manual intervention.',
+            adjust: warnings.length > 0 ? ['minor technical cleanup'] : ['none'],
+            confidence: warnings.length > 0 ? 'medium' : 'high',
+            localized: {
+                zh: {
+                    summary: warnings.length > 0
+                        ? '当前结果可以使用。如果你需要，我会保持整体场景不变，只做轻微技术优化。'
+                        : '当前结果已经完整，不需要额外人工介入。',
+                    preserve: ['整体场景', '视觉方向'],
+                    adjust: warnings.length > 0 ? ['轻微技术优化'] : ['无需额外调整']
+                },
+                en: {
+                    summary: warnings.length > 0
+                        ? 'The result is usable. I would preserve the overall scene and only make minor technical cleanups if you ask.'
+                        : 'The result is complete and does not need manual intervention.',
+                    preserve: ['overall scene', 'visual direction'],
+                    adjust: warnings.length > 0 ? ['minor technical cleanup'] : ['none']
+                }
+            }
+        })
     };
 };
 
@@ -1589,11 +1695,36 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
                         requiresAction: secondReview.decision === 'requires_action'
                             ? (secondReview.requiresAction || {
                                 type: 'refine_prompt',
-                                message: secondReview.summary,
-                                payload: {
+                                message: 'I already know how I would improve this version next. If you want, I can continue from here.',
+                                payload: buildRequiresActionPayload(revisedPrompt, {
+                                    summary: secondReview.summary,
+                                    warnings: secondReview.warnings,
                                     revisedPrompt,
-                                    warnings: secondReview.warnings
-                                }
+                                    reviewPlan: secondReview.reviewPlan || buildOptimizationPlan({
+                                        summary: 'I can keep the current composition and continue improving the subject result.',
+                                        adjust: ['subject fidelity'],
+                                        confidence: 'medium',
+                                        localized: {
+                                            zh: {
+                                                summary: '我可以保留当前构图，继续优化主体结果。',
+                                                preserve: ['当前构图', '现有光影'],
+                                                adjust: ['主体还原度']
+                                            },
+                                            en: {
+                                                summary: 'I can keep the current composition and continue improving the subject result.',
+                                                preserve: ['current composition', 'existing lighting'],
+                                                adjust: ['subject fidelity']
+                                            }
+                                        }
+                                    })
+                                }, 'refine_prompt', {
+                                    message: {
+                                        zh: '我已经想好这一版接下来怎么优化了。如果你愿意，我可以继续。',
+                                        en: 'I already know how I would improve this version next. If you want, I can continue from here.'
+                                    }
+                                }, {
+                                    latestAssetId: revisedAsset.id
+                                })
                             })
                             : undefined,
                         metadata: {
@@ -1620,18 +1751,43 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
                             lastError: secondReview.summary,
                             requiresAction: revisedToolResult.requiresAction || {
                                 type: 'refine_prompt',
-                                message: secondReview.summary,
-                                payload: {
+                                message: 'I already know how I would improve this version next. If you want, I can continue from here.',
+                                payload: buildRequiresActionPayload(revisedPrompt, {
+                                    summary: secondReview.summary,
+                                    warnings: secondReview.warnings,
                                     revisedPrompt,
-                                    warnings: secondReview.warnings
-                                }
+                                    reviewPlan: secondReview.reviewPlan || buildOptimizationPlan({
+                                        summary: 'I can keep the current composition and continue improving the subject result.',
+                                        adjust: ['subject fidelity'],
+                                        confidence: 'medium',
+                                        localized: {
+                                            zh: {
+                                                summary: '我可以保留当前构图，继续优化主体结果。',
+                                                preserve: ['当前构图', '现有光影'],
+                                                adjust: ['主体还原度']
+                                            },
+                                            en: {
+                                                summary: 'I can keep the current composition and continue improving the subject result.',
+                                                preserve: ['current composition', 'existing lighting'],
+                                                adjust: ['subject fidelity']
+                                            }
+                                        }
+                                    })
+                                }, 'refine_prompt', {
+                                    message: {
+                                        zh: '我已经想好这一版接下来怎么优化了。如果你愿意，我可以继续。',
+                                        en: 'I already know how I would improve this version next. If you want, I can continue from here.'
+                                    }
+                                }, {
+                                    latestAssetId: revisedAsset.id
+                                })
                             },
                             steps: [...stepsAfterRevision, finalizedRevisedGenerationStep, finalizedSecondReviewStep],
                             artifacts: [...agentJob.artifacts, generatedArtifact, reviewArtifact, revisionArtifact, revisedGeneratedArtifact, secondReviewArtifact]
                         }).catch(console.error);
                         setTasks(prev => prev.map(t => t.id === taskId ? blockedTask : t));
                         saveTask(blockedTask).catch(console.error);
-                        addToast('info', 'Action Required', secondReview.summary);
+                        addToast('info', language === 'zh' ? '我建议继续优化这一版' : 'Refinement Suggestion', secondReview.summary);
                         return revisedToolResult;
                     }
 
@@ -1662,18 +1818,40 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
                         lastError: review.summary,
                         requiresAction: review.requiresAction || {
                             type: 'review_output',
-                            message: review.summary,
-                            payload: {
-                                prompt: genParams.prompt,
-                                warnings: review.warnings
-                            }
+                            message: 'I already know the next refinement I would make. If you want, I can continue from here.',
+                            payload: buildRequiresActionPayload(genParams.prompt, {
+                                summary: review.summary,
+                                warnings: review.warnings,
+                                revisedPrompt: review.revisedPrompt,
+                                reviewPlan: review.reviewPlan || buildOptimizationPlan({
+                                    summary: 'I can preserve the current result and continue with a focused refinement pass.',
+                                    confidence: 'medium',
+                                    localized: {
+                                        zh: {
+                                            summary: '我可以保留当前结果，并继续执行一轮更聚焦的优化。',
+                                            preserve: ['当前结果方向'],
+                                            adjust: ['局部优化重点']
+                                        },
+                                        en: {
+                                            summary: 'I can preserve the current result and continue with a focused refinement pass.',
+                                            preserve: ['current result direction'],
+                                            adjust: ['targeted refinements']
+                                        }
+                                    }
+                                })
+                            }, 'review_output', {
+                                message: {
+                                    zh: '我已经整理好下一步优化方向了。如果你愿意，我可以继续。',
+                                    en: 'I already know the next refinement I would make. If you want, I can continue from here.'
+                                }
+                            })
                         },
                         steps: [...agentJob.steps.filter(step => step.id !== reviewStepId), finalizedReviewStep],
                         artifacts: [...agentJob.artifacts, generatedArtifact, reviewArtifact]
                     }).catch(console.error);
                     setTasks(prev => prev.map(t => t.id === taskId ? blockedTask : t));
                     saveTask(blockedTask).catch(console.error);
-                    addToast('info', 'Action Required', review.summary);
+                    addToast('info', language === 'zh' ? '我建议继续优化这一版' : 'Refinement Suggestion', review.summary);
                     return reviewedToolResult;
                 }
 
