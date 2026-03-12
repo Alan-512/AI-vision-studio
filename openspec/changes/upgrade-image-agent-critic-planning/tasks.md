@@ -16,11 +16,11 @@
 ## 4. Consistency and Constraint Handling
 - [x] 4.1 Define a consistency profile for follow-up image jobs, covering subject, composition, lighting, style, and other continuity signals
 - [x] 4.2 Persist search facts and reference-derived requirements as explicit runtime constraints that critic and planner can inspect
-- [ ] 4.3 Use the consistency profile and constraints when producing follow-up revision plans for multi-turn image edits
+- [x] 4.3 Use the consistency profile and constraints when producing follow-up revision plans for multi-turn image edits
 
 ## 5. Verification
 - [x] 5.1 Add tests for critic issue classification and structured revision-plan generation
-- [ ] 5.2 Add tests for plan-driven `requires_action` states and richer action selection paths
+- [x] 5.2 Add tests for plan-driven `requires_action` states and richer action selection paths
 - [ ] 5.3 Add tests for consistency-aware follow-up edits and constraint preservation across multi-step jobs
 
 ## Current Focus

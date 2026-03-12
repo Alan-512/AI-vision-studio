@@ -21,6 +21,7 @@ import {
     mergeRuntimeArtifacts,
     selectReferenceRecords
 } from './services/agentRuntime';
+import { normalizeStructuredCriticReview } from './services/criticRuntime';
 import {
     initDB, loadProjects, saveProject, saveAsset, loadAssets, updateAsset, updateProject,
     deleteProjectFromDB, softDeleteAssetInDB, restoreAssetInDB,
@@ -391,31 +392,38 @@ const buildCriticContext = (
 const criticToLocalReview = (
     prompt: string,
     critic: StructuredCriticReview,
-    fallbackActionType: string
-): LocalReviewResult => ({
-    decision: critic.decision,
-    summary: critic.summary,
-    warnings: critic.issues
-        .filter(issue => issue.severity !== 'low')
-        .map(issue => issue.detail),
-    issues: critic.issues,
-    revisedPrompt: critic.revisedPrompt,
-    revisionReason: critic.reason || critic.summary,
-    reviewPlan: critic.reviewPlan,
-    requiresAction: critic.decision === 'requires_action'
+    fallbackActionType: string,
+    context?: ImageCriticContextInput
+): LocalReviewResult => {
+    const normalized = normalizeStructuredCriticReview(prompt, critic, {
+        consistencyProfile: context?.consistencyProfile,
+        hardConstraints: context?.hardConstraints,
+        preferredContinuity: context?.preferredContinuity
+    });
+
+    return {
+    decision: normalized.decision,
+    summary: normalized.summary,
+    warnings: normalized.warnings,
+    issues: normalized.issues,
+    revisedPrompt: normalized.revisedPrompt,
+    revisionReason: normalized.reason || normalized.summary,
+    reviewPlan: normalized.reviewPlan,
+    requiresAction: normalized.decision === 'requires_action'
         ? {
-            type: critic.recommendedActionType || fallbackActionType,
-            message: critic.summary,
+            type: normalized.recommendedActionType || fallbackActionType,
+            message: normalized.summary,
             payload: buildRequiresActionPayload(prompt, {
-                summary: critic.summary,
-                warnings: critic.issues.map(issue => issue.detail),
-                revisedPrompt: critic.revisedPrompt,
-                reviewPlan: critic.reviewPlan,
-                issues: critic.issues
-            } as LocalReviewResult, critic.recommendedActionType || fallbackActionType)
+                summary: normalized.summary,
+                warnings: normalized.issues.map(issue => issue.detail),
+                revisedPrompt: normalized.revisedPrompt,
+                reviewPlan: normalized.reviewPlan,
+                issues: normalized.issues
+            } as LocalReviewResult, normalized.recommendedActionType || fallbackActionType)
         }
         : undefined
-});
+    };
+};
 
 const reviewGeneratedAssetLocally = (asset: AssetItem, prompt: string): LocalReviewResult => {
     const warnings: string[] = [];
@@ -547,7 +555,7 @@ const reviewGeneratedAsset = async (
         }
 
         const critic = await reviewGeneratedImageWithAI(prompt, inlineImage.data, inlineImage.mimeType, context);
-        return criticToLocalReview(prompt, critic, 'review_output');
+        return criticToLocalReview(prompt, critic, 'review_output', context);
     } catch (error) {
         console.warn('[App] AI critic review failed, falling back to local review.', error);
         return reviewGeneratedAssetLocally(asset, prompt);
