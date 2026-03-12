@@ -146,6 +146,62 @@ const buildGeneratedArtifact = (asset: AssetItem, stepId: string): JobArtifact =
     metadata: asset.metadata
 });
 
+type LocalReviewResult = {
+    accepted: boolean;
+    summary: string;
+    warnings: string[];
+};
+
+const createReviewStep = (stepId: string, toolResult: AgentToolResult): JobStep => ({
+    id: stepId,
+    kind: 'review',
+    name: 'review_generated_asset',
+    status: 'pending',
+    input: {
+        toolName: toolResult.toolName,
+        artifactIds: toolResult.artifactIds || [],
+        jobId: toolResult.jobId
+    }
+});
+
+const buildReviewArtifact = (reviewId: string, reviewStepId: string, review: LocalReviewResult): JobArtifact => ({
+    id: reviewId,
+    type: 'text',
+    origin: 'review',
+    role: 'review_note',
+    createdAt: Date.now(),
+    relatedStepId: reviewStepId,
+    metadata: {
+        decision: review.accepted ? 'accept' : 'reject',
+        summary: review.summary,
+        warnings: review.warnings
+    }
+});
+
+const reviewGeneratedAsset = (asset: AssetItem): LocalReviewResult => {
+    const warnings: string[] = [];
+
+    if (!asset.url) {
+        return {
+            accepted: false,
+            summary: 'Generated asset is missing a URL and cannot be finalized.',
+            warnings
+        };
+    }
+
+    if (asset.type === 'VIDEO' && !asset.videoUri) {
+        warnings.push('Generated video is missing a reusable videoUri for extension workflows.');
+    }
+
+    return {
+        accepted: true,
+        summary: warnings.length > 0
+            ? 'Generated asset passed runtime review with warnings.'
+            : 'Generated asset passed runtime review.',
+        warnings
+    };
+};
+
 const findLastModelMessageIndex = (messages: ChatMessage[]): number => {
     for (let i = messages.length - 1; i >= 0; i--) {
         if (messages[i].role === 'model') return i;
@@ -1202,8 +1258,6 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
                     await saveAsset(asset);
                     if (controller.signal.aborted) throw new Error("Cancelled");
                     if (activeProjectIdRef.current === currentProjectId) setAssets(prev => prev.map(a => a.id === taskId ? asset : a));
-                    setTasks(prev => prev.map(t => t.id === taskId ? { ...t, status: 'COMPLETED' } : t));
-                    saveTask({ ...newTask, status: 'COMPLETED' }); // Persist completion
                     const completedAt = Date.now();
                     const completedSteps = agentJob.steps.map(step => step.id === stepId
                         ? {
@@ -1214,20 +1268,6 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
                         }
                         : step
                     );
-                    persistJob({
-                        status: 'completed',
-                        currentStepId: undefined,
-                        lastError: undefined,
-                        steps: completedSteps,
-                        artifacts: [...agentJob.artifacts, buildGeneratedArtifact(asset, stepId)]
-                    }).catch(console.error);
-                    if (onSuccess) onSuccess(asset);
-
-                    // Background Memory Extraction Task (writes to Daily Logs only)
-                    // Consolidation is now decoupled - runs at most once per day at app startup
-                    runMemoryExtractionTask(currentProjectId, historyOverride || chatHistory, userKey).catch(err => {
-                        console.error('[App] Background memory extraction failed:', err);
-                    });
                     toolResult = {
                         jobId,
                         stepId,
@@ -1260,8 +1300,6 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
                     const updates = { status: 'COMPLETED' as const, url: videoResult.blobUrl, videoUri: videoResult.videoUri, isNew: true };
                     await updateAsset(taskId, updates);
                     if (activeProjectIdRef.current === currentProjectId) setAssets(prev => prev.map(a => a.id === taskId ? { ...a, ...updates } : a));
-                    setTasks(prev => prev.map(t => t.id === taskId ? { ...t, status: 'COMPLETED' } : t));
-                    saveTask({ ...newTask, status: 'COMPLETED' }); // Persist completion
                     asset = { ...tempAsset, ...updates, jobId };
                     const completedAt = Date.now();
                     const completedSteps = agentJob.steps.map(step => step.id === stepId
@@ -1273,13 +1311,6 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
                         }
                         : step
                     );
-                    persistJob({
-                        status: 'completed',
-                        currentStepId: undefined,
-                        lastError: undefined,
-                        steps: completedSteps,
-                        artifacts: [...agentJob.artifacts, buildGeneratedArtifact(asset, stepId)]
-                    }).catch(console.error);
                     toolResult = {
                         jobId,
                         stepId,
@@ -1294,9 +1325,87 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
                         }
                     };
                 }
+                const generatedArtifact = buildGeneratedArtifact(asset, stepId);
+                const reviewStepId = crypto.randomUUID();
+                const reviewStartedAt = Date.now();
+                const reviewStep = {
+                    ...createReviewStep(reviewStepId, toolResult),
+                    status: 'running' as const,
+                    startTime: reviewStartedAt
+                };
+                persistJob({
+                    status: 'reviewing',
+                    currentStepId: reviewStepId,
+                    lastError: undefined,
+                    steps: [...agentJob.steps, reviewStep],
+                    artifacts: [...agentJob.artifacts, generatedArtifact]
+                }).catch(console.error);
+
+                const review = reviewGeneratedAsset(asset);
+                const reviewEndedAt = Date.now();
+                const reviewArtifactId = crypto.randomUUID();
+                const finalizedReviewStep = {
+                    ...reviewStep,
+                    status: (review.accepted ? 'success' : 'failed') as const,
+                    endTime: reviewEndedAt,
+                    output: {
+                        decision: review.accepted ? 'accept' : 'reject',
+                        summary: review.summary,
+                        warnings: review.warnings
+                    },
+                    error: review.accepted ? undefined : review.summary
+                };
+                const reviewedToolResult: AgentToolResult = {
+                    ...toolResult,
+                    status: review.accepted ? toolResult.status : 'error',
+                    error: review.accepted ? toolResult.error : review.summary,
+                    metadata: {
+                        ...(toolResult.metadata || {}),
+                        review: {
+                            decision: review.accepted ? 'accept' : 'reject',
+                            summary: review.summary,
+                            warnings: review.warnings,
+                            stepId: reviewStepId
+                        }
+                    }
+                };
+
+                if (!review.accepted) {
+                    const failedTask = { ...newTask, status: 'FAILED' as const, error: review.summary };
+                    persistJob({
+                        status: 'failed',
+                        currentStepId: undefined,
+                        lastError: review.summary,
+                        steps: [...agentJob.steps.filter(step => step.id !== reviewStepId), finalizedReviewStep],
+                        artifacts: [...agentJob.artifacts, generatedArtifact, buildReviewArtifact(reviewArtifactId, reviewStepId, review)]
+                    }).catch(console.error);
+                    setTasks(prev => prev.map(t => t.id === taskId ? failedTask : t));
+                    saveTask(failedTask).catch(console.error);
+                    addToast('error', t('task.failed'), review.summary);
+                    return reviewedToolResult;
+                }
+
+                persistJob({
+                    status: 'completed',
+                    currentStepId: undefined,
+                    lastError: undefined,
+                    steps: [...agentJob.steps.filter(step => step.id !== reviewStepId), finalizedReviewStep],
+                    artifacts: [...agentJob.artifacts, generatedArtifact, buildReviewArtifact(reviewArtifactId, reviewStepId, review)]
+                }).catch(console.error);
+                setTasks(prev => prev.map(t => t.id === taskId ? { ...t, status: 'COMPLETED' } : t));
+                saveTask({ ...newTask, status: 'COMPLETED' }).catch(console.error);
+                if (currentMode === AppMode.IMAGE) {
+                    if (onSuccess) onSuccess(asset);
+
+                    // Background Memory Extraction Task (writes to Daily Logs only)
+                    // Consolidation is now decoupled - runs at most once per day at app startup
+                    runMemoryExtractionTask(currentProjectId, historyOverride || chatHistory, userKey).catch(err => {
+                        console.error('[App] Background memory extraction failed:', err);
+                    });
+                }
                 playSuccessSound();
                 if (activeParams.continuousMode && asset.type === 'IMAGE') handleUseAsReference(asset, false);
-                return toolResult;
+                return reviewedToolResult;
             } catch (error: any) {
                 if (error.message === 'Cancelled' || error.name === 'AbortError') {
                     const cancelledAt = Date.now();
