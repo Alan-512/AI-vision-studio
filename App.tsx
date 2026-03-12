@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { Image as ImageIcon, Video, LayoutGrid, Folder, Sparkles, Settings, Star, CheckSquare, MoveHorizontal, Languages, Trash2, Recycle, Download, RotateCcw, ArrowRight, Key, X } from 'lucide-react';
-import { AppMode, AspectRatio, GenerationParams, AssetItem, ImageResolution, VideoResolution, ImageModel, VideoModel, ImageStyle, Project, ChatMessage, BackgroundTask, SmartAsset, VideoDuration, VideoStyle, AgentAction, EditRegion, SearchPolicy, AssistantMode, SmartAssetRole, ThinkingLevel, AgentJob, AgentJobStatus, JobStep, JobArtifact, AgentToolResult, ToolCallRecord, CriticDecision, CriticIssue, RevisionPlan, StructuredCriticReview } from './types';
+import { AppMode, AspectRatio, GenerationParams, AssetItem, ImageResolution, VideoResolution, ImageModel, VideoModel, ImageStyle, Project, ChatMessage, BackgroundTask, SmartAsset, VideoDuration, VideoStyle, AgentAction, EditRegion, SearchPolicy, AssistantMode, SmartAssetRole, ThinkingLevel, AgentJob, AgentJobStatus, JobStep, JobArtifact, AgentToolResult, ToolCallRecord, CriticDecision, CriticIssue, RevisionPlan, StructuredCriticReview, ConsistencyProfile } from './types';
 import { GenerationForm } from './components/GenerationForm';
 import { AssetCard } from './components/AssetCard';
 import { ProjectSidebar } from './components/ProjectSidebar';
@@ -11,7 +11,7 @@ import { ConfirmDialog } from './components/ConfirmDialog';
 import { ComparisonView } from './components/ComparisonView';
 import { CanvasEditor } from './components/CanvasEditor';
 import { CanvasView } from './components/CanvasView';
-import { generateImage, generateVideo, getUserApiKey, generateTitle, reviewGeneratedImageWithAI } from './services/geminiService';
+import { generateImage, generateVideo, getUserApiKey, generateTitle, reviewGeneratedImageWithAI, ImageCriticContextInput } from './services/geminiService';
 import { compressImageForContext, normalizeImageUrlForChat } from './services/imageUtils';
 import {
     SelectedReferenceRecord,
@@ -309,6 +309,85 @@ const dataUrlToInlineImage = (dataUrl: string): { mimeType: string; data: string
     };
 };
 
+const dedupeStrings = (values: Array<string | undefined | null>, limit = 8): string[] => {
+    const seen = new Set<string>();
+    const result: string[] = [];
+    for (const value of values) {
+        if (typeof value !== 'string') continue;
+        const normalized = value.trim();
+        if (!normalized || seen.has(normalized)) continue;
+        seen.add(normalized);
+        result.push(normalized);
+        if (result.length >= limit) break;
+    }
+    return result;
+};
+
+const buildConsistencyProfile = (
+    assistantMode: AssistantMode | undefined,
+    selectedReferences: SelectedReferenceRecord[],
+    searchContext?: AgentJob['searchContext'],
+    existing?: ConsistencyProfile
+): ConsistencyProfile => {
+    const modePreserveMap: Partial<Record<AssistantMode, string[]>> = {
+        [AssistantMode.EDIT_LAST]: ['current composition', 'lighting direction', 'subject identity'],
+        [AssistantMode.STYLE_TRANSFER]: ['style language', 'palette', 'visual texture'],
+        [AssistantMode.PRODUCT_SHOT]: ['product silhouette', 'clean background', 'commercial clarity'],
+        [AssistantMode.POSTER]: ['layout hierarchy', 'negative space', 'graphic direction'],
+        [AssistantMode.COMBINE_REFS]: ['shared reference cues', 'overall composition balance']
+    };
+    const modeConstraintsMap: Partial<Record<AssistantMode, string[]>> = {
+        [AssistantMode.EDIT_LAST]: ['preserve the current shot structure unless a fix clearly requires change'],
+        [AssistantMode.PRODUCT_SHOT]: ['keep the product commercially recognizable'],
+        [AssistantMode.POSTER]: ['preserve poster readability and layout intent']
+    };
+
+    const preserveSignals = dedupeStrings([
+        ...(existing?.preserveSignals || []),
+        ...((assistantMode && modePreserveMap[assistantMode]) || []),
+        ...(selectedReferences.length > 0 ? ['reference-guided subject/style consistency'] : [])
+    ]);
+    const hardConstraints = dedupeStrings([
+        ...(existing?.hardConstraints || []),
+        ...((assistantMode && modeConstraintsMap[assistantMode]) || []),
+        ...((searchContext?.facts || []).slice(0, 4).map(fact => `respect known fact: ${fact.item}`))
+    ]);
+    const preferredContinuity = dedupeStrings([
+        ...(existing?.preferredContinuity || []),
+        ...preserveSignals
+    ]);
+
+    return {
+        preserveSignals,
+        hardConstraints,
+        preferredContinuity,
+        updatedAt: Date.now(),
+        referenceCount: selectedReferences.length,
+        assistantMode
+    };
+};
+
+const buildCriticContext = (
+    prompt: string,
+    params: GenerationParams,
+    selectedReferences: SelectedReferenceRecord[],
+    consistencyProfile?: ConsistencyProfile,
+    searchContext?: AgentJob['searchContext']
+): ImageCriticContextInput => ({
+    assistantMode: normalizeAssistantMode((params as any).assistant_mode) || consistencyProfile?.assistantMode,
+    searchFacts: dedupeStrings((searchContext?.facts || []).map(fact => fact.source ? `${fact.item} (${fact.source})` : fact.item)),
+    referenceHints: dedupeStrings([
+        selectedReferences.length > 0 ? `${selectedReferences.length} reference image(s) were used for this generation.` : undefined,
+        ...selectedReferences.map(reference => reference.sourceRole === 'user'
+            ? 'User-provided reference should influence subject, style, or composition continuity.'
+            : 'Prior generated image should be treated as follow-up continuity context.')
+    ]),
+    hardConstraints: consistencyProfile?.hardConstraints || [],
+    preferredContinuity: consistencyProfile?.preferredContinuity || [],
+    negativePrompt: params.negativePrompt,
+    consistencyProfile
+});
+
 const criticToLocalReview = (
     prompt: string,
     critic: StructuredCriticReview,
@@ -451,7 +530,11 @@ const reviewGeneratedAssetLocally = (asset: AssetItem, prompt: string): LocalRev
     };
 };
 
-const reviewGeneratedAsset = async (asset: AssetItem, prompt: string): Promise<LocalReviewResult> => {
+const reviewGeneratedAsset = async (
+    asset: AssetItem,
+    prompt: string,
+    context?: ImageCriticContextInput
+): Promise<LocalReviewResult> => {
     if (asset.type !== 'IMAGE' || !asset.url) {
         return reviewGeneratedAssetLocally(asset, prompt);
     }
@@ -463,7 +546,7 @@ const reviewGeneratedAsset = async (asset: AssetItem, prompt: string): Promise<L
             return reviewGeneratedAssetLocally(asset, prompt);
         }
 
-        const critic = await reviewGeneratedImageWithAI(prompt, inlineImage.data, inlineImage.mimeType);
+        const critic = await reviewGeneratedImageWithAI(prompt, inlineImage.data, inlineImage.mimeType, context);
         return criticToLocalReview(prompt, critic, 'review_output');
     } catch (error) {
         console.warn('[App] AI critic review failed, falling back to local review.', error);
@@ -1414,6 +1497,13 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
             const referenceArtifacts = buildReferenceArtifacts(selectedReferenceRecords);
             const searchArtifacts = buildSearchArtifacts(searchContextOverride);
             const initialRuntimeArtifacts = [...referenceArtifacts, ...searchArtifacts];
+            const assistantMode = normalizeAssistantMode((activeParams as any).assistant_mode || toolCall?.args?.assistant_mode);
+            const consistencyProfile = buildConsistencyProfile(
+                assistantMode,
+                selectedReferenceRecords,
+                searchContextOverride,
+                existingJob?.consistencyProfile
+            );
             const newTask: BackgroundTask = {
                 id: taskId, projectId: currentProjectId, projectName: projects.find(p => p.id === currentProjectId)?.name || 'Project',
                 type: currentMode === AppMode.IMAGE ? 'IMAGE' : 'VIDEO', status: 'QUEUED', startTime: Date.now(), prompt: activeParams.prompt,
@@ -1429,6 +1519,7 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
                     currentStepId: undefined,
                     lastError: undefined,
                     requiresAction: undefined,
+                    consistencyProfile,
                     searchContext: searchContextOverride || existingJob.searchContext,
                     steps: [
                         ...existingJob.steps,
@@ -1447,6 +1538,7 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
                     source: resolvedJobSource,
                     triggerMessageTimestamp,
                     currentStepId: undefined,
+                    consistencyProfile,
                     searchContext: searchContextOverride,
                     steps: [createGenerationStep(stepId, currentMode, activeParams, toolCall)],
                     artifacts: initialRuntimeArtifacts
@@ -1625,7 +1717,14 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
                     artifacts: [...agentJob.artifacts, generatedArtifact]
                 }).catch(console.error);
 
-                const review = await reviewGeneratedAsset(asset, genParams.prompt);
+                const criticContext = buildCriticContext(
+                    genParams.prompt,
+                    genParams,
+                    selectedReferenceRecords,
+                    agentJob.consistencyProfile,
+                    agentJob.searchContext
+                );
+                const review = await reviewGeneratedAsset(asset, genParams.prompt, criticContext);
                 const reviewEndedAt = Date.now();
                 const reviewArtifactId = crypto.randomUUID();
                 const reviewArtifact = buildReviewArtifact(reviewArtifactId, reviewStepId, review);
@@ -1764,7 +1863,17 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
                         artifacts: [...agentJob.artifacts, generatedArtifact, reviewArtifact, revisionArtifact, revisedGeneratedArtifact]
                     }).catch(console.error);
 
-                    const secondReview = await reviewGeneratedAsset(revisedAsset, revisedPrompt);
+                    const secondReview = await reviewGeneratedAsset(
+                        revisedAsset,
+                        revisedPrompt,
+                        buildCriticContext(
+                            revisedPrompt,
+                            revisedParams,
+                            selectedReferenceRecords,
+                            agentJob.consistencyProfile,
+                            agentJob.searchContext
+                        )
+                    );
                     const secondReviewArtifactId = crypto.randomUUID();
                     const secondReviewArtifact = buildReviewArtifact(secondReviewArtifactId, secondReviewStepId, secondReview);
                     const finalizedSecondReviewStep = {

@@ -1,6 +1,6 @@
 
 import { GoogleGenAI, Part, Content, FunctionDeclaration, Type } from "@google/genai";
-import { ChatMessage, AppMode, SmartAsset, GenerationParams, ImageModel, AgentAction, AssetItem, AspectRatio, ImageResolution, TextModel, AssistantMode, SmartAssetRole, SearchProgress, ThinkingLevel, StructuredCriticReview, CriticDecision, CriticIssue, CriticIssueType, RevisionPlan } from "../types";
+import { ChatMessage, AppMode, SmartAsset, GenerationParams, ImageModel, AgentAction, AssetItem, AspectRatio, ImageResolution, TextModel, AssistantMode, SmartAssetRole, SearchProgress, ThinkingLevel, StructuredCriticReview, CriticDecision, CriticIssue, CriticIssueType, RevisionPlan, ConsistencyProfile } from "../types";
 import { createTrackedBlobUrl } from "./storageService";
 import { buildSystemInstruction, getPromptOptimizerContent, getRoleInstruction as getSkillRoleInstruction } from "./skills/promptRouter";
 import { getAlwaysOnMemorySnippet } from "./memoryService";
@@ -1634,12 +1634,71 @@ export const parseImageCriticReview = (rawText: string): StructuredCriticReview 
     }
 };
 
+export type ImageCriticContextInput = {
+    assistantMode?: AssistantMode;
+    searchFacts?: string[];
+    referenceHints?: string[];
+    hardConstraints?: string[];
+    preferredContinuity?: string[];
+    negativePrompt?: string;
+    consistencyProfile?: ConsistencyProfile;
+};
+
+export const buildImageCriticContextText = (context?: ImageCriticContextInput): string => {
+    if (!context) return '';
+
+    const lines: string[] = [];
+    if (context.assistantMode) {
+        lines.push(`- assistant_mode: ${context.assistantMode}`);
+    }
+
+    const mergedHardConstraints = [
+        ...(context.hardConstraints || []),
+        ...(context.consistencyProfile?.hardConstraints || [])
+    ];
+    const mergedContinuity = [
+        ...(context.preferredContinuity || []),
+        ...(context.consistencyProfile?.preferredContinuity || [])
+    ];
+    const mergedPreserve = context.consistencyProfile?.preserveSignals || [];
+
+    if (mergedHardConstraints.length > 0) {
+        lines.push('- hard_constraints:');
+        mergedHardConstraints.slice(0, 8).forEach(item => lines.push(`  - ${item}`));
+    }
+    if (mergedContinuity.length > 0) {
+        lines.push('- preferred_continuity:');
+        mergedContinuity.slice(0, 8).forEach(item => lines.push(`  - ${item}`));
+    }
+    if (mergedPreserve.length > 0) {
+        lines.push('- preserve_signals:');
+        mergedPreserve.slice(0, 8).forEach(item => lines.push(`  - ${item}`));
+    }
+    if (context.referenceHints && context.referenceHints.length > 0) {
+        lines.push('- reference_context:');
+        context.referenceHints.slice(0, 8).forEach(item => lines.push(`  - ${item}`));
+    }
+    if (context.searchFacts && context.searchFacts.length > 0) {
+        lines.push('- search_facts:');
+        context.searchFacts.slice(0, 8).forEach(item => lines.push(`  - ${item}`));
+    }
+    if (typeof context.negativePrompt === 'string' && context.negativePrompt.trim().length > 0) {
+        lines.push(`- negative_prompt_to_avoid: ${context.negativePrompt.trim()}`);
+    }
+
+    return lines.length > 0
+        ? `\nAdditional runtime constraints:\n${lines.join('\n')}\n`
+        : '';
+};
+
 export const reviewGeneratedImageWithAI = async (
     prompt: string,
     imageBase64: string,
-    mimeType: string
+    mimeType: string,
+    context?: ImageCriticContextInput
 ): Promise<StructuredCriticReview> => {
     const ai = getAIClient();
+    const criticContextText = buildImageCriticContextText(context);
     const response = await ai.models.generateContent({
         model: TextModel.PRO,
         contents: {
@@ -1708,7 +1767,7 @@ Return JSON only with this shape:
 If you choose "requires_action", provide a strong plan but do not ask the user to rewrite prompts manually.
 
 User prompt:
-${prompt}`
+${prompt}${criticContextText}`
                 }
             ]
         },

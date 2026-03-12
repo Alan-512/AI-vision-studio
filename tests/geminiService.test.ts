@@ -8,8 +8,10 @@ import {
     runInternalToolResultLoop,
     normalizeSupportedToolName,
     parseImageCriticReview,
+    buildImageCriticContextText,
     StructuredFact
 } from '../services/geminiService';
+import { AssistantMode } from '../types';
 
 describe('GeminiService', () => {
 
@@ -264,6 +266,24 @@ describe('GeminiService', () => {
             expect(review?.issues[0].type).toBe('other');
             expect(review?.issues[0].severity).toBe('medium');
             expect(review?.reviewPlan.summary.length).toBeGreaterThan(0);
+        });
+    });
+
+    describe('buildImageCriticContextText', () => {
+        it('should include runtime constraints for critic evaluation', () => {
+            const text = buildImageCriticContextText({
+                assistantMode: AssistantMode.PRODUCT_SHOT,
+                searchFacts: ['Brand: Red Bull Energy Drink'],
+                referenceHints: ['1 reference image was used for product identity'],
+                hardConstraints: ['keep the product commercially recognizable'],
+                preferredContinuity: ['composition', 'lighting'],
+                negativePrompt: 'blurry, logo distortion'
+            });
+
+            expect(text).toContain('assistant_mode: PRODUCT_SHOT');
+            expect(text).toContain('Brand: Red Bull Energy Drink');
+            expect(text).toContain('keep the product commercially recognizable');
+            expect(text).toContain('negative_prompt_to_avoid: blurry, logo distortion');
         });
     });
 });

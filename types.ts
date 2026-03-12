@@ -315,6 +315,15 @@ export interface StructuredCriticReview {
   recommendedActionType?: string;
 }
 
+export interface ConsistencyProfile {
+  preserveSignals: string[];
+  hardConstraints: string[];
+  preferredContinuity: string[];
+  updatedAt: number;
+  referenceCount?: number;
+  assistantMode?: AssistantMode;
+}
+
 export interface AgentToolResult {
   jobId: string;
   stepId?: string;
@@ -349,6 +358,7 @@ export interface AgentJob {
     message: string;
     payload?: Record<string, unknown>;
   };
+  consistencyProfile?: ConsistencyProfile;
   searchContext?: {
     queries?: string[];
     facts?: Array<{ item: string; source?: string }>;

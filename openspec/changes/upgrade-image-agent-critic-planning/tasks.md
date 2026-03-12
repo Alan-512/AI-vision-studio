@@ -14,8 +14,8 @@
 - [ ] 3.3 Keep the chat-first UX by only surfacing user actions when the runtime actually needs a decision or missing input
 
 ## 4. Consistency and Constraint Handling
-- [ ] 4.1 Define a consistency profile for follow-up image jobs, covering subject, composition, lighting, style, and other continuity signals
-- [ ] 4.2 Persist search facts and reference-derived requirements as explicit runtime constraints that critic and planner can inspect
+- [x] 4.1 Define a consistency profile for follow-up image jobs, covering subject, composition, lighting, style, and other continuity signals
+- [x] 4.2 Persist search facts and reference-derived requirements as explicit runtime constraints that critic and planner can inspect
 - [ ] 4.3 Use the consistency profile and constraints when producing follow-up revision plans for multi-turn image edits
 
 ## 5. Verification
