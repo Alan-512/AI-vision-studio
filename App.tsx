@@ -15,12 +15,11 @@ import { generateImage, generateVideo, getUserApiKey, generateTitle } from './se
 import { compressImageForContext, normalizeImageUrlForChat } from './services/imageUtils';
 import {
     SelectedReferenceRecord,
-    artifactToSmartAsset,
-    buildArtifactReferenceCandidates,
     buildReferenceArtifacts,
     buildSearchArtifacts,
     extractSearchContextFromProgress,
-    mergeRuntimeArtifacts
+    mergeRuntimeArtifacts,
+    selectReferenceRecords
 } from './services/agentRuntime';
 import {
     initDB, loadProjects, saveProject, saveAsset, loadAssets, updateAsset, updateProject,
@@ -1080,134 +1079,27 @@ export function App() {
             const playbookReferenceMode = playbookDefaults.referenceMode; // Fallback rule from playbook
             const requestedIds = Array.isArray(toolArgs.reference_image_ids) ? toolArgs.reference_image_ids : [];
 
-            // Helper: convert image data to SmartAsset
-            const toSmartAsset = (imgData: string, id: string): SmartAsset | null => {
-                const match = imgData.match(/^data:(.+);base64,(.+)$/);
-                return match ? { id, mimeType: match[1], data: match[2] } : null;
-            };
-
-            const extractImages = (message: ChatMessage): string[] => {
-                if (message.images && message.images.length > 0) return message.images;
-                if (message.image) return [message.image];
-                return [];
-            };
-            const pushSelectedReference = (record: SelectedReferenceRecord) => {
-                const exists = selectedReferences.some(existing =>
-                    existing.asset.id === record.asset.id ||
-                    existing.asset.data.slice(0, 80) === record.asset.data.slice(0, 80)
-                );
-                if (!exists) {
-                    selectedReferences.push(record);
-                }
-            };
             const projectAgentJobs = await loadAgentJobsByProject(activeProjectId);
-            const artifactReferenceCandidates = buildArtifactReferenceCandidates(projectAgentJobs);
-
-            // Get all messages with images from chat history
-            const messagesWithImages = chatHistory.filter(m => m.image || (m.images && m.images.length > 0));
             const latestSearchProgress = [...chatHistory]
                 .reverse()
                 .find(m => m.role === 'model' && m.searchProgress?.status === 'complete')
                 ?.searchProgress;
 
-            let selectedReferences: SelectedReferenceRecord[] = [];
+            const selectedReferences: SelectedReferenceRecord[] = selectReferenceRecords({
+                jobs: projectAgentJobs,
+                chatHistory,
+                requestedIds,
+                playbookReferenceMode,
+                hasUserUploadedImages
+            });
 
             // [DEBUG] Log reference decision
             console.log(`[Agent] Reference IDs requested by AI:`, requestedIds, `pre-extracted size: ${executionParams.smartAssets?.length ?? 0}`);
-
-            if (requestedIds.length > 0) {
-                // EXPLICIT ID TARGETING
-                artifactReferenceCandidates.forEach(candidate => {
-                    if (requestedIds.some(id => candidate.candidateIds.has(id))) {
-                        pushSelectedReference(candidate.record);
-                    }
-                });
-
-                const allAvailableImages = messagesWithImages.flatMap(m => {
-                    const prefix = m.role === 'user' ? 'user' : 'generated';
-                    return extractImages(m).map((img, idx) => ({
-                        id: `${prefix}-${m.timestamp}-${idx}`,
-                        img: img,
-                        sourceRole: m.role === 'user' ? 'user' as const : 'model' as const,
-                        messageTimestamp: m.timestamp
-                    }));
-                });
-
-                allAvailableImages.forEach(({ id, img, sourceRole, messageTimestamp }) => {
-                    if (requestedIds.includes(id)) {
-                        const asset = toSmartAsset(img, id);
-                        if (asset) pushSelectedReference({ asset, sourceRole, messageTimestamp });
-                    }
-                });
-            } else if (requestedIds.length === 0 && Array.isArray(toolArgs.reference_image_ids)) {
-                // AI explicitly asked for NO references (empty array)
+            if (requestedIds.length === 0 && Array.isArray(toolArgs.reference_image_ids)) {
                 console.log(`[Agent] AI explicitly passed empty reference_image_ids.`);
-            } else {
-                // FALLBACK for backward compatibility or when AI hallucinates param
-                // Smart default: if user uploaded images recently, use the last one
-                if (playbookReferenceMode === 'LAST_GENERATED') {
-                    const latestGeneratedArtifact = [...projectAgentJobs]
-                        .sort((a, b) => b.updatedAt - a.updatedAt)
-                        .flatMap(job => [...job.artifacts].reverse())
-                        .find(artifact => artifact.origin === 'generated' && (artifact.role === 'final' || artifact.role === 'candidate'));
-                    const latestGeneratedAsset = latestGeneratedArtifact ? artifactToSmartAsset(latestGeneratedArtifact) : null;
-                    if (latestGeneratedArtifact && latestGeneratedAsset) {
-                        pushSelectedReference({
-                            asset: latestGeneratedAsset,
-                            sourceRole: 'model',
-                            messageTimestamp: latestGeneratedArtifact.relatedMessageTimestamp
-                        });
-                    } else {
-                        const lastGenerated = [...messagesWithImages].reverse().find(m => m.role === 'model');
-                        if (lastGenerated) {
-                            const images = extractImages(lastGenerated);
-                            const asset = toSmartAsset(images[images.length - 1], `generated-${lastGenerated.timestamp}-0`);
-                            if (asset) pushSelectedReference({ asset, sourceRole: 'model', messageTimestamp: lastGenerated.timestamp });
-                        }
-                    }
-                } else if (hasUserUploadedImages) {
-                    const lastUserMsg = [...messagesWithImages].reverse().find(m => m.role === 'user' && !m.isSystem);
-                    if (lastUserMsg) {
-                        const images = extractImages(lastUserMsg);
-                        const asset = toSmartAsset(images[images.length - 1], `user-${lastUserMsg.timestamp}-0`);
-                        if (asset) pushSelectedReference({ asset, sourceRole: 'user', messageTimestamp: lastUserMsg.timestamp });
-                    } else {
-                        const latestReferenceArtifact = [...projectAgentJobs]
-                            .sort((a, b) => b.updatedAt - a.updatedAt)
-                            .flatMap(job => [...job.artifacts].reverse())
-                            .find(artifact => artifact.role === 'reference');
-                        const latestReferenceAsset = latestReferenceArtifact ? artifactToSmartAsset(latestReferenceArtifact) : null;
-                        if (latestReferenceArtifact && latestReferenceAsset) {
-                            pushSelectedReference({
-                                asset: latestReferenceAsset,
-                                sourceRole: 'user',
-                                messageTimestamp: latestReferenceArtifact.relatedMessageTimestamp
-                            });
-                        }
-                    }
-                } else {
-                    const latestReferenceArtifact = [...projectAgentJobs]
-                        .sort((a, b) => b.updatedAt - a.updatedAt)
-                        .flatMap(job => [...job.artifacts].reverse())
-                        .find(artifact => artifact.role === 'reference');
-                    const latestReferenceAsset = latestReferenceArtifact ? artifactToSmartAsset(latestReferenceArtifact) : null;
-                    if (latestReferenceArtifact && latestReferenceAsset) {
-                        pushSelectedReference({
-                            asset: latestReferenceAsset,
-                            sourceRole: 'user',
-                            messageTimestamp: latestReferenceArtifact.relatedMessageTimestamp
-                        });
-                    } else {
-                        const lastUserMsg = [...messagesWithImages].reverse().find(m => m.role === 'user' && !m.isSystem);
-                        if (!lastUserMsg) {
-                            console.log('[Agent] No transcript or artifact reference fallback found.');
-                        } else {
-                            const images = extractImages(lastUserMsg);
-                            const asset = toSmartAsset(images[images.length - 1], `user-${lastUserMsg.timestamp}-0`);
-                            if (asset) pushSelectedReference({ asset, sourceRole: 'user', messageTimestamp: lastUserMsg.timestamp });
-                        }
-                    }
-                }
+            }
+            if (selectedReferences.length === 0 && requestedIds.length === 0 && !hasUserUploadedImages && playbookReferenceMode !== 'LAST_GENERATED') {
+                console.log('[Agent] No transcript or artifact reference fallback found.');
             }
 
             // Add selected references to smartAssets (avoid duplicates)

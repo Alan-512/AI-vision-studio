@@ -6,7 +6,8 @@ import {
     buildReferenceArtifacts,
     buildSearchArtifacts,
     extractSearchContextFromProgress,
-    mergeRuntimeArtifacts
+    mergeRuntimeArtifacts,
+    selectReferenceRecords
 } from '../services/agentRuntime';
 
 describe('AgentRuntime helpers', () => {
@@ -111,5 +112,100 @@ describe('AgentRuntime helpers', () => {
             mimeType: 'image/jpeg',
             data: 'ref-data'
         });
+    });
+
+    it('should prefer runtime artifact candidates for explicit reference ids', () => {
+        const jobs: AgentJob[] = [{
+            id: 'job-1',
+            projectId: 'project-1',
+            type: 'IMAGE_GENERATION',
+            status: 'completed',
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            source: 'chat',
+            steps: [],
+            artifacts: [{
+                id: 'artifact-ref',
+                type: 'image',
+                origin: 'user_upload',
+                role: 'reference',
+                base64: 'artifact-data',
+                mimeType: 'image/png',
+                createdAt: Date.now(),
+                metadata: {
+                    sourceImageId: 'user-123-0',
+                    runtimeKey: 'reference:user-123-0',
+                    sourceRole: 'user'
+                }
+            }]
+        }];
+
+        const selected = selectReferenceRecords({
+            jobs,
+            chatHistory: [],
+            requestedIds: ['user-123-0'],
+            playbookReferenceMode: undefined,
+            hasUserUploadedImages: false
+        });
+
+        expect(selected).toHaveLength(1);
+        expect(selected[0].asset.id).toBe('user-123-0');
+        expect(selected[0].asset.data).toBe('artifact-data');
+    });
+
+    it('should keep transcript fallback for legacy chat-only projects', () => {
+        const selected = selectReferenceRecords({
+            jobs: [],
+            chatHistory: [{
+                role: 'user',
+                content: 'use this',
+                timestamp: 789,
+                images: ['data:image/png;base64,legacy-data']
+            }],
+            requestedIds: [],
+            playbookReferenceMode: undefined,
+            hasUserUploadedImages: true
+        });
+
+        expect(selected).toHaveLength(1);
+        expect(selected[0].asset.id).toBe('user-789-0');
+        expect(selected[0].asset.data).toBe('legacy-data');
+    });
+
+    it('should use generated artifact fallback for last generated mode without transcript image', () => {
+        const jobs: AgentJob[] = [{
+            id: 'job-2',
+            projectId: 'project-1',
+            type: 'IMAGE_GENERATION',
+            status: 'completed',
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            source: 'chat',
+            steps: [],
+            artifacts: [{
+                id: 'generated-asset',
+                type: 'image',
+                origin: 'generated',
+                role: 'final',
+                base64: 'generated-data',
+                mimeType: 'image/png',
+                createdAt: Date.now(),
+                metadata: {
+                    runtimeKey: 'generated:generated-asset'
+                }
+            }]
+        }];
+
+        const selected = selectReferenceRecords({
+            jobs,
+            chatHistory: [],
+            requestedIds: [],
+            playbookReferenceMode: 'LAST_GENERATED',
+            hasUserUploadedImages: false
+        });
+
+        expect(selected).toHaveLength(1);
+        expect(selected[0].sourceRole).toBe('model');
+        expect(selected[0].asset.data).toBe('generated-data');
     });
 });

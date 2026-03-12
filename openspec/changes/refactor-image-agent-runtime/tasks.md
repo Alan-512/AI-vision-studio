@@ -9,8 +9,8 @@
 
 ## 3. Artifact and Context Handling
 - [x] 3.1 Store generated images, user references, search outputs, and review outputs as stable runtime artifacts
-- [ ] 3.2 Replace transcript-only reference selection with artifact references and lineage metadata
-- [ ] 3.3 Keep compatibility adapters so existing chat history and saved projects still render correctly during migration
+- [x] 3.2 Replace transcript-only reference selection with artifact references and lineage metadata
+- [x] 3.3 Keep compatibility adapters so existing chat history and saved projects still render correctly during migration
 - [x] 3.4 Define how interrupted in-flight browser jobs are recorded and surfaced after refresh or tab close
 
 ## 4. Closed-Loop Agent Flow
@@ -22,7 +22,7 @@
 ## 5. Verification
 - [ ] 5.1 Add tests for chat -> tool -> generation -> tool result -> runtime state transitions
 - [ ] 5.2 Add tests for artifact persistence and reference reuse across multi-step image jobs
-- [ ] 5.3 Validate migration behavior for existing projects, chat history, and reference images
+- [x] 5.3 Validate migration behavior for existing projects, chat history, and reference images
 
 ## Current Focus
 - Remaining work is concentrated in artifact-first reference handling, migration validation, and broader end-to-end coverage.
