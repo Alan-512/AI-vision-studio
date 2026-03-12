@@ -146,13 +146,19 @@ const buildGeneratedArtifact = (asset: AssetItem, stepId: string): JobArtifact =
     metadata: asset.metadata
 });
 
+type LocalReviewDecision = 'accept' | 'auto_revise' | 'requires_action';
+
 type LocalReviewResult = {
-    accepted: boolean;
+    decision: LocalReviewDecision;
     summary: string;
     warnings: string[];
-    canAutoRevise?: boolean;
     revisedPrompt?: string;
     revisionReason?: string;
+    requiresAction?: {
+        type: string;
+        message: string;
+        payload?: Record<string, unknown>;
+    };
 };
 
 const createReviewStep = (stepId: string, toolResult: AgentToolResult): JobStep => ({
@@ -175,9 +181,12 @@ const buildReviewArtifact = (reviewId: string, reviewStepId: string, review: Loc
     createdAt: Date.now(),
     relatedStepId: reviewStepId,
     metadata: {
-        decision: review.accepted ? 'accept' : 'reject',
+        decision: review.decision,
         summary: review.summary,
-        warnings: review.warnings
+        warnings: review.warnings,
+        revisedPrompt: review.revisedPrompt,
+        revisionReason: review.revisionReason,
+        requiresAction: review.requiresAction
     }
 });
 
@@ -212,12 +221,21 @@ const reviewGeneratedAsset = (asset: AssetItem, prompt: string): LocalReviewResu
 
     if (!asset.url) {
         return {
-            accepted: false,
+            decision: asset.type === 'IMAGE' ? 'auto_revise' : 'requires_action',
             summary: 'Generated asset is missing a URL and cannot be finalized.',
             warnings,
-            canAutoRevise: asset.type === 'IMAGE',
             revisionReason: 'The generated image payload did not contain a renderable URL.',
-            revisedPrompt: `${prompt.trim()}\n\nRevision note: regenerate the same scene and ensure a valid renderable image output is returned.`
+            revisedPrompt: `${prompt.trim()}\n\nRevision note: regenerate the same scene and ensure a valid renderable image output is returned.`,
+            requiresAction: asset.type === 'IMAGE'
+                ? undefined
+                : {
+                    type: 'inspect_generation_payload',
+                    message: 'The generated video payload is incomplete and needs manual inspection.',
+                    payload: {
+                        prompt,
+                        assetType: asset.type
+                    }
+                }
         };
     }
 
@@ -226,7 +244,7 @@ const reviewGeneratedAsset = (asset: AssetItem, prompt: string): LocalReviewResu
     }
 
     return {
-        accepted: true,
+        decision: 'accept',
         summary: warnings.length > 0
             ? 'Generated asset passed runtime review with warnings.'
             : 'Generated asset passed runtime review.',
@@ -1379,23 +1397,26 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
                 const reviewArtifact = buildReviewArtifact(reviewArtifactId, reviewStepId, review);
                 const finalizedReviewStep = {
                     ...reviewStep,
-                    status: (review.accepted ? 'success' : 'failed') as const,
+                    status: (review.decision === 'accept' ? 'success' : 'failed') as const,
                     endTime: reviewEndedAt,
                     output: {
-                        decision: review.accepted ? 'accept' : 'reject',
+                        decision: review.decision,
                         summary: review.summary,
                         warnings: review.warnings
                     },
-                    error: review.accepted ? undefined : review.summary
+                    error: review.decision === 'accept' ? undefined : review.summary
                 };
                 const reviewedToolResult: AgentToolResult = {
                     ...toolResult,
-                    status: review.accepted ? toolResult.status : 'error',
-                    error: review.accepted ? toolResult.error : review.summary,
+                    status: review.decision === 'accept'
+                        ? toolResult.status
+                        : (review.decision === 'requires_action' ? 'requires_action' : 'error'),
+                    error: review.decision === 'accept' ? toolResult.error : review.summary,
+                    requiresAction: review.requiresAction,
                     metadata: {
                         ...(toolResult.metadata || {}),
                         review: {
-                            decision: review.accepted ? 'accept' : 'reject',
+                            decision: review.decision,
                             summary: review.summary,
                             warnings: review.warnings,
                             stepId: reviewStepId
@@ -1403,7 +1424,7 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
                     }
                 };
 
-                if (!review.accepted && review.canAutoRevise && currentMode === AppMode.IMAGE) {
+                if (review.decision === 'auto_revise' && currentMode === AppMode.IMAGE) {
                     const revisionStepId = crypto.randomUUID();
                     const revisionStartedAt = Date.now();
                     const revisionStep = {
@@ -1505,20 +1526,30 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
                     const secondReviewArtifact = buildReviewArtifact(secondReviewArtifactId, secondReviewStepId, secondReview);
                     const finalizedSecondReviewStep = {
                         ...secondReviewStep,
-                        status: (secondReview.accepted ? 'success' : 'failed') as const,
+                        status: (secondReview.decision === 'accept' ? 'success' : 'failed') as const,
                         endTime: Date.now(),
                         output: {
-                            decision: secondReview.accepted ? 'accept' : 'reject',
+                            decision: secondReview.decision,
                             summary: secondReview.summary,
                             warnings: secondReview.warnings
                         },
-                        error: secondReview.accepted ? undefined : secondReview.summary
+                        error: secondReview.decision === 'accept' ? undefined : secondReview.summary
                     };
                     const revisedToolResult: AgentToolResult = {
                         ...toolResult,
                         artifactIds: [revisedAsset.id],
-                        status: secondReview.accepted ? 'success' : 'error',
-                        error: secondReview.accepted ? undefined : secondReview.summary,
+                        status: secondReview.decision === 'accept' ? 'success' : 'requires_action',
+                        error: secondReview.decision === 'accept' ? undefined : secondReview.summary,
+                        requiresAction: secondReview.decision === 'requires_action'
+                            ? (secondReview.requiresAction || {
+                                type: 'refine_prompt',
+                                message: secondReview.summary,
+                                payload: {
+                                    revisedPrompt,
+                                    warnings: secondReview.warnings
+                                }
+                            })
+                            : undefined,
                         metadata: {
                             ...(toolResult.metadata || {}),
                             revisedPrompt,
@@ -1527,7 +1558,7 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
                                 reason: review.revisionReason || review.summary
                             },
                             review: {
-                                decision: secondReview.accepted ? 'accept' : 'reject',
+                                decision: secondReview.decision,
                                 summary: secondReview.summary,
                                 warnings: secondReview.warnings,
                                 stepId: secondReviewStepId
@@ -1535,18 +1566,26 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
                         }
                     };
 
-                    if (!secondReview.accepted) {
-                        const failedTask = { ...newTask, status: 'FAILED' as const, error: secondReview.summary };
+                    if (secondReview.decision !== 'accept') {
+                        const blockedTask = { ...newTask, status: 'FAILED' as const, error: secondReview.summary };
                         persistJob({
-                            status: 'failed',
+                            status: 'requires_action',
                             currentStepId: undefined,
                             lastError: secondReview.summary,
+                            requiresAction: revisedToolResult.requiresAction || {
+                                type: 'refine_prompt',
+                                message: secondReview.summary,
+                                payload: {
+                                    revisedPrompt,
+                                    warnings: secondReview.warnings
+                                }
+                            },
                             steps: [...stepsAfterRevision, finalizedRevisedGenerationStep, finalizedSecondReviewStep],
                             artifacts: [...agentJob.artifacts, generatedArtifact, reviewArtifact, revisionArtifact, revisedGeneratedArtifact, secondReviewArtifact]
                         }).catch(console.error);
-                        setTasks(prev => prev.map(t => t.id === taskId ? failedTask : t));
-                        saveTask(failedTask).catch(console.error);
-                        addToast('error', t('task.failed'), secondReview.summary);
+                        setTasks(prev => prev.map(t => t.id === taskId ? blockedTask : t));
+                        saveTask(blockedTask).catch(console.error);
+                        addToast('info', 'Action Required', secondReview.summary);
                         return revisedToolResult;
                     }
 
@@ -1554,6 +1593,7 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
                         status: 'completed',
                         currentStepId: undefined,
                         lastError: undefined,
+                        requiresAction: undefined,
                         steps: [...stepsAfterRevision, finalizedRevisedGenerationStep, finalizedSecondReviewStep],
                         artifacts: [...agentJob.artifacts, generatedArtifact, reviewArtifact, revisionArtifact, revisedGeneratedArtifact, secondReviewArtifact]
                     }).catch(console.error);
@@ -1568,18 +1608,26 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
                     return revisedToolResult;
                 }
 
-                if (!review.accepted) {
-                    const failedTask = { ...newTask, status: 'FAILED' as const, error: review.summary };
+                if (review.decision === 'requires_action') {
+                    const blockedTask = { ...newTask, status: 'FAILED' as const, error: review.summary };
                     persistJob({
-                        status: 'failed',
+                        status: 'requires_action',
                         currentStepId: undefined,
                         lastError: review.summary,
+                        requiresAction: review.requiresAction || {
+                            type: 'review_output',
+                            message: review.summary,
+                            payload: {
+                                prompt: genParams.prompt,
+                                warnings: review.warnings
+                            }
+                        },
                         steps: [...agentJob.steps.filter(step => step.id !== reviewStepId), finalizedReviewStep],
                         artifacts: [...agentJob.artifacts, generatedArtifact, reviewArtifact]
                     }).catch(console.error);
-                    setTasks(prev => prev.map(t => t.id === taskId ? failedTask : t));
-                    saveTask(failedTask).catch(console.error);
-                    addToast('error', t('task.failed'), review.summary);
+                    setTasks(prev => prev.map(t => t.id === taskId ? blockedTask : t));
+                    saveTask(blockedTask).catch(console.error);
+                    addToast('info', 'Action Required', review.summary);
                     return reviewedToolResult;
                 }
 
@@ -1587,6 +1635,7 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
                     status: 'completed',
                     currentStepId: undefined,
                     lastError: undefined,
+                    requiresAction: undefined,
                     steps: [...agentJob.steps.filter(step => step.id !== reviewStepId), finalizedReviewStep],
                     artifacts: [...agentJob.artifacts, generatedArtifact, reviewArtifact]
                 }).catch(console.error);
