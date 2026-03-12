@@ -349,7 +349,20 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
           try {
             const result = await onToolCallRef.current!({ toolName: 'generate_image', args: action.params });
             if (result?.status === 'error') {
-              throw new Error(result.error || 'Tool execution failed');
+              const toolError = new Error(result.error || 'Tool execution failed') as Error & {
+                retryable?: boolean;
+                lifecycleStatus?: string;
+              };
+              if (result.retryable === false) {
+                toolError.retryable = false;
+              }
+              const lifecycleStatus = typeof result.metadata?.lifecycleStatus === 'string'
+                ? result.metadata.lifecycleStatus
+                : undefined;
+              if (lifecycleStatus) {
+                toolError.lifecycleStatus = lifecycleStatus;
+              }
+              throw toolError;
             }
             return result;
           } catch (error) {

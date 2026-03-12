@@ -154,5 +154,24 @@ describe('AgentService', () => {
             expect(state.phase).toBe('COMPLETED');
             expect(state.context.generatedAssets).toEqual(['asset-1', 'asset-2']);
         });
+
+        it('should not retry cancelled actions marked as non-retryable', async () => {
+            const onExecuteAction = vi.fn().mockRejectedValue(Object.assign(
+                new Error('Cancelled by user'),
+                { retryable: false, lifecycleStatus: 'cancelled' }
+            ));
+            const machine = new AgentStateMachine(undefined, { onExecuteAction });
+
+            await machine.setPendingAction(createGenerateAction(
+                { prompt: 'cancel me' },
+                'Generate image'
+            ));
+
+            const state = machine.getState();
+            expect(onExecuteAction).toHaveBeenCalledTimes(1);
+            expect(state.phase).toBe('ERROR');
+            expect(state.retryCount).toBe(0);
+            expect(state.error).toContain('Cancelled by user');
+        });
     });
 });

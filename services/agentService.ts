@@ -62,6 +62,12 @@ interface AgentEvent {
     payload?: any;
 }
 
+type RetryControlError = Error & {
+    retryable?: boolean;
+    lifecycleStatus?: string;
+    name?: string;
+};
+
 // ==================== Initial State ====================
 
 export const createInitialAgentState = (): AgentState => ({
@@ -333,6 +339,13 @@ export class AgentStateMachine {
                 return await this.onExecuteAction(action);
             } catch (error) {
                 lastError = error;
+                const retryError = error as RetryControlError;
+                const isCancelled = retryError?.lifecycleStatus === 'cancelled'
+                    || retryError?.message === 'Cancelled by user'
+                    || retryError?.name === 'AbortError';
+                if (retryError?.retryable === false || isCancelled) {
+                    throw error;
+                }
 
                 if (attempt < this.state.maxRetries) {
                     this.updateState({ retryCount: attempt + 1 });
