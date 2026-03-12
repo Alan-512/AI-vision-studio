@@ -150,6 +150,9 @@ type LocalReviewResult = {
     accepted: boolean;
     summary: string;
     warnings: string[];
+    canAutoRevise?: boolean;
+    revisedPrompt?: string;
+    revisionReason?: string;
 };
 
 const createReviewStep = (stepId: string, toolResult: AgentToolResult): JobStep => ({
@@ -178,14 +181,43 @@ const buildReviewArtifact = (reviewId: string, reviewStepId: string, review: Loc
     }
 });
 
-const reviewGeneratedAsset = (asset: AssetItem): LocalReviewResult => {
+const createRevisionStep = (stepId: string, review: LocalReviewResult, previousPrompt: string): JobStep => ({
+    id: stepId,
+    kind: 'revision',
+    name: 'revise_generation_prompt',
+    status: 'pending',
+    input: {
+        previousPrompt,
+        revisionReason: review.revisionReason || review.summary,
+        revisedPrompt: review.revisedPrompt || previousPrompt
+    }
+});
+
+const buildRevisionArtifact = (artifactId: string, stepId: string, review: LocalReviewResult, previousPrompt: string): JobArtifact => ({
+    id: artifactId,
+    type: 'text',
+    origin: 'system',
+    role: 'review_note',
+    createdAt: Date.now(),
+    relatedStepId: stepId,
+    metadata: {
+        previousPrompt,
+        revisedPrompt: review.revisedPrompt || previousPrompt,
+        revisionReason: review.revisionReason || review.summary
+    }
+});
+
+const reviewGeneratedAsset = (asset: AssetItem, prompt: string): LocalReviewResult => {
     const warnings: string[] = [];
 
     if (!asset.url) {
         return {
             accepted: false,
             summary: 'Generated asset is missing a URL and cannot be finalized.',
-            warnings
+            warnings,
+            canAutoRevise: asset.type === 'IMAGE',
+            revisionReason: 'The generated image payload did not contain a renderable URL.',
+            revisedPrompt: `${prompt.trim()}\n\nRevision note: regenerate the same scene and ensure a valid renderable image output is returned.`
         };
     }
 
@@ -1341,9 +1373,10 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
                     artifacts: [...agentJob.artifacts, generatedArtifact]
                 }).catch(console.error);
 
-                const review = reviewGeneratedAsset(asset);
+                const review = reviewGeneratedAsset(asset, genParams.prompt);
                 const reviewEndedAt = Date.now();
                 const reviewArtifactId = crypto.randomUUID();
+                const reviewArtifact = buildReviewArtifact(reviewArtifactId, reviewStepId, review);
                 const finalizedReviewStep = {
                     ...reviewStep,
                     status: (review.accepted ? 'success' : 'failed') as const,
@@ -1370,6 +1403,171 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
                     }
                 };
 
+                if (!review.accepted && review.canAutoRevise && currentMode === AppMode.IMAGE) {
+                    const revisionStepId = crypto.randomUUID();
+                    const revisionStartedAt = Date.now();
+                    const revisionStep = {
+                        ...createRevisionStep(revisionStepId, review, genParams.prompt),
+                        status: 'running' as const,
+                        startTime: revisionStartedAt
+                    };
+                    const revisionArtifactId = crypto.randomUUID();
+                    const revisionArtifact = buildRevisionArtifact(revisionArtifactId, revisionStepId, review, genParams.prompt);
+                    const stepsAfterRevision = [
+                        ...agentJob.steps.filter(step => step.id !== reviewStepId && step.id !== revisionStepId),
+                        finalizedReviewStep,
+                        {
+                            ...revisionStep,
+                            status: 'success' as const,
+                            endTime: Date.now(),
+                            output: {
+                                revisedPrompt: review.revisedPrompt || genParams.prompt,
+                                revisionReason: review.revisionReason || review.summary
+                            }
+                        }
+                    ];
+                    persistJob({
+                        status: 'revising',
+                        currentStepId: revisionStepId,
+                        lastError: undefined,
+                        steps: stepsAfterRevision,
+                        artifacts: [...agentJob.artifacts, generatedArtifact, reviewArtifact, revisionArtifact]
+                    }).catch(console.error);
+
+                    const revisedPrompt = review.revisedPrompt || genParams.prompt;
+                    const revisedParams: GenerationParams = {
+                        ...genParams,
+                        prompt: revisedPrompt
+                    };
+                    const revisedGenerationStepId = crypto.randomUUID();
+                    const revisedGenerationStep = {
+                        ...createGenerationStep(revisedGenerationStepId, currentMode, revisedParams, toolCall),
+                        status: 'running' as const,
+                        startTime: Date.now()
+                    };
+                    persistJob({
+                        status: 'executing',
+                        currentStepId: revisedGenerationStepId,
+                        steps: [...stepsAfterRevision, revisedGenerationStep],
+                        artifacts: [...agentJob.artifacts, generatedArtifact, reviewArtifact, revisionArtifact]
+                    }).catch(console.error);
+
+                    const revisedAsset = await generateImage(
+                        revisedParams,
+                        currentProjectId,
+                        () => {},
+                        controller.signal,
+                        taskId,
+                        historyForGeneration,
+                        (imageData) => {
+                            setThoughtImages(prev => [...prev, {
+                                id: crypto.randomUUID(),
+                                ...imageData,
+                                timestamp: Date.now()
+                            }]);
+                        }
+                    );
+                    if (controller.signal.aborted) throw new Error("Cancelled");
+                    revisedAsset.isNew = true;
+                    revisedAsset.jobId = jobId;
+                    await saveAsset(revisedAsset);
+                    if (controller.signal.aborted) throw new Error("Cancelled");
+                    if (activeProjectIdRef.current === currentProjectId) {
+                        setAssets(prev => prev.map(a => a.id === taskId ? revisedAsset : a));
+                    }
+
+                    const revisedGenerationEndedAt = Date.now();
+                    const finalizedRevisedGenerationStep = {
+                        ...revisedGenerationStep,
+                        status: 'success' as const,
+                        endTime: revisedGenerationEndedAt,
+                        output: { assetId: revisedAsset.id, assetType: revisedAsset.type }
+                    };
+                    const revisedGeneratedArtifact = buildGeneratedArtifact(revisedAsset, revisedGenerationStepId);
+                    const secondReviewStepId = crypto.randomUUID();
+                    const secondReviewStep = {
+                        ...createReviewStep(secondReviewStepId, {
+                            ...toolResult,
+                            artifactIds: [revisedAsset.id]
+                        },),
+                        status: 'running' as const,
+                        startTime: Date.now()
+                    };
+                    persistJob({
+                        status: 'reviewing',
+                        currentStepId: secondReviewStepId,
+                        steps: [...stepsAfterRevision, finalizedRevisedGenerationStep, secondReviewStep],
+                        artifacts: [...agentJob.artifacts, generatedArtifact, reviewArtifact, revisionArtifact, revisedGeneratedArtifact]
+                    }).catch(console.error);
+
+                    const secondReview = reviewGeneratedAsset(revisedAsset, revisedPrompt);
+                    const secondReviewArtifactId = crypto.randomUUID();
+                    const secondReviewArtifact = buildReviewArtifact(secondReviewArtifactId, secondReviewStepId, secondReview);
+                    const finalizedSecondReviewStep = {
+                        ...secondReviewStep,
+                        status: (secondReview.accepted ? 'success' : 'failed') as const,
+                        endTime: Date.now(),
+                        output: {
+                            decision: secondReview.accepted ? 'accept' : 'reject',
+                            summary: secondReview.summary,
+                            warnings: secondReview.warnings
+                        },
+                        error: secondReview.accepted ? undefined : secondReview.summary
+                    };
+                    const revisedToolResult: AgentToolResult = {
+                        ...toolResult,
+                        artifactIds: [revisedAsset.id],
+                        status: secondReview.accepted ? 'success' : 'error',
+                        error: secondReview.accepted ? undefined : secondReview.summary,
+                        metadata: {
+                            ...(toolResult.metadata || {}),
+                            revisedPrompt,
+                            revision: {
+                                stepId: revisionStepId,
+                                reason: review.revisionReason || review.summary
+                            },
+                            review: {
+                                decision: secondReview.accepted ? 'accept' : 'reject',
+                                summary: secondReview.summary,
+                                warnings: secondReview.warnings,
+                                stepId: secondReviewStepId
+                            }
+                        }
+                    };
+
+                    if (!secondReview.accepted) {
+                        const failedTask = { ...newTask, status: 'FAILED' as const, error: secondReview.summary };
+                        persistJob({
+                            status: 'failed',
+                            currentStepId: undefined,
+                            lastError: secondReview.summary,
+                            steps: [...stepsAfterRevision, finalizedRevisedGenerationStep, finalizedSecondReviewStep],
+                            artifacts: [...agentJob.artifacts, generatedArtifact, reviewArtifact, revisionArtifact, revisedGeneratedArtifact, secondReviewArtifact]
+                        }).catch(console.error);
+                        setTasks(prev => prev.map(t => t.id === taskId ? failedTask : t));
+                        saveTask(failedTask).catch(console.error);
+                        addToast('error', t('task.failed'), secondReview.summary);
+                        return revisedToolResult;
+                    }
+
+                    persistJob({
+                        status: 'completed',
+                        currentStepId: undefined,
+                        lastError: undefined,
+                        steps: [...stepsAfterRevision, finalizedRevisedGenerationStep, finalizedSecondReviewStep],
+                        artifacts: [...agentJob.artifacts, generatedArtifact, reviewArtifact, revisionArtifact, revisedGeneratedArtifact, secondReviewArtifact]
+                    }).catch(console.error);
+                    setTasks(prev => prev.map(t => t.id === taskId ? { ...t, status: 'COMPLETED' } : t));
+                    saveTask({ ...newTask, status: 'COMPLETED' }).catch(console.error);
+                    if (onSuccess) onSuccess(revisedAsset);
+                    runMemoryExtractionTask(currentProjectId, historyOverride || chatHistory, userKey).catch(err => {
+                        console.error('[App] Background memory extraction failed:', err);
+                    });
+                    playSuccessSound();
+                    if (activeParams.continuousMode) handleUseAsReference(revisedAsset, false);
+                    return revisedToolResult;
+                }
+
                 if (!review.accepted) {
                     const failedTask = { ...newTask, status: 'FAILED' as const, error: review.summary };
                     persistJob({
@@ -1377,7 +1575,7 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
                         currentStepId: undefined,
                         lastError: review.summary,
                         steps: [...agentJob.steps.filter(step => step.id !== reviewStepId), finalizedReviewStep],
-                        artifacts: [...agentJob.artifacts, generatedArtifact, buildReviewArtifact(reviewArtifactId, reviewStepId, review)]
+                        artifacts: [...agentJob.artifacts, generatedArtifact, reviewArtifact]
                     }).catch(console.error);
                     setTasks(prev => prev.map(t => t.id === taskId ? failedTask : t));
                     saveTask(failedTask).catch(console.error);
@@ -1390,7 +1588,7 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
                     currentStepId: undefined,
                     lastError: undefined,
                     steps: [...agentJob.steps.filter(step => step.id !== reviewStepId), finalizedReviewStep],
-                    artifacts: [...agentJob.artifacts, generatedArtifact, buildReviewArtifact(reviewArtifactId, reviewStepId, review)]
+                    artifacts: [...agentJob.artifacts, generatedArtifact, reviewArtifact]
                 }).catch(console.error);
                 setTasks(prev => prev.map(t => t.id === taskId ? { ...t, status: 'COMPLETED' } : t));
                 saveTask({ ...newTask, status: 'COMPLETED' }).catch(console.error);
