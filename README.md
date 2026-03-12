@@ -19,41 +19,32 @@ This repository is frontend-first and BYOK by default: your API key stays in bro
 
 ### Advanced Image Generation
 
-- **Gemini-powered image workflows**: Create and edit images with Google's latest image-capable Gemini models.
-- **Pro-level controls**: Adjust aspect ratio, quality, negative prompts, and task-specific generation parameters from the studio UI.
-- **Reference-aware generation**: Reuse uploaded references, prior outputs, and artifact history to maintain subject, structure, and style continuity.
-- **Search-assisted prompting**: Bring external facts into image tasks when products, brands, or real-world details matter.
+- **Powered by Gemini 3.1**: Support for `gemini-3.1-flash-image-preview` (Nano Banana 2) and `gemini-3-pro-image-preview` (Nano Banana Pro).
+- **Pro-Level Controls**: Fine-tune Aspect Ratio (including 1:4, 1:8, etc.), Style, Resolution (0.5K, 1K, 2K, 4K), and Negative Prompts.
+- **Smart Assets**: Support for up to 14 reference images (NB2) to control **Identity (Character)**, **Structure (Pose/Layout)**, and **Style (Vibe)**.
+- **Grounding**: Built-in Google Search grounding for accurate real-world visual generation (NB2).
 
 ### Video Creation
 
-- **Veo-powered generation**: Create video content from text and visual guidance.
-- **Extension workflows**: Continue existing video generations when the task requires follow-up motion.
-- **Reference-guided tasks**: Use images and prior outputs to guide video direction and consistency.
+- **Veo Model Integration**: Generate high-quality videos using Google's latest `Veo` model (`veo-3.1`).
+- **Video Extension**: Upload existing videos and extend them seamlessly (720p).
+- **Keyframe & Reference Control**: Use images to guide the start/end frames or lock character consistency in videos.
 
 ### Deep Agent Assistant
 
-- **Chat-first orchestration**: Describe what you want in natural language and let the assistant plan and trigger the right workflow.
-- **Multi-step image runtime**: The assistant can run `review -> revise -> requires_action` instead of treating image generation as a single fire-and-forget tool call.
-- **Continuation support**: When a task needs user input, the assistant can pause and continue the same image job instead of restarting from scratch.
-- **Artifact-first context**: References, search results, and generated outputs are tracked as runtime artifacts instead of living only in chat history.
+- **Thinking Process**: Powered by **Gemini 3.1 Pro** (`gemini-3.1-pro-preview`). The AI Assistant doesn't just reply; it thinks, plans, and executes complex workflows.
+- **Autonomous Control**: The Agent can autonomously control the studio interface, changing models, parameters, and initiating generation based on natural language requests.
+- **Auto-Selection**: Intelligent model selection logic that ensures the best output for your specific prompt.
 
 ### Editing and Inpainting
 
-- **Canvas-based editing**: Work with image editing and masked update flows directly in the app.
-- **Localized changes**: Target specific regions while preserving the rest of the composition.
-- **Mask workflow support**: Base image, mask, and edit instructions are handled as separate parts of the edit pipeline.
-
-### Memory and Context
-
-- **Rolling short-term context**: Recent turns stay explicit while older chat is compacted into summaries.
-- **Local-first memory**: Long-term preferences and project context are persisted locally instead of requiring a backend memory service.
-- **On-demand retrieval**: Memory can be retrieved into the same turn when needed rather than injected as a large fixed prompt every time.
+- **Canvas Editor**: Integrated editor for masking and inpainting.
+- **Region-Based Editing**: Define specific regions with instructions (e.g., "Make this shirt red") while keeping the rest of the image intact.
 
 ### Privacy and BYOK
 
-- **Bring Your Own Key**: API keys are stored in browser local storage.
-- **Local project persistence**: Projects, assets, and memory stay local by default.
-- **No required application backend**: The default setup works without a dedicated server.
+- **Bring Your Own Key**: Your API Key is stored securely in your browser's Local Storage.
+- **No Middleman**: Requests go directly from your browser to Google's servers. We do not store or see your keys.
 
 ## Tech Stack
 
