@@ -236,6 +236,21 @@ const buildDecisionReason = (decision: CriticDecision, primaryIssue: CriticIssue
   }
 };
 
+const averageQualityScore = (critic: StructuredCriticReview): number | null => {
+  if (!critic.quality) return null;
+  const scores = [
+    critic.quality.intentAlignment,
+    critic.quality.compositionStrength,
+    critic.quality.lightingQuality,
+    critic.quality.materialFidelity,
+    critic.quality.brandAccuracy,
+    critic.quality.aestheticFinish,
+    critic.quality.commercialReadiness
+  ].filter((value): value is number => typeof value === 'number');
+  if (scores.length === 0) return null;
+  return scores.reduce((sum, value) => sum + value, 0) / scores.length;
+};
+
 const buildFallbackUserFacingCopy = (
   decision: CriticDecision,
   primaryIssue: CriticIssue | undefined,
@@ -329,6 +344,9 @@ export const normalizeStructuredCriticReview = (
   const hasGuidedIssue = issues.some(issue => GUIDED_ISSUE_TYPES.has(issue.type));
   const hasCalibratedGuidance = critic.calibration?.calibratedDecision === 'requires_action' && critic.calibration?.confidence !== 'low';
   const allAutoFixable = issues.length > 0 && issues.every(issue => issue.autoFixable);
+  const highSeverityIssueCount = issues.filter(issue => issue.severity === 'high').length;
+  const qualityAverage = averageQualityScore(critic);
+  const isCommerciallyReady = !!critic.quality && critic.quality.commercialReadiness >= 4 && critic.quality.aestheticFinish >= 4;
   const strongestAutoFixableIssue = issues.find(issue =>
     issue.autoFixable &&
     AGGRESSIVE_AUTO_REVISE_ISSUES.has(issue.type) &&
@@ -348,6 +366,18 @@ export const normalizeStructuredCriticReview = (
   if (decision === 'accept' && !hasGuidedIssue && strongestAutoFixableIssue && critic.reviewPlan.adjust.length > 0) {
     decision = 'auto_revise';
     normalizedDecisionReason = normalizedDecisionReason || `The result is usable, but ${strongestAutoFixableIssue.title.toLowerCase()} should be corrected automatically before asking the user to judge it.`;
+  }
+  if (
+    decision === 'auto_revise' &&
+    !hasGuidedIssue &&
+    !hasCalibratedGuidance &&
+    highSeverityIssueCount === 0 &&
+    isCommerciallyReady &&
+    qualityAverage !== null &&
+    qualityAverage >= 4
+  ) {
+    decision = 'accept';
+    normalizedDecisionReason = normalizedDecisionReason || 'The result is already commercially polished enough that another revision is unlikely to improve it materially.';
   }
 
   const revisionStrength = critic.reviewPlan.revisionStrength || inferRevisionStrength(primaryIssue, decision);

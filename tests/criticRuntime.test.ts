@@ -360,4 +360,85 @@ describe('criticRuntime', () => {
         expect(normalized.revisedPrompt).toContain('Evidence: The product touches the frame edge.');
         expect(normalized.revisedPrompt).toContain('Evidence: Negative space is too limited for a premium poster feel.');
     });
+
+    it('should accept commercially polished results instead of over-revising minor issues', () => {
+        const critic: StructuredCriticReview = {
+            decision: 'auto_revise',
+            summary: 'The image is strong, with only minor surface cleanup remaining.',
+            issues: [
+                {
+                    type: 'material_weak',
+                    severity: 'low',
+                    confidence: 'medium',
+                    autoFixable: true,
+                    title: 'Minor surface cleanup',
+                    detail: 'A small amount of extra crispness could still help the finish.',
+                    fixScope: 'local'
+                }
+            ],
+            quality: {
+                intentAlignment: 5,
+                compositionStrength: 5,
+                lightingQuality: 4,
+                materialFidelity: 4,
+                brandAccuracy: 5,
+                aestheticFinish: 4,
+                commercialReadiness: 5
+            },
+            reviewPlan: {
+                summary: 'Keep the image and only polish the surface slightly.',
+                preserve: ['composition', 'lighting', 'brand read'],
+                adjust: ['minor surface polish'],
+                confidence: 'medium',
+                executionMode: 'auto',
+                issueTypes: ['material_weak'],
+                localized: {}
+            }
+        };
+
+        const normalized = normalizeStructuredCriticReview('Premium hero product shot', critic);
+
+        expect(normalized.decision).toBe('accept');
+        expect(normalized.revisedPrompt).toBeUndefined();
+    });
+
+    it('should not accept results that still contain high-severity issues even with good quality scores', () => {
+        const critic: StructuredCriticReview = {
+            decision: 'auto_revise',
+            summary: 'The shot is attractive, but the brand label is still wrong.',
+            issues: [
+                {
+                    type: 'brand_incorrect',
+                    severity: 'high',
+                    confidence: 'high',
+                    autoFixable: true,
+                    title: 'Brand label mismatch',
+                    detail: 'The overall shot looks polished, but the label still reads incorrectly.',
+                    fixScope: 'subject'
+                }
+            ],
+            quality: {
+                intentAlignment: 4,
+                compositionStrength: 5,
+                lightingQuality: 5,
+                materialFidelity: 4,
+                brandAccuracy: 2,
+                aestheticFinish: 4,
+                commercialReadiness: 4
+            },
+            reviewPlan: {
+                summary: 'Preserve the shot and correct the label fidelity.',
+                preserve: ['composition', 'lighting'],
+                adjust: ['label fidelity'],
+                confidence: 'high',
+                executionMode: 'auto',
+                issueTypes: ['brand_incorrect'],
+                localized: {}
+            }
+        };
+
+        const normalized = normalizeStructuredCriticReview('Commercial can shot', critic);
+
+        expect(normalized.decision).toBe('auto_revise');
+    });
 });
