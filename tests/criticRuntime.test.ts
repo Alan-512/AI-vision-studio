@@ -76,6 +76,46 @@ describe('criticRuntime', () => {
         expect(normalized.reviewTrace.primaryIssue?.type).toBe('needs_reference');
     });
 
+    it('should respect calibrated requires_action decisions even when the issue is auto-fixable', () => {
+        const critic: StructuredCriticReview = {
+            decision: 'requires_action',
+            summary: 'A stronger correction is possible, but it would change the brand direction materially.',
+            reason: 'The next revision should be confirmed before it changes the current brand read.',
+            issues: [
+                {
+                    type: 'brand_incorrect',
+                    severity: 'medium',
+                    confidence: 'medium',
+                    autoFixable: true,
+                    title: 'Brand direction may drift',
+                    detail: 'A stronger correction would materially change the current label direction.'
+                }
+            ],
+            reviewPlan: {
+                summary: 'Keep the composition and confirm whether the brand direction should change.',
+                preserve: ['current composition'],
+                adjust: ['brand direction'],
+                confidence: 'high',
+                executionMode: 'guided',
+                issueTypes: ['brand_incorrect'],
+                localized: {}
+            },
+            calibration: {
+                baseDecision: 'auto_revise',
+                calibratedDecision: 'requires_action',
+                confidence: 'high',
+                reason: 'This stronger change should be confirmed with the user first.'
+            }
+        };
+
+        const normalized = normalizeStructuredCriticReview('Poster prompt', critic);
+
+        expect(normalized.decision).toBe('requires_action');
+        expect(normalized.reviewTrace.rawDecision).toBe('auto_revise');
+        expect(normalized.reviewTrace.calibratedDecision).toBe('requires_action');
+        expect(normalized.reviewTrace.calibrationConfidence).toBe('high');
+    });
+
     it('should upgrade accept to auto_revise for strong auto-fixable quality issues', () => {
         const critic: StructuredCriticReview = {
             decision: 'accept',

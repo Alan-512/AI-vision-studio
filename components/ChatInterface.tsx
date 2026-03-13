@@ -1241,6 +1241,10 @@ const ChatBubble: React.FC<ChatBubbleProps> = ({
                 const messageI18n = payload?.messageI18n as { zh?: string; en?: string } | undefined;
                 return language === 'zh' ? messageI18n?.zh : messageI18n?.en;
               })();
+              const localizedTitle = (() => {
+                const titleI18n = payload?.titleI18n as { zh?: string; en?: string } | undefined;
+                return language === 'zh' ? titleI18n?.zh : titleI18n?.en;
+              })();
               const localizedWarnings = (() => {
                 const warningsI18n = payload?.warningsI18n as { zh?: string[]; en?: string[] } | undefined;
                 const localized = language === 'zh' ? warningsI18n?.zh : warningsI18n?.en;
@@ -1285,7 +1289,7 @@ const ChatBubble: React.FC<ChatBubbleProps> = ({
                           </span>
                         </div>
                         <div className="text-[16px] font-semibold leading-7 text-slate-50">
-                          {language === 'zh' ? '我建议继续优化这一版' : 'I Have a Clear Next Step'}
+                          {localizedTitle || (language === 'zh' ? '我建议继续优化这一版' : 'I Have a Clear Next Step')}
                         </div>
                         <div className="max-w-[30rem] text-[13px] leading-6 text-slate-200/82 whitespace-pre-wrap break-words">
                           {localizedMessage || record.result?.requiresAction?.message || record.result?.error || (language === 'zh' ? '我已经评估过当前结果，并整理好了下一步优化方向。你决定是否继续即可。' : 'I have reviewed the current result and prepared the next refinement step. You only need to decide whether to continue.')}

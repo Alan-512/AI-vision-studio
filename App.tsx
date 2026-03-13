@@ -279,9 +279,10 @@ const buildOptimizationPlan = (overrides?: Partial<RevisionPlan>): RevisionPlan 
 
 const buildRequiresActionPayload = (
     prompt: string,
-    review: Pick<LocalReviewResult, 'summary' | 'warnings' | 'revisedPrompt' | 'reviewPlan'>,
+    review: Pick<LocalReviewResult, 'summary' | 'warnings' | 'revisedPrompt' | 'reviewPlan' | 'reviewTrace'>,
     actionType: string,
     i18n?: {
+        title?: BilingualText;
         message?: BilingualText;
         warnings?: { zh: string[]; en: string[] };
     },
@@ -292,6 +293,8 @@ const buildRequiresActionPayload = (
     warnings: review.warnings,
     issues: (review as LocalReviewResult).issues,
     reviewPlan: review.reviewPlan,
+    reviewTrace: review.reviewTrace,
+    titleI18n: i18n?.title,
     messageI18n: i18n?.message,
     warningsI18n: i18n?.warnings,
     availableActions: [
@@ -415,14 +418,24 @@ const criticToLocalReview = (
     requiresAction: normalized.decision === 'requires_action'
         ? {
             type: normalized.normalizedActionType || fallbackActionType,
-            message: normalized.normalizedDecisionReason || normalized.summary,
+            message: normalized.userFacing?.en?.message || normalized.normalizedDecisionReason || normalized.summary,
             payload: buildRequiresActionPayload(prompt, {
                 summary: normalized.summary,
                 warnings: normalized.issues.map(issue => issue.detail),
                 revisedPrompt: normalized.revisedPrompt,
                 reviewPlan: normalized.reviewPlan,
+                reviewTrace: normalized.reviewTrace,
                 issues: normalized.issues
-            } as LocalReviewResult, normalized.normalizedActionType || fallbackActionType)
+            } as LocalReviewResult, normalized.normalizedActionType || fallbackActionType, {
+                title: {
+                    zh: normalized.userFacing?.zh?.title || '我建议先确认下一步方向',
+                    en: normalized.userFacing?.en?.title || 'I Recommend Confirming the Next Step'
+                },
+                message: {
+                    zh: normalized.userFacing?.zh?.message || normalized.normalizedDecisionReason || normalized.summary,
+                    en: normalized.userFacing?.en?.message || normalized.normalizedDecisionReason || normalized.summary
+                }
+            })
         }
         : undefined
     };

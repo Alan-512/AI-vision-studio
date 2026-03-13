@@ -280,6 +280,11 @@ export interface LocalizedRevisionPlan {
   adjust: string[];
 }
 
+export interface LocalizedCriticCardCopy {
+  title: string;
+  message: string;
+}
+
 export interface RevisionPlan {
   summary: string;
   preserve: string[];
@@ -314,11 +319,23 @@ export interface StructuredCriticReview {
   revisedPrompt?: string;
   reason?: string;
   recommendedActionType?: string;
+  userFacing?: {
+    zh?: LocalizedCriticCardCopy;
+    en?: LocalizedCriticCardCopy;
+  };
+  calibration?: {
+    baseDecision: CriticDecision;
+    calibratedDecision: CriticDecision;
+    confidence?: CriticIssueConfidence;
+    reason?: string;
+  };
 }
 
 export interface ReviewTrace {
   rawDecision: CriticDecision;
   finalDecision: CriticDecision;
+  calibratedDecision?: CriticDecision;
+  calibrationConfidence?: CriticIssueConfidence;
   summary: string;
   reason?: string;
   primaryIssue?: {

@@ -1,6 +1,6 @@
 
 import { GoogleGenAI, Part, Content, FunctionDeclaration, Type } from "@google/genai";
-import { ChatMessage, AppMode, SmartAsset, GenerationParams, ImageModel, AgentAction, AssetItem, AspectRatio, ImageResolution, TextModel, AssistantMode, SmartAssetRole, SearchProgress, ThinkingLevel, StructuredCriticReview, CriticDecision, CriticIssue, CriticIssueType, RevisionPlan, ConsistencyProfile } from "../types";
+import { ChatMessage, AppMode, SmartAsset, GenerationParams, ImageModel, AgentAction, AssetItem, AspectRatio, ImageResolution, TextModel, AssistantMode, SmartAssetRole, SearchProgress, ThinkingLevel, StructuredCriticReview, CriticDecision, CriticIssue, CriticIssueType, RevisionPlan, ConsistencyProfile, LocalizedCriticCardCopy, CriticIssueConfidence } from "../types";
 import { createTrackedBlobUrl } from "./storageService";
 import { buildSystemInstruction, getPromptOptimizerContent, getRoleInstruction as getSkillRoleInstruction } from "./skills/promptRouter";
 import { getAlwaysOnMemorySnippet } from "./memoryService";
@@ -1531,6 +1531,13 @@ const sanitizeStringArray = (value: unknown): string[] => Array.isArray(value)
     ? value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0).map(item => item.trim()).slice(0, 8)
     : [];
 
+const sanitizeCardCopy = (value: unknown): LocalizedCriticCardCopy | undefined => {
+    const raw = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+    const title = typeof raw.title === 'string' && raw.title.trim().length > 0 ? raw.title.trim() : '';
+    const message = typeof raw.message === 'string' && raw.message.trim().length > 0 ? raw.message.trim() : '';
+    return title || message ? { title, message } : undefined;
+};
+
 const sanitizeRevisionPlan = (value: unknown): RevisionPlan => {
     const raw = value && typeof value === 'object' ? value as Record<string, unknown> : {};
     const localizedRaw = raw.localized && typeof raw.localized === 'object' ? raw.localized as Record<string, unknown> : {};
@@ -1626,12 +1633,89 @@ export const parseImageCriticReview = (rawText: string): StructuredCriticReview 
                 : undefined,
             recommendedActionType: typeof parsed.recommendedActionType === 'string' && parsed.recommendedActionType.trim().length > 0
                 ? parsed.recommendedActionType.trim()
-                : undefined
+                : undefined,
+            userFacing: {
+                zh: sanitizeCardCopy((parsed.userFacing as any)?.zh),
+                en: sanitizeCardCopy((parsed.userFacing as any)?.en)
+            }
         };
     } catch (error) {
         console.warn('[parseImageCriticReview] Failed to parse JSON review response', error);
         return null;
     }
+};
+
+type ParsedCriticCalibration = {
+    decision: CriticDecision;
+    reason?: string;
+    confidence?: CriticIssueConfidence;
+    recommendedActionType?: string;
+    executionMode?: 'auto' | 'guided';
+    userFacing?: {
+        zh?: LocalizedCriticCardCopy;
+        en?: LocalizedCriticCardCopy;
+    };
+};
+
+export const parseImageCriticCalibration = (rawText: string): ParsedCriticCalibration | null => {
+    if (!rawText.trim()) return null;
+
+    try {
+        const parsed = JSON.parse(rawText) as Record<string, unknown>;
+        const decision = typeof parsed.decision === 'string' && VALID_CRITIC_DECISIONS.has(parsed.decision as CriticDecision)
+            ? parsed.decision as CriticDecision
+            : null;
+        if (!decision) return null;
+
+        return {
+            decision,
+            reason: typeof parsed.reason === 'string' && parsed.reason.trim().length > 0
+                ? parsed.reason.trim()
+                : undefined,
+            confidence: typeof parsed.confidence === 'string' && VALID_ISSUE_SEVERITIES.has(parsed.confidence)
+                ? parsed.confidence as CriticIssueConfidence
+                : undefined,
+            recommendedActionType: typeof parsed.recommendedActionType === 'string' && parsed.recommendedActionType.trim().length > 0
+                ? parsed.recommendedActionType.trim()
+                : undefined,
+            executionMode: parsed.executionMode === 'guided' ? 'guided' : (parsed.executionMode === 'auto' ? 'auto' : undefined),
+            userFacing: {
+                zh: sanitizeCardCopy((parsed.userFacing as any)?.zh),
+                en: sanitizeCardCopy((parsed.userFacing as any)?.en)
+            }
+        };
+    } catch (error) {
+        console.warn('[parseImageCriticCalibration] Failed to parse calibration JSON', error);
+        return null;
+    }
+};
+
+export const applyImageCriticCalibration = (
+    review: StructuredCriticReview,
+    calibration: ParsedCriticCalibration | null
+): StructuredCriticReview => {
+    if (!calibration) return review;
+
+    return {
+        ...review,
+        decision: calibration.decision,
+        reason: calibration.reason || review.reason,
+        recommendedActionType: calibration.recommendedActionType || review.recommendedActionType,
+        reviewPlan: {
+            ...review.reviewPlan,
+            executionMode: calibration.executionMode || review.reviewPlan.executionMode
+        },
+        userFacing: {
+            zh: calibration.userFacing?.zh || review.userFacing?.zh,
+            en: calibration.userFacing?.en || review.userFacing?.en
+        },
+        calibration: {
+            baseDecision: review.decision,
+            calibratedDecision: calibration.decision,
+            confidence: calibration.confidence,
+            reason: calibration.reason || review.reason
+        }
+    };
 };
 
 export type ImageCriticContextInput = {
@@ -1780,7 +1864,70 @@ ${prompt}${criticContextText}`
     if (!parsed) {
         throw new Error('Image critic returned invalid JSON');
     }
-    return parsed;
+
+    try {
+        const calibrationResponse = await ai.models.generateContent({
+            model: TextModel.PRO,
+            contents: {
+                parts: [
+                    {
+                        text: `You are the calibration layer for AI Vision Studio's image critic.
+
+Your job is NOT to re-review the image from scratch. Your job is to decide whether the user should actually be interrupted.
+
+You will receive:
+1. the original user prompt
+2. runtime constraints
+3. the primary critic's structured review JSON
+
+Calibration rules:
+- prefer "auto_revise" when the primary critic already knows how to improve the image without changing the user's intent
+- choose "requires_action" only when the user truly needs to decide direction, approve a stronger change, clarify brand/style/subject intent, or provide missing references
+- choose "accept" only when further refinement would likely add noise or needless delay
+- keep the user burden low; do not ask for prompt engineering
+- provide concise product-language copy for the action card when "requires_action" is chosen
+
+Return JSON only with this shape:
+{
+  "decision": "accept" | "auto_revise" | "requires_action",
+  "reason": string,
+  "confidence": "low" | "medium" | "high",
+  "recommendedActionType": string,
+  "executionMode": "auto" | "guided",
+  "userFacing": {
+    "zh": { "title": string, "message": string },
+    "en": { "title": string, "message": string }
+  }
+}
+
+Use action types like:
+- continue_optimization
+- upload_reference
+- confirm_subject_direction
+- confirm_brand_direction
+- clarify_style_direction
+- preserve_composition
+- confirm_refinement_scope
+- clarify_constraints
+
+User prompt:
+${prompt}${criticContextText}
+
+Primary critic review:
+${JSON.stringify(parsed, null, 2)}`
+                    }
+                ]
+            },
+            config: {
+                responseMimeType: 'application/json'
+            }
+        });
+
+        return applyImageCriticCalibration(parsed, parseImageCriticCalibration((calibrationResponse.text ?? '').trim()));
+    } catch (error) {
+        console.warn('[reviewGeneratedImageWithAI] Calibration pass failed, using primary critic review.', error);
+        return parsed;
+    }
 };
 
 export const testConnection = async (apiKey: string): Promise<boolean> => {

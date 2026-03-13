@@ -9,6 +9,8 @@ import {
     normalizeSupportedToolName,
     parseImageCriticReview,
     buildImageCriticContextText,
+    parseImageCriticCalibration,
+    applyImageCriticCalibration,
     StructuredFact
 } from '../services/geminiService';
 import { AssistantMode } from '../types';
@@ -284,6 +286,80 @@ describe('GeminiService', () => {
             expect(text).toContain('Brand: Red Bull Energy Drink');
             expect(text).toContain('keep the product commercially recognizable');
             expect(text).toContain('negative_prompt_to_avoid: blurry, logo distortion');
+        });
+    });
+
+    describe('parseImageCriticCalibration', () => {
+        it('should parse a structured calibration response', () => {
+            const calibration = parseImageCriticCalibration(JSON.stringify({
+                decision: 'requires_action',
+                reason: 'Changing the brand direction would be a stronger intervention than the user explicitly asked for.',
+                confidence: 'high',
+                recommendedActionType: 'confirm_brand_direction',
+                executionMode: 'guided',
+                userFacing: {
+                    zh: {
+                        title: '我建议先确认品牌方向',
+                        message: '我已经整理好了可行的优化方向，但这一步会明显改变品牌呈现，最好先由你确认。'
+                    },
+                    en: {
+                        title: 'I Recommend Confirming the Brand Direction',
+                        message: 'I have a clear refinement path, but this change would materially alter the brand read, so it is better to confirm first.'
+                    }
+                }
+            }));
+
+            expect(calibration?.decision).toBe('requires_action');
+            expect(calibration?.confidence).toBe('high');
+            expect(calibration?.recommendedActionType).toBe('confirm_brand_direction');
+            expect(calibration?.userFacing?.zh?.title).toContain('品牌方向');
+        });
+    });
+
+    describe('applyImageCriticCalibration', () => {
+        it('should merge calibrated interruption guidance into the critic review', () => {
+            const merged = applyImageCriticCalibration({
+                decision: 'auto_revise',
+                summary: 'The composition is strong but the brand read may drift.',
+                issues: [
+                    {
+                        type: 'brand_incorrect',
+                        severity: 'medium',
+                        confidence: 'medium',
+                        autoFixable: true,
+                        title: 'Brand direction may drift',
+                        detail: 'A stronger revision could change the intended label direction.'
+                    }
+                ],
+                reviewPlan: {
+                    summary: 'Keep the composition and improve the brand read.',
+                    preserve: ['composition'],
+                    adjust: ['brand direction'],
+                    confidence: 'medium',
+                    executionMode: 'auto',
+                    localized: {}
+                },
+                recommendedActionType: 'tighten_brand_match'
+            }, {
+                decision: 'requires_action',
+                reason: 'A stronger brand correction should be confirmed before continuing.',
+                confidence: 'high',
+                recommendedActionType: 'confirm_brand_direction',
+                executionMode: 'guided',
+                userFacing: {
+                    zh: {
+                        title: '我建议先确认品牌方向',
+                        message: '这一步会明显改变品牌呈现，最好先确认。'
+                    }
+                }
+            });
+
+            expect(merged.decision).toBe('requires_action');
+            expect(merged.reviewPlan.executionMode).toBe('guided');
+            expect(merged.recommendedActionType).toBe('confirm_brand_direction');
+            expect(merged.calibration?.baseDecision).toBe('auto_revise');
+            expect(merged.calibration?.calibratedDecision).toBe('requires_action');
+            expect(merged.userFacing?.zh?.title).toContain('品牌方向');
         });
     });
 });

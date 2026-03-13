@@ -209,6 +209,7 @@ export const normalizeStructuredCriticReview = (
   const issues = critic.issues || [];
   const primaryIssue = selectPrimaryIssue(issues);
   const hasGuidedIssue = issues.some(issue => GUIDED_ISSUE_TYPES.has(issue.type));
+  const hasCalibratedGuidance = critic.calibration?.calibratedDecision === 'requires_action' && critic.calibration?.confidence !== 'low';
   const allAutoFixable = issues.length > 0 && issues.every(issue => issue.autoFixable);
   const strongestAutoFixableIssue = issues.find(issue =>
     issue.autoFixable &&
@@ -218,11 +219,11 @@ export const normalizeStructuredCriticReview = (
 
   let decision: CriticDecision = critic.decision;
   let normalizedDecisionReason = critic.reason;
-  if (decision === 'requires_action' && !hasGuidedIssue && allAutoFixable && critic.reviewPlan.executionMode !== 'guided') {
+  if (decision === 'requires_action' && !hasGuidedIssue && !hasCalibratedGuidance && allAutoFixable && critic.reviewPlan.executionMode !== 'guided') {
     decision = 'auto_revise';
     normalizedDecisionReason = normalizedDecisionReason || 'All identified issues are auto-fixable, so the runtime can continue without interrupting the user.';
   }
-  if (decision === 'auto_revise' && hasGuidedIssue) {
+  if (decision === 'auto_revise' && (hasGuidedIssue || hasCalibratedGuidance)) {
     decision = 'requires_action';
     normalizedDecisionReason = normalizedDecisionReason || 'The review found a missing reference or conflicting constraint that needs user guidance.';
   }
@@ -242,8 +243,10 @@ export const normalizeStructuredCriticReview = (
     .filter(issue => issue.severity !== 'low')
     .map(issue => issue.detail);
   const reviewTrace: ReviewTrace = {
-    rawDecision: critic.decision,
+    rawDecision: critic.calibration?.baseDecision || critic.decision,
     finalDecision: decision,
+    calibratedDecision: critic.calibration?.calibratedDecision,
+    calibrationConfidence: critic.calibration?.confidence,
     summary: critic.summary,
     reason: normalizedDecisionReason,
     primaryIssue: primaryIssue
