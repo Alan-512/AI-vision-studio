@@ -8,9 +8,16 @@ export type CriticNormalizationContext = {
 
 export type NormalizedCriticReview = StructuredCriticReview & {
   warnings: string[];
+  normalizedDecisionReason?: string;
 };
 
 const GUIDED_ISSUE_TYPES = new Set<CriticIssueType>(['needs_reference', 'constraint_conflict']);
+const AGGRESSIVE_AUTO_REVISE_ISSUES = new Set<CriticIssueType>([
+  'subject_mismatch',
+  'brand_incorrect',
+  'material_weak',
+  'text_artifact'
+]);
 
 const dedupeStrings = (values: Array<string | undefined | null>, limit = 10): string[] => {
   const seen = new Set<string>();
@@ -85,13 +92,25 @@ export const normalizeStructuredCriticReview = (
   const issues = critic.issues || [];
   const hasGuidedIssue = issues.some(issue => GUIDED_ISSUE_TYPES.has(issue.type));
   const allAutoFixable = issues.length > 0 && issues.every(issue => issue.autoFixable);
+  const strongestAutoFixableIssue = issues.find(issue =>
+    issue.autoFixable &&
+    AGGRESSIVE_AUTO_REVISE_ISSUES.has(issue.type) &&
+    (issue.severity === 'high' || (issue.severity === 'medium' && issue.confidence === 'high'))
+  );
 
   let decision: CriticDecision = critic.decision;
+  let normalizedDecisionReason = critic.reason;
   if (decision === 'requires_action' && !hasGuidedIssue && allAutoFixable && critic.reviewPlan.executionMode !== 'guided') {
     decision = 'auto_revise';
+    normalizedDecisionReason = normalizedDecisionReason || 'All identified issues are auto-fixable, so the runtime can continue without interrupting the user.';
   }
   if (decision === 'auto_revise' && hasGuidedIssue) {
     decision = 'requires_action';
+    normalizedDecisionReason = normalizedDecisionReason || 'The review found a missing reference or conflicting constraint that needs user guidance.';
+  }
+  if (decision === 'accept' && !hasGuidedIssue && strongestAutoFixableIssue && critic.reviewPlan.adjust.length > 0) {
+    decision = 'auto_revise';
+    normalizedDecisionReason = normalizedDecisionReason || `The result is usable, but ${strongestAutoFixableIssue.title.toLowerCase()} should be corrected automatically before asking the user to judge it.`;
   }
 
   const reviewPlan = applyExecutionMode(critic.reviewPlan, decision);
@@ -107,6 +126,7 @@ export const normalizeStructuredCriticReview = (
     decision,
     reviewPlan,
     revisedPrompt,
-    warnings
+    warnings,
+    normalizedDecisionReason
   };
 };

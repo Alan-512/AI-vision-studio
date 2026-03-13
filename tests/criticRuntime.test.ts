@@ -69,6 +69,38 @@ describe('criticRuntime', () => {
         expect(normalized.reviewPlan.executionMode).toBe('guided');
     });
 
+    it('should upgrade accept to auto_revise for strong auto-fixable quality issues', () => {
+        const critic: StructuredCriticReview = {
+            decision: 'accept',
+            summary: 'The image is usable but the product label is still not accurate enough.',
+            reason: 'The current output is close, but the product label should be corrected before final acceptance.',
+            issues: [
+                {
+                    type: 'brand_incorrect',
+                    severity: 'high',
+                    confidence: 'high',
+                    autoFixable: true,
+                    title: 'Brand label mismatch',
+                    detail: 'The label text and logo need stronger fidelity.'
+                }
+            ],
+            reviewPlan: {
+                summary: 'Keep the product shot and tighten the label fidelity.',
+                preserve: ['composition', 'lighting'],
+                adjust: ['label fidelity'],
+                confidence: 'high',
+                executionMode: 'auto',
+                issueTypes: ['brand_incorrect'],
+                localized: {}
+            }
+        };
+
+        const normalized = normalizeStructuredCriticReview('Premium product shot prompt', critic);
+
+        expect(normalized.decision).toBe('auto_revise');
+        expect(normalized.normalizedDecisionReason).toContain('product label');
+    });
+
     it('should build revision prompts that preserve continuity constraints', () => {
         const prompt = buildRevisionPromptFromPlan(
             'Generate a premium product shot',

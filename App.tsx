@@ -407,7 +407,7 @@ const criticToLocalReview = (
     warnings: normalized.warnings,
     issues: normalized.issues,
     revisedPrompt: normalized.revisedPrompt,
-    revisionReason: normalized.reason || normalized.summary,
+    revisionReason: normalized.normalizedDecisionReason || normalized.reason || normalized.summary,
     reviewPlan: normalized.reviewPlan,
     requiresAction: normalized.decision === 'requires_action'
         ? {
