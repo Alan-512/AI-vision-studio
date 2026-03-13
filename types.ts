@@ -286,6 +286,7 @@ export interface RevisionPlan {
   adjust: string[];
   confidence: CriticIssueConfidence;
   executionMode: 'auto' | 'guided';
+  revisionStrength?: 'light' | 'targeted' | 'aggressive';
   issueTypes?: CriticIssueType[];
   hardConstraints?: string[];
   preferredContinuity?: string[];
@@ -327,6 +328,7 @@ export interface ReviewTrace {
     title: string;
   };
   actionType?: string;
+  revisionStrength?: 'light' | 'targeted' | 'aggressive';
   preserve: string[];
   adjust: string[];
   hardConstraints?: string[];

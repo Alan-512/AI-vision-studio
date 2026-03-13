@@ -21,7 +21,7 @@
 ## 5. Verification
 - [x] 5.1 Add tests for critic issue classification and structured revision-plan generation
 - [x] 5.2 Add tests for plan-driven `requires_action` states and richer action selection paths
-- [ ] 5.3 Add tests for consistency-aware follow-up edits and constraint preservation across multi-step jobs
+- [x] 5.3 Add tests for consistency-aware follow-up edits and constraint preservation across multi-step jobs
 
 ## 6. Observability
 - [x] 6.1 Persist internal review traces with critic decision, normalized decision, primary issue, and chosen action type

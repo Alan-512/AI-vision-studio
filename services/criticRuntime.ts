@@ -21,6 +21,16 @@ const AGGRESSIVE_AUTO_REVISE_ISSUES = new Set<CriticIssueType>([
   'material_weak',
   'text_artifact'
 ]);
+const LIGHT_REVISION_ISSUES = new Set<CriticIssueType>([
+  'lighting_mismatch',
+  'material_weak',
+  'text_artifact'
+]);
+const TARGETED_REVISION_ISSUES = new Set<CriticIssueType>([
+  'brand_incorrect',
+  'render_incomplete',
+  'other'
+]);
 
 const dedupeStrings = (values: Array<string | undefined | null>, limit = 10): string[] => {
   const seen = new Set<string>();
@@ -49,9 +59,54 @@ const ISSUE_PROMPT_HINTS: Record<CriticIssueType, string> = {
   other: 'Apply a focused refinement while preserving the current strengths of the image.'
 };
 
-const applyExecutionMode = (plan: RevisionPlan, decision: CriticDecision): RevisionPlan => ({
+const revisionStrengthInstruction = (strength: NonNullable<RevisionPlan['revisionStrength']>): string => {
+  switch (strength) {
+    case 'light':
+      return 'Apply a light-touch correction only. Preserve the current composition, framing, and overall mood unless a minimal local fix requires otherwise.';
+    case 'aggressive':
+      return 'Prioritize fixing the main mismatch decisively. Stronger subject or layout corrections are allowed, but keep hard constraints and the approved direction intact.';
+    default:
+      return 'Apply a focused correction to the identified issue while preserving the successful composition, lighting, and continuity cues whenever possible.';
+  }
+};
+
+const inferRevisionStrength = (
+  primaryIssue: CriticIssue | undefined,
+  decision: CriticDecision
+): NonNullable<RevisionPlan['revisionStrength']> => {
+  if (!primaryIssue) {
+    return decision === 'requires_action' ? 'targeted' : 'light';
+  }
+  if (GUIDED_ISSUE_TYPES.has(primaryIssue.type)) {
+    return 'targeted';
+  }
+  if (
+    primaryIssue.type === 'subject_mismatch' ||
+    primaryIssue.type === 'composition_weak' ||
+    (primaryIssue.type === 'brand_incorrect' && primaryIssue.severity === 'high' && primaryIssue.confidence !== 'low')
+  ) {
+    return 'aggressive';
+  }
+  if (
+    LIGHT_REVISION_ISSUES.has(primaryIssue.type) &&
+    !(primaryIssue.severity === 'high' && primaryIssue.confidence === 'high')
+  ) {
+    return 'light';
+  }
+  if (TARGETED_REVISION_ISSUES.has(primaryIssue.type)) {
+    return 'targeted';
+  }
+  return primaryIssue.severity === 'low' ? 'light' : 'targeted';
+};
+
+const applyExecutionMode = (
+  plan: RevisionPlan,
+  decision: CriticDecision,
+  revisionStrength: NonNullable<RevisionPlan['revisionStrength']>
+): RevisionPlan => ({
   ...plan,
-  executionMode: decision === 'requires_action' ? 'guided' : 'auto'
+  executionMode: decision === 'requires_action' ? 'guided' : 'auto',
+  revisionStrength
 });
 
 const issuePriority = (issue: CriticIssue): number => {
@@ -124,11 +179,17 @@ export const buildRevisionPromptFromPlan = (
     ...(context?.consistencyProfile?.hardConstraints || [])
   ]);
   const issueHints = dedupeStrings(issues.map(issue => ISSUE_PROMPT_HINTS[issue.type]));
+  const revisionStrength = plan.revisionStrength || inferRevisionStrength(
+    selectPrimaryIssue(issues),
+    plan.executionMode === 'guided' ? 'requires_action' : 'auto_revise'
+  );
 
   const lines = [
     basePrompt.trim(),
     '',
-    'Revision goals:'
+    'Revision goals:',
+    `- Strength: ${revisionStrength}`,
+    `- Scope: ${revisionStrengthInstruction(revisionStrength)}`
   ];
 
   if (plan.summary) lines.push(`- ${plan.summary}`);
@@ -170,7 +231,8 @@ export const normalizeStructuredCriticReview = (
     normalizedDecisionReason = normalizedDecisionReason || `The result is usable, but ${strongestAutoFixableIssue.title.toLowerCase()} should be corrected automatically before asking the user to judge it.`;
   }
 
-  const reviewPlan = applyExecutionMode(critic.reviewPlan, decision);
+  const revisionStrength = critic.reviewPlan.revisionStrength || inferRevisionStrength(primaryIssue, decision);
+  const reviewPlan = applyExecutionMode(critic.reviewPlan, decision, revisionStrength);
   const normalizedActionType = critic.recommendedActionType || recommendActionType(decision, primaryIssue);
   normalizedDecisionReason = buildDecisionReason(decision, primaryIssue, normalizedDecisionReason);
   const revisedPrompt = decision === 'accept'
@@ -193,6 +255,7 @@ export const normalizeStructuredCriticReview = (
         }
       : undefined,
     actionType: normalizedActionType,
+    revisionStrength,
     preserve: reviewPlan.preserve,
     adjust: reviewPlan.adjust,
     hardConstraints: reviewPlan.hardConstraints,

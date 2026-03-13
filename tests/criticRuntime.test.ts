@@ -34,9 +34,11 @@ describe('criticRuntime', () => {
 
         expect(normalized.decision).toBe('auto_revise');
         expect(normalized.reviewPlan.executionMode).toBe('auto');
+        expect(normalized.reviewPlan.revisionStrength).toBe('targeted');
         expect(normalized.revisedPrompt).toContain('Keep: composition');
         expect(normalized.reviewTrace.rawDecision).toBe('requires_action');
         expect(normalized.reviewTrace.finalDecision).toBe('auto_revise');
+        expect(normalized.reviewTrace.revisionStrength).toBe('targeted');
     });
 
     it('should keep requires_action when issues need user guidance', () => {
@@ -69,6 +71,7 @@ describe('criticRuntime', () => {
 
         expect(normalized.decision).toBe('requires_action');
         expect(normalized.reviewPlan.executionMode).toBe('guided');
+        expect(normalized.reviewPlan.revisionStrength).toBe('targeted');
         expect(normalized.normalizedActionType).toBe('upload_reference');
         expect(normalized.reviewTrace.primaryIssue?.type).toBe('needs_reference');
     });
@@ -104,6 +107,7 @@ describe('criticRuntime', () => {
         expect(normalized.decision).toBe('auto_revise');
         expect(normalized.normalizedDecisionReason).toContain('product label');
         expect(normalized.normalizedActionType).toBe('tighten_brand_match');
+        expect(normalized.reviewPlan.revisionStrength).toBe('aggressive');
     });
 
     it('should recommend a focused action type for guided constraint conflicts', () => {
@@ -137,6 +141,7 @@ describe('criticRuntime', () => {
         expect(normalized.normalizedActionType).toBe('clarify_constraints');
         expect(normalized.normalizedDecisionReason).toContain('constraint conflict');
         expect(normalized.reviewTrace.actionType).toBe('clarify_constraints');
+        expect(normalized.reviewTrace.revisionStrength).toBe('targeted');
     });
 
     it('should build revision prompts that preserve continuity constraints', () => {
@@ -176,5 +181,72 @@ describe('criticRuntime', () => {
         expect(prompt).toContain('Keep: product silhouette');
         expect(prompt).toContain('Constraint: keep the product commercially recognizable');
         expect(prompt).toContain('Focus: Improve material rendering and product surface definition.');
+        expect(prompt).toContain('Strength: light');
+        expect(prompt).toContain('Scope: Apply a light-touch correction only.');
+    });
+
+    it('should keep material cleanup lightweight when the issue is surface-level', () => {
+        const critic: StructuredCriticReview = {
+            decision: 'auto_revise',
+            summary: 'The product surface needs a cleaner finish.',
+            issues: [
+                {
+                    type: 'material_weak',
+                    severity: 'medium',
+                    confidence: 'high',
+                    autoFixable: true,
+                    title: 'Material rendering is weak',
+                    detail: 'The bottle material lacks crisp surface definition.'
+                }
+            ],
+            reviewPlan: {
+                summary: 'Keep the shot and improve surface rendering.',
+                preserve: ['current composition', 'lighting direction'],
+                adjust: ['surface definition'],
+                confidence: 'high',
+                executionMode: 'auto',
+                issueTypes: ['material_weak'],
+                localized: {}
+            }
+        };
+
+        const normalized = normalizeStructuredCriticReview('Studio product shot', critic);
+
+        expect(normalized.reviewPlan.revisionStrength).toBe('light');
+        expect(normalized.revisedPrompt).toContain('Strength: light');
+        expect(normalized.revisedPrompt).toContain('Scope: Apply a light-touch correction only.');
+    });
+
+    it('should allow stronger correction for high-confidence subject mismatches', () => {
+        const critic: StructuredCriticReview = {
+            decision: 'auto_revise',
+            summary: 'The overall style is correct, but the subject identity is wrong.',
+            issues: [
+                {
+                    type: 'subject_mismatch',
+                    severity: 'high',
+                    confidence: 'high',
+                    autoFixable: true,
+                    title: 'Subject identity mismatch',
+                    detail: 'The generated subject does not match the requested product identity.'
+                }
+            ],
+            reviewPlan: {
+                summary: 'Preserve the atmosphere and correct the subject identity.',
+                preserve: ['lighting mood', 'camera distance'],
+                adjust: ['subject identity'],
+                confidence: 'high',
+                executionMode: 'auto',
+                issueTypes: ['subject_mismatch'],
+                localized: {}
+            }
+        };
+
+        const normalized = normalizeStructuredCriticReview('High-end hero product image', critic);
+
+        expect(normalized.reviewPlan.revisionStrength).toBe('aggressive');
+        expect(normalized.reviewTrace.revisionStrength).toBe('aggressive');
+        expect(normalized.revisedPrompt).toContain('Strength: aggressive');
+        expect(normalized.revisedPrompt).toContain('Scope: Prioritize fixing the main mismatch decisively.');
     });
 });
