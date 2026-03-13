@@ -1,7 +1,7 @@
 
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { Send, User, Sparkles, ChevronDown, BrainCircuit, Zap, X, Box, Copy, Check, Plus, MonitorPlay, Film, Bot, Square, Crop, CheckCircle2, Globe, Brain, CircuitBoard, Wrench, Image as ImageIcon, CircleDashed, Terminal, RefreshCw, AlertCircle, Search, Upload, ShieldCheck, ArrowUpRight } from 'lucide-react';
-import { ChatMessage, GenerationParams, ImageResolution, AppMode, ImageModel, VideoResolution, VideoModel, AspectRatio, SmartAsset, APP_LIMITS, AgentAction, TextModel, SearchProgress, ThinkingLevel, ToolCallRecord } from '../types';
+import { ChatMessage, GenerationParams, ImageResolution, AppMode, ImageModel, VideoResolution, VideoModel, AspectRatio, SmartAsset, APP_LIMITS, AgentAction, TextModel, SearchProgress, ThinkingLevel, ToolCallRecord, ReviewTrace } from '../types';
 import { streamChatResponse } from '../services/geminiService';
 import { normalizeImageUrlForChat } from '../services/imageUtils';
 import { AgentStateMachine, AgentState, createInitialAgentState, PendingAction, createGenerateAction } from '../services/agentService';
@@ -144,6 +144,15 @@ const parseAgentSteps = (rawText: string): { steps: AgentStep[], finalContent: s
   return { steps, finalContent: cleanContent };
 };
 
+const extractReviewTrace = (toolCall: ToolCallRecord): ReviewTrace | undefined => {
+  const payload = toolCall.result?.requiresAction?.payload as Record<string, unknown> | undefined;
+  const payloadTrace = payload?.reviewTrace as ReviewTrace | undefined;
+  if (payloadTrace) return payloadTrace;
+
+  const reviewMetadata = toolCall.result?.metadata?.review as { trace?: ReviewTrace } | undefined;
+  return reviewMetadata?.trace;
+};
+
 const AgentStepItem: React.FC<{ step: AgentStep; isLast: boolean; isThinking: boolean }> = ({ step }) => {
   const [isOpen, setIsOpen] = useState(!step.isComplete);
 
@@ -225,6 +234,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   setThoughtImages
 }) => {
   const { t, language } = useLanguage();
+  const isDevReviewTraceVisible = import.meta.env.DEV;
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [selectedModel, setSelectedModel] = useState<TextModel>(TextModel.FLASH);
@@ -1217,6 +1227,7 @@ const ChatBubble: React.FC<ChatBubbleProps> = ({
           <div className="w-full max-w-md space-y-2">
             {actionRequiredToolCalls.map((record) => {
               const payload = record.result?.requiresAction?.payload as Record<string, unknown> | undefined;
+              const reviewTrace = extractReviewTrace(record);
               const reviewPlan = payload?.reviewPlan as {
                 summary?: string;
                 preserve?: string[];
@@ -1338,6 +1349,105 @@ const ChatBubble: React.FC<ChatBubbleProps> = ({
                             </div>
                           ))}
                         </div>
+                      )}
+
+                      {isDevReviewTraceVisible && reviewTrace && (
+                        <details className="rounded-[18px] border border-dashed border-white/8 bg-black/10 px-3.5 py-3 group">
+                          <summary className="flex cursor-pointer list-none items-center justify-between gap-3 text-[11px] font-medium tracking-[0.02em] text-slate-400/78 marker:hidden">
+                            <span className="inline-flex items-center gap-1.5">
+                              <Terminal size={13} className="text-slate-500/80" />
+                              {language === 'zh' ? 'Review Trace（调试）' : 'Review Trace (Debug)'}
+                            </span>
+                            <span className="text-[10px] text-slate-500/70 group-open:hidden">
+                              {language === 'zh' ? '展开查看本次评审决策' : 'Expand to inspect this review decision'}
+                            </span>
+                          </summary>
+                          <div className="mt-3 space-y-3 text-[11px] leading-5 text-slate-300/82">
+                            <div className="grid gap-2 sm:grid-cols-2">
+                              <div className="rounded-[14px] bg-white/[0.03] px-3 py-2.5">
+                                <div className="text-slate-500/75">{language === 'zh' ? '原始决策' : 'Raw Decision'}</div>
+                                <div className="mt-1 font-medium text-slate-100">{reviewTrace.rawDecision}</div>
+                              </div>
+                              <div className="rounded-[14px] bg-white/[0.03] px-3 py-2.5">
+                                <div className="text-slate-500/75">{language === 'zh' ? '最终决策' : 'Final Decision'}</div>
+                                <div className="mt-1 font-medium text-slate-100">{reviewTrace.finalDecision}</div>
+                              </div>
+                              {reviewTrace.actionType && (
+                                <div className="rounded-[14px] bg-white/[0.03] px-3 py-2.5">
+                                  <div className="text-slate-500/75">{language === 'zh' ? '动作类型' : 'Action Type'}</div>
+                                  <div className="mt-1 font-medium text-slate-100">{reviewTrace.actionType}</div>
+                                </div>
+                              )}
+                              {reviewTrace.revisionStrength && (
+                                <div className="rounded-[14px] bg-white/[0.03] px-3 py-2.5">
+                                  <div className="text-slate-500/75">{language === 'zh' ? '修正强度' : 'Revision Strength'}</div>
+                                  <div className="mt-1 font-medium text-slate-100">{reviewTrace.revisionStrength}</div>
+                                </div>
+                              )}
+                            </div>
+
+                            {reviewTrace.primaryIssue && (
+                              <div className="rounded-[14px] bg-white/[0.03] px-3 py-2.5">
+                                <div className="text-slate-500/75">{language === 'zh' ? '主问题' : 'Primary Issue'}</div>
+                                <div className="mt-1 font-medium text-slate-100">
+                                  {reviewTrace.primaryIssue.title} · {reviewTrace.primaryIssue.type}
+                                </div>
+                                <div className="mt-1 text-slate-400/80">
+                                  {language === 'zh' ? '严重度' : 'Severity'}: {reviewTrace.primaryIssue.severity}
+                                  {' · '}
+                                  {language === 'zh' ? '置信度' : 'Confidence'}: {reviewTrace.primaryIssue.confidence}
+                                </div>
+                              </div>
+                            )}
+
+                            {reviewTrace.reason && (
+                              <div className="rounded-[14px] bg-white/[0.03] px-3 py-2.5">
+                                <div className="text-slate-500/75">{language === 'zh' ? '决策原因' : 'Decision Reason'}</div>
+                                <div className="mt-1 whitespace-pre-wrap break-words text-slate-200/88">{reviewTrace.reason}</div>
+                              </div>
+                            )}
+
+                            <div className="grid gap-2 sm:grid-cols-2">
+                              {reviewTrace.preserve.length > 0 && (
+                                <div className="rounded-[14px] bg-white/[0.03] px-3 py-2.5">
+                                  <div className="text-slate-500/75">{language === 'zh' ? '保持目标' : 'Preserve Targets'}</div>
+                                  <div className="mt-1 flex flex-wrap gap-1.5">
+                                    {reviewTrace.preserve.map((item, index) => (
+                                      <span key={`${record.id}-trace-preserve-${index}`} className="rounded-full bg-white/[0.05] px-2 py-1 text-[10px] text-slate-200/88">
+                                        {item}
+                                      </span>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+                              {reviewTrace.adjust.length > 0 && (
+                                <div className="rounded-[14px] bg-white/[0.03] px-3 py-2.5">
+                                  <div className="text-slate-500/75">{language === 'zh' ? '优化目标' : 'Adjust Targets'}</div>
+                                  <div className="mt-1 flex flex-wrap gap-1.5">
+                                    {reviewTrace.adjust.map((item, index) => (
+                                      <span key={`${record.id}-trace-adjust-${index}`} className="rounded-full bg-sky-500/[0.10] px-2 py-1 text-[10px] text-sky-200/90">
+                                        {item}
+                                      </span>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+
+                            {Array.isArray(reviewTrace.issueTypes) && reviewTrace.issueTypes.length > 0 && (
+                              <div className="rounded-[14px] bg-white/[0.03] px-3 py-2.5">
+                                <div className="text-slate-500/75">{language === 'zh' ? '问题类型' : 'Issue Types'}</div>
+                                <div className="mt-1 flex flex-wrap gap-1.5">
+                                  {reviewTrace.issueTypes.map((item, index) => (
+                                    <span key={`${record.id}-trace-issue-${index}`} className="rounded-full bg-white/[0.05] px-2 py-1 text-[10px] text-slate-200/88">
+                                      {item}
+                                    </span>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        </details>
                       )}
 
                       <div className="flex justify-center pt-1">
