@@ -23,6 +23,10 @@
 - [x] 5.2 Add tests for plan-driven `requires_action` states and richer action selection paths
 - [ ] 5.3 Add tests for consistency-aware follow-up edits and constraint preservation across multi-step jobs
 
+## 6. Observability
+- [x] 6.1 Persist internal review traces with critic decision, normalized decision, primary issue, and chosen action type
+- [x] 6.2 Use traces to explain why `requires_action` was chosen over `auto_revise`
+
 ## Current Focus
 - Start with critic taxonomy and revision-plan primitives before adding new user-facing actions.
 - Keep later UX work small and plan-driven so the chat experience stays lightweight.

@@ -1,4 +1,4 @@
-import { ConsistencyProfile, CriticDecision, CriticIssue, CriticIssueType, RevisionPlan, StructuredCriticReview } from '../types';
+import { ConsistencyProfile, CriticDecision, CriticIssue, CriticIssueType, RevisionPlan, ReviewTrace, StructuredCriticReview } from '../types';
 
 export type CriticNormalizationContext = {
   consistencyProfile?: ConsistencyProfile;
@@ -11,6 +11,7 @@ export type NormalizedCriticReview = StructuredCriticReview & {
   normalizedDecisionReason?: string;
   primaryIssue?: CriticIssue;
   normalizedActionType?: string;
+  reviewTrace: ReviewTrace;
 };
 
 const GUIDED_ISSUE_TYPES = new Set<CriticIssueType>(['needs_reference', 'constraint_conflict']);
@@ -178,6 +179,26 @@ export const normalizeStructuredCriticReview = (
   const warnings = issues
     .filter(issue => issue.severity !== 'low')
     .map(issue => issue.detail);
+  const reviewTrace: ReviewTrace = {
+    rawDecision: critic.decision,
+    finalDecision: decision,
+    summary: critic.summary,
+    reason: normalizedDecisionReason,
+    primaryIssue: primaryIssue
+      ? {
+          type: primaryIssue.type,
+          severity: primaryIssue.severity,
+          confidence: primaryIssue.confidence,
+          title: primaryIssue.title
+        }
+      : undefined,
+    actionType: normalizedActionType,
+    preserve: reviewPlan.preserve,
+    adjust: reviewPlan.adjust,
+    hardConstraints: reviewPlan.hardConstraints,
+    preferredContinuity: reviewPlan.preferredContinuity,
+    issueTypes: issues.map(issue => issue.type)
+  };
 
   return {
     ...critic,
@@ -187,6 +208,7 @@ export const normalizeStructuredCriticReview = (
     warnings,
     normalizedDecisionReason,
     primaryIssue,
-    normalizedActionType
+    normalizedActionType,
+    reviewTrace
   };
 };

@@ -35,6 +35,8 @@ describe('criticRuntime', () => {
         expect(normalized.decision).toBe('auto_revise');
         expect(normalized.reviewPlan.executionMode).toBe('auto');
         expect(normalized.revisedPrompt).toContain('Keep: composition');
+        expect(normalized.reviewTrace.rawDecision).toBe('requires_action');
+        expect(normalized.reviewTrace.finalDecision).toBe('auto_revise');
     });
 
     it('should keep requires_action when issues need user guidance', () => {
@@ -68,6 +70,7 @@ describe('criticRuntime', () => {
         expect(normalized.decision).toBe('requires_action');
         expect(normalized.reviewPlan.executionMode).toBe('guided');
         expect(normalized.normalizedActionType).toBe('upload_reference');
+        expect(normalized.reviewTrace.primaryIssue?.type).toBe('needs_reference');
     });
 
     it('should upgrade accept to auto_revise for strong auto-fixable quality issues', () => {
@@ -133,6 +136,7 @@ describe('criticRuntime', () => {
         expect(normalized.decision).toBe('requires_action');
         expect(normalized.normalizedActionType).toBe('clarify_constraints');
         expect(normalized.normalizedDecisionReason).toContain('constraint conflict');
+        expect(normalized.reviewTrace.actionType).toBe('clarify_constraints');
     });
 
     it('should build revision prompts that preserve continuity constraints', () => {

@@ -55,6 +55,29 @@ What remains limited is the quality of the agent's decisions after generation. R
   - Phase 3: consistency profile and constraint-aware follow-up refinement
   - This keeps the next implementation steps incremental and testable.
 
+- Decision: Use a layered evaluation stack instead of pure rules or pure free-form critique
+  - Final decision quality should come from three layers working together:
+    - hard runtime guardrails for deterministic failures such as missing payloads or incomplete artifacts
+    - structured critic evaluation for issue classification, fixability, and revision planning
+    - a runtime decision layer that converts critic output into `accept`, `auto_revise`, or `requires_action`
+  - This keeps low-level safety deterministic while letting the multimodal critic handle quality and aesthetic judgment under task constraints.
+
+- Decision: Keep the user-facing action surface simple while increasing internal specialization
+  - The default chat UX should remain lightweight and low-burden.
+  - Internal action types, critic issue types, and revision strengths can become more specialized without adding more visible buttons.
+  - The main benefit should first show up as fewer unnecessary interruptions and better automatic refinements.
+
+- Decision: Add internal review traces for observability
+  - As critic logic grows more capable, the runtime needs an inspectable trail of how a review decision was reached.
+  - Review traces should capture:
+    - critic raw decision
+    - normalized final decision
+    - primary issue
+    - chosen action type
+    - preserve / adjust targets
+    - major constraints considered
+  - This trace is primarily for debugging, QA, and future tuning, not for direct end-user exposure by default.
+
 ## Alternatives Considered
 - Continue enhancing the current review prompts without adding new runtime objects
   - Rejected because the improvement would remain implicit and hard to test, inspect, or resume across jobs.

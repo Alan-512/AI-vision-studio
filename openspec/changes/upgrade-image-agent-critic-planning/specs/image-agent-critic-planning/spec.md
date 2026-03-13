@@ -66,3 +66,16 @@ The system SHALL treat retrieved facts and user references as explicit runtime c
 - **WHEN** a job continues across multiple review and revision steps
 - **THEN** search facts, reference-derived requirements, and continuity constraints remain available to later critic and planner steps
 - **AND** the runtime does not rely on reparsing transcript prose to rediscover them
+
+### Requirement: Review decisions remain observable for tuning and QA
+The system SHALL persist an internal review trace so critic and planner behavior can be inspected without exposing raw prompt engineering details to normal users.
+
+#### Scenario: runtime records a review trace
+- **WHEN** the critic finishes evaluating an image result
+- **THEN** the runtime records the raw critic decision, normalized final decision, primary issue, selected action type, and the main preserve/adjust targets
+- **AND** the trace also captures the major constraints or continuity signals that influenced the decision
+
+#### Scenario: review trace explains why user interruption happened
+- **WHEN** the runtime enters `requires_action`
+- **THEN** the trace identifies which issue or conflict prevented safe automatic refinement
+- **AND** QA or future tooling can inspect that trace without needing to reconstruct the decision from transcript prose

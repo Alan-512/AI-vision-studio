@@ -315,6 +315,25 @@ export interface StructuredCriticReview {
   recommendedActionType?: string;
 }
 
+export interface ReviewTrace {
+  rawDecision: CriticDecision;
+  finalDecision: CriticDecision;
+  summary: string;
+  reason?: string;
+  primaryIssue?: {
+    type: CriticIssueType;
+    severity: CriticIssueSeverity;
+    confidence: CriticIssueConfidence;
+    title: string;
+  };
+  actionType?: string;
+  preserve: string[];
+  adjust: string[];
+  hardConstraints?: string[];
+  preferredContinuity?: string[];
+  issueTypes?: CriticIssueType[];
+}
+
 export interface ConsistencyProfile {
   preserveSignals: string[];
   hardConstraints: string[];

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { Image as ImageIcon, Video, LayoutGrid, Folder, Sparkles, Settings, Star, CheckSquare, MoveHorizontal, Languages, Trash2, Recycle, Download, RotateCcw, ArrowRight, Key, X } from 'lucide-react';
-import { AppMode, AspectRatio, GenerationParams, AssetItem, ImageResolution, VideoResolution, ImageModel, VideoModel, ImageStyle, Project, ChatMessage, BackgroundTask, SmartAsset, VideoDuration, VideoStyle, AgentAction, EditRegion, SearchPolicy, AssistantMode, SmartAssetRole, ThinkingLevel, AgentJob, AgentJobStatus, JobStep, JobArtifact, AgentToolResult, ToolCallRecord, CriticDecision, CriticIssue, RevisionPlan, StructuredCriticReview, ConsistencyProfile } from './types';
+import { AppMode, AspectRatio, GenerationParams, AssetItem, ImageResolution, VideoResolution, ImageModel, VideoModel, ImageStyle, Project, ChatMessage, BackgroundTask, SmartAsset, VideoDuration, VideoStyle, AgentAction, EditRegion, SearchPolicy, AssistantMode, SmartAssetRole, ThinkingLevel, AgentJob, AgentJobStatus, JobStep, JobArtifact, AgentToolResult, ToolCallRecord, CriticDecision, CriticIssue, RevisionPlan, StructuredCriticReview, ConsistencyProfile, ReviewTrace } from './types';
 import { GenerationForm } from './components/GenerationForm';
 import { AssetCard } from './components/AssetCard';
 import { ProjectSidebar } from './components/ProjectSidebar';
@@ -170,6 +170,7 @@ type LocalReviewResult = {
     summary: string;
     warnings: string[];
     issues?: CriticIssue[];
+    reviewTrace?: ReviewTrace;
     revisedPrompt?: string;
     revisionReason?: string;
     reviewPlan?: RevisionPlan;
@@ -204,6 +205,7 @@ const buildReviewArtifact = (reviewId: string, reviewStepId: string, review: Loc
         summary: review.summary,
         warnings: review.warnings,
         issues: review.issues,
+        reviewTrace: review.reviewTrace,
         revisedPrompt: review.revisedPrompt,
         revisionReason: review.revisionReason,
         requiresAction: review.requiresAction
@@ -406,6 +408,7 @@ const criticToLocalReview = (
     summary: normalized.summary,
     warnings: normalized.warnings,
     issues: normalized.issues,
+    reviewTrace: normalized.reviewTrace,
     revisedPrompt: normalized.revisedPrompt,
     revisionReason: normalized.normalizedDecisionReason || normalized.reason || normalized.summary,
     reviewPlan: normalized.reviewPlan,
@@ -463,11 +466,29 @@ const reviewGeneratedAssetLocally = (asset: AssetItem, prompt: string): LocalRev
         return {
             decision: asset.type === 'IMAGE' ? 'auto_revise' : 'requires_action',
             summary: 'Generated asset is missing a URL and cannot be finalized.',
-            warnings,
-            issues,
-            revisionReason: 'The generated image payload did not contain a renderable URL.',
-            revisedPrompt: `${prompt.trim()}\n\nRevision note: regenerate the same scene and ensure a valid renderable image output is returned.`,
-            reviewPlan,
+        warnings,
+        issues,
+        reviewTrace: {
+            rawDecision: asset.type === 'IMAGE' ? 'auto_revise' : 'requires_action',
+            finalDecision: asset.type === 'IMAGE' ? 'auto_revise' : 'requires_action',
+            summary: 'Generated asset is missing a URL and cannot be finalized.',
+            reason: 'The generated image payload did not contain a renderable URL.',
+            primaryIssue: {
+                type: 'render_incomplete',
+                severity: 'high',
+                confidence: asset.type === 'IMAGE' ? 'medium' : 'low',
+                title: 'Generated asset is incomplete'
+            },
+            actionType: asset.type === 'IMAGE' ? 'continue_optimization' : 'inspect_generation_payload',
+            preserve: reviewPlan.preserve,
+            adjust: reviewPlan.adjust,
+            hardConstraints: reviewPlan.hardConstraints,
+            preferredContinuity: reviewPlan.preferredContinuity,
+            issueTypes: issues.map(issue => issue.type)
+        },
+        revisionReason: 'The generated image payload did not contain a renderable URL.',
+        revisedPrompt: `${prompt.trim()}\n\nRevision note: regenerate the same scene and ensure a valid renderable image output is returned.`,
+        reviewPlan,
             requiresAction: asset.type === 'IMAGE'
                 ? undefined
                 : {
@@ -509,6 +530,19 @@ const reviewGeneratedAssetLocally = (asset: AssetItem, prompt: string): LocalRev
             detail: warnings[0],
             relatedConstraint: 'video_extension'
         }] : [],
+        reviewTrace: {
+            rawDecision: 'accept',
+            finalDecision: 'accept',
+            summary: warnings.length > 0
+                ? 'Generated asset passed runtime review with warnings.'
+                : 'Generated asset passed runtime review.',
+            reason: warnings.length > 0 ? warnings[0] : 'No critical runtime issues detected.',
+            actionType: warnings.length > 0 ? 'continue_optimization' : undefined,
+            preserve: ['overall scene', 'visual direction'],
+            adjust: warnings.length > 0 ? ['minor technical cleanup'] : ['none'],
+            preferredContinuity: ['overall scene', 'visual direction'],
+            issueTypes: warnings.length > 0 ? ['other'] : []
+        },
         reviewPlan: buildOptimizationPlan({
             summary: warnings.length > 0
                 ? 'The result is usable. I would preserve the overall scene and only make minor technical cleanups if you ask.'
@@ -1744,7 +1778,8 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
                             decision: review.decision,
                             summary: review.summary,
                             warnings: review.warnings,
-                            issues: review.issues
+                            issues: review.issues,
+                            trace: review.reviewTrace
                         },
                     error: review.decision === 'accept' ? undefined : review.summary
                 };
@@ -1758,13 +1793,14 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
                     metadata: {
                         ...(toolResult.metadata || {}),
                         review: {
-                            decision: review.decision,
-                            summary: review.summary,
-                            warnings: review.warnings,
-                            issues: review.issues,
-                            stepId: reviewStepId
+                                decision: review.decision,
+                                summary: review.summary,
+                                warnings: review.warnings,
+                                issues: review.issues,
+                                trace: review.reviewTrace,
+                                stepId: reviewStepId
+                            }
                         }
-                    }
                 };
 
                 if (review.decision === 'auto_revise' && currentMode === AppMode.IMAGE) {
@@ -1892,7 +1928,8 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
                             decision: secondReview.decision,
                             summary: secondReview.summary,
                             warnings: secondReview.warnings,
-                            issues: secondReview.issues
+                            issues: secondReview.issues,
+                            trace: secondReview.reviewTrace
                         },
                         error: secondReview.decision === 'accept' ? undefined : secondReview.summary
                     };
@@ -1948,6 +1985,7 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
                                 summary: secondReview.summary,
                                 warnings: secondReview.warnings,
                                 issues: secondReview.issues,
+                                trace: secondReview.reviewTrace,
                                 stepId: secondReviewStepId
                             }
                         }
