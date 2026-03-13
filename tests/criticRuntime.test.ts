@@ -184,6 +184,41 @@ describe('criticRuntime', () => {
         expect(normalized.reviewTrace.revisionStrength).toBe('targeted');
     });
 
+    it('should generate issue-aware fallback card copy for brand direction cases', () => {
+        const critic: StructuredCriticReview = {
+            decision: 'requires_action',
+            summary: 'The overall shot works, but the next correction would materially change the brand direction.',
+            issues: [
+                {
+                    type: 'brand_incorrect',
+                    severity: 'high',
+                    confidence: 'high',
+                    autoFixable: false,
+                    title: 'Brand direction may drift',
+                    detail: 'The label system is off-brand enough that the next pass should be confirmed.',
+                    fixScope: 'subject',
+                    evidence: ['The silhouette is correct, but the label block still reads like a different brand.']
+                }
+            ],
+            reviewPlan: {
+                summary: 'Keep the shot and confirm the intended brand correction direction.',
+                preserve: ['composition', 'lighting'],
+                adjust: ['brand direction'],
+                confidence: 'high',
+                executionMode: 'guided',
+                issueTypes: ['brand_incorrect'],
+                localized: {}
+            }
+        };
+
+        const normalized = normalizeStructuredCriticReview('Luxury can poster', critic);
+
+        expect(normalized.userFacing?.zh?.title).toContain('品牌');
+        expect(normalized.userFacing?.en?.title).toContain('Brand');
+        expect(normalized.userFacing?.zh?.message).toContain('标签');
+        expect(normalized.userFacing?.en?.message).toContain('label block');
+    });
+
     it('should build revision prompts that preserve continuity constraints', () => {
         const prompt = buildRevisionPromptFromPlan(
             'Generate a premium product shot',

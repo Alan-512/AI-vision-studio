@@ -14,6 +14,72 @@ export type NormalizedCriticReview = StructuredCriticReview & {
   reviewTrace: ReviewTrace;
 };
 
+const ISSUE_CARD_COPY: Partial<Record<CriticIssueType, {
+  zh: { title: string; message: string };
+  en: { title: string; message: string };
+}>> = {
+  brand_incorrect: {
+    zh: {
+      title: '我建议先确认品牌呈现方向',
+      message: '我已经找到继续优化的路径，但下一步会明显影响品牌或标签呈现，先由你确认会更稳妥。'
+    },
+    en: {
+      title: 'I Recommend Confirming the Brand Direction',
+      message: 'I have a clear refinement path, but the next step would materially affect the brand or label read, so it is better to confirm first.'
+    }
+  },
+  composition_weak: {
+    zh: {
+      title: '我建议先确认这一版的构图调整范围',
+      message: '我已经判断出构图还可以更好，但这一步可能会调整画面布局，先确认范围更合适。'
+    },
+    en: {
+      title: 'I Recommend Confirming the Composition Scope',
+      message: 'I can improve the composition, but the next pass may alter the layout or framing, so it is better to confirm the scope first.'
+    }
+  },
+  material_weak: {
+    zh: {
+      title: '我建议继续提升这一版的质感表现',
+      message: '我已经定位到材质和表面表现还可以更精细，如果你愿意，我可以继续优化这一版。'
+    },
+    en: {
+      title: 'I Recommend Refining the Surface Finish',
+      message: 'I have identified a clearer way to improve the material rendering and finish, and I can continue from here if you want.'
+    }
+  },
+  subject_mismatch: {
+    zh: {
+      title: '我建议先确认主体修正方向',
+      message: '我已经知道如何继续修正主体，但这一步会明显影响主体呈现，最好先确认方向。'
+    },
+    en: {
+      title: 'I Recommend Confirming the Subject Direction',
+      message: 'I know how to correct the subject, but the next step would noticeably change the current subject read, so it is better to confirm first.'
+    }
+  },
+  needs_reference: {
+    zh: {
+      title: '我需要一张更明确的参考图再继续',
+      message: '我已经把当前结果的问题整理清楚了，但缺少关键参考信息，继续猜测风险会比较高。'
+    },
+    en: {
+      title: 'I Need a Clearer Reference Before Continuing',
+      message: 'I understand the current gap, but a key reference is missing and continuing by guesswork would be too risky.'
+    }
+  },
+  constraint_conflict: {
+    zh: {
+      title: '我建议先确认当前约束优先级',
+      message: '当前结果和已有约束之间存在冲突，我可以继续，但最好先确定哪条要求更优先。'
+    },
+    en: {
+      title: 'I Recommend Confirming the Constraint Priority',
+      message: 'The current result conflicts with known constraints. I can continue, but it is better to confirm which requirement should dominate first.'
+    }
+  }
+};
+
 const GUIDED_ISSUE_TYPES = new Set<CriticIssueType>(['needs_reference', 'constraint_conflict']);
 const AGGRESSIVE_AUTO_REVISE_ISSUES = new Set<CriticIssueType>([
   'subject_mismatch',
@@ -170,6 +236,48 @@ const buildDecisionReason = (decision: CriticDecision, primaryIssue: CriticIssue
   }
 };
 
+const buildFallbackUserFacingCopy = (
+  decision: CriticDecision,
+  primaryIssue: CriticIssue | undefined,
+  summary: string,
+  reason: string | undefined,
+  qualityNote?: string
+): StructuredCriticReview['userFacing'] | undefined => {
+  if (decision !== 'requires_action') return undefined;
+
+  const preset = primaryIssue ? ISSUE_CARD_COPY[primaryIssue.type] : undefined;
+  const reasonOrSummary = reason || summary;
+  const evidence = primaryIssue?.evidence?.[0];
+  const evidenceSentenceZh = evidence ? ` 我目前看到的关键问题是：${evidence}` : '';
+  const evidenceSentenceEn = evidence ? ` The main signal I see right now is: ${evidence}` : '';
+  const qualitySentenceZh = qualityNote ? ` ${qualityNote}` : '';
+  const qualitySentenceEn = qualityNote ? ` ${qualityNote}` : '';
+
+  if (preset) {
+    return {
+      zh: {
+        title: preset.zh.title,
+        message: `${preset.zh.message}${evidenceSentenceZh}${qualitySentenceZh}`.trim()
+      },
+      en: {
+        title: preset.en.title,
+        message: `${preset.en.message}${evidenceSentenceEn}${qualitySentenceEn}`.trim()
+      }
+    };
+  }
+
+  return {
+    zh: {
+      title: '我建议先确认下一步优化方向',
+      message: `${reasonOrSummary}${evidenceSentenceZh}${qualitySentenceZh}`.trim()
+    },
+    en: {
+      title: 'I Recommend Confirming the Next Refinement Step',
+      message: `${reasonOrSummary}${evidenceSentenceEn}${qualitySentenceEn}`.trim()
+    }
+  };
+};
+
 export const buildRevisionPromptFromPlan = (
   basePrompt: string,
   plan: RevisionPlan,
@@ -246,6 +354,7 @@ export const normalizeStructuredCriticReview = (
   const reviewPlan = applyExecutionMode(critic.reviewPlan, decision, revisionStrength);
   const normalizedActionType = critic.recommendedActionType || recommendActionType(decision, primaryIssue);
   normalizedDecisionReason = buildDecisionReason(decision, primaryIssue, normalizedDecisionReason);
+  const qualityNote = critic.quality?.note;
   const revisedPrompt = decision === 'accept'
     ? undefined
     : (critic.revisedPrompt || buildRevisionPromptFromPlan(prompt, reviewPlan, issues, context));
@@ -288,6 +397,9 @@ export const normalizeStructuredCriticReview = (
     normalizedDecisionReason,
     primaryIssue,
     normalizedActionType,
+    userFacing: critic.userFacing?.zh || critic.userFacing?.en
+      ? critic.userFacing
+      : buildFallbackUserFacingCopy(decision, primaryIssue, critic.summary, normalizedDecisionReason, qualityNote),
     reviewTrace
   };
 };
