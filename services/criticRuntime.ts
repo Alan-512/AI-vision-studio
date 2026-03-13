@@ -9,6 +9,8 @@ export type CriticNormalizationContext = {
 export type NormalizedCriticReview = StructuredCriticReview & {
   warnings: string[];
   normalizedDecisionReason?: string;
+  primaryIssue?: CriticIssue;
+  normalizedActionType?: string;
 };
 
 const GUIDED_ISSUE_TYPES = new Set<CriticIssueType>(['needs_reference', 'constraint_conflict']);
@@ -51,6 +53,59 @@ const applyExecutionMode = (plan: RevisionPlan, decision: CriticDecision): Revis
   executionMode: decision === 'requires_action' ? 'guided' : 'auto'
 });
 
+const issuePriority = (issue: CriticIssue): number => {
+  const severityScore = issue.severity === 'high' ? 30 : issue.severity === 'medium' ? 20 : 10;
+  const confidenceScore = issue.confidence === 'high' ? 3 : issue.confidence === 'medium' ? 2 : 1;
+  const guidedBonus = GUIDED_ISSUE_TYPES.has(issue.type) ? 5 : 0;
+  return severityScore + confidenceScore + guidedBonus;
+};
+
+const selectPrimaryIssue = (issues: CriticIssue[]): CriticIssue | undefined =>
+  [...issues].sort((a, b) => issuePriority(b) - issuePriority(a))[0];
+
+const recommendActionType = (decision: CriticDecision, primaryIssue?: CriticIssue): string | undefined => {
+  if (!primaryIssue) {
+    return decision === 'requires_action' ? 'review_output' : 'continue_optimization';
+  }
+
+  switch (primaryIssue.type) {
+    case 'needs_reference':
+      return 'upload_reference';
+    case 'constraint_conflict':
+      return 'clarify_constraints';
+    case 'brand_incorrect':
+      return decision === 'requires_action' ? 'confirm_brand_direction' : 'tighten_brand_match';
+    case 'subject_mismatch':
+      return decision === 'requires_action' ? 'confirm_subject_direction' : 'tighten_subject_match';
+    case 'composition_weak':
+      return 'preserve_composition';
+    case 'lighting_mismatch':
+      return 'refine_lighting';
+    case 'material_weak':
+      return 'improve_material_rendering';
+    case 'text_artifact':
+      return 'clean_text_artifacts';
+    case 'render_incomplete':
+      return 'inspect_generation_payload';
+    default:
+      return decision === 'requires_action' ? 'review_output' : 'continue_optimization';
+  }
+};
+
+const buildDecisionReason = (decision: CriticDecision, primaryIssue: CriticIssue | undefined, fallback?: string): string | undefined => {
+  if (fallback) return fallback;
+  if (!primaryIssue) return undefined;
+
+  switch (decision) {
+    case 'auto_revise':
+      return `The current result is close, and ${primaryIssue.title.toLowerCase()} can be corrected automatically without changing the user's intent.`;
+    case 'requires_action':
+      return `The next step depends on ${primaryIssue.title.toLowerCase()}, so the agent should pause for a focused user decision.`;
+    default:
+      return undefined;
+  }
+};
+
 export const buildRevisionPromptFromPlan = (
   basePrompt: string,
   plan: RevisionPlan,
@@ -90,6 +145,7 @@ export const normalizeStructuredCriticReview = (
   context?: CriticNormalizationContext
 ): NormalizedCriticReview => {
   const issues = critic.issues || [];
+  const primaryIssue = selectPrimaryIssue(issues);
   const hasGuidedIssue = issues.some(issue => GUIDED_ISSUE_TYPES.has(issue.type));
   const allAutoFixable = issues.length > 0 && issues.every(issue => issue.autoFixable);
   const strongestAutoFixableIssue = issues.find(issue =>
@@ -114,6 +170,8 @@ export const normalizeStructuredCriticReview = (
   }
 
   const reviewPlan = applyExecutionMode(critic.reviewPlan, decision);
+  const normalizedActionType = critic.recommendedActionType || recommendActionType(decision, primaryIssue);
+  normalizedDecisionReason = buildDecisionReason(decision, primaryIssue, normalizedDecisionReason);
   const revisedPrompt = decision === 'accept'
     ? undefined
     : (critic.revisedPrompt || buildRevisionPromptFromPlan(prompt, reviewPlan, issues, context));
@@ -127,6 +185,8 @@ export const normalizeStructuredCriticReview = (
     reviewPlan,
     revisedPrompt,
     warnings,
-    normalizedDecisionReason
+    normalizedDecisionReason,
+    primaryIssue,
+    normalizedActionType
   };
 };

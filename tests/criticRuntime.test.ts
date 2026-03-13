@@ -67,6 +67,7 @@ describe('criticRuntime', () => {
 
         expect(normalized.decision).toBe('requires_action');
         expect(normalized.reviewPlan.executionMode).toBe('guided');
+        expect(normalized.normalizedActionType).toBe('upload_reference');
     });
 
     it('should upgrade accept to auto_revise for strong auto-fixable quality issues', () => {
@@ -99,6 +100,39 @@ describe('criticRuntime', () => {
 
         expect(normalized.decision).toBe('auto_revise');
         expect(normalized.normalizedDecisionReason).toContain('product label');
+        expect(normalized.normalizedActionType).toBe('tighten_brand_match');
+    });
+
+    it('should recommend a focused action type for guided constraint conflicts', () => {
+        const critic: StructuredCriticReview = {
+            decision: 'requires_action',
+            summary: 'The generated result conflicts with the known product constraints.',
+            issues: [
+                {
+                    type: 'constraint_conflict',
+                    severity: 'high',
+                    confidence: 'high',
+                    autoFixable: false,
+                    title: 'Constraint conflict',
+                    detail: 'The current image contradicts the known product packaging constraints.'
+                }
+            ],
+            reviewPlan: {
+                summary: 'Pause and confirm which constraint should dominate before another revision.',
+                preserve: ['current composition'],
+                adjust: ['constraint priority'],
+                confidence: 'high',
+                executionMode: 'guided',
+                issueTypes: ['constraint_conflict'],
+                localized: {}
+            }
+        };
+
+        const normalized = normalizeStructuredCriticReview('Product poster prompt', critic);
+
+        expect(normalized.decision).toBe('requires_action');
+        expect(normalized.normalizedActionType).toBe('clarify_constraints');
+        expect(normalized.normalizedDecisionReason).toContain('constraint conflict');
     });
 
     it('should build revision prompts that preserve continuity constraints', () => {

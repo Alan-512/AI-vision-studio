@@ -411,15 +411,15 @@ const criticToLocalReview = (
     reviewPlan: normalized.reviewPlan,
     requiresAction: normalized.decision === 'requires_action'
         ? {
-            type: normalized.recommendedActionType || fallbackActionType,
-            message: normalized.summary,
+            type: normalized.normalizedActionType || fallbackActionType,
+            message: normalized.normalizedDecisionReason || normalized.summary,
             payload: buildRequiresActionPayload(prompt, {
                 summary: normalized.summary,
                 warnings: normalized.issues.map(issue => issue.detail),
                 revisedPrompt: normalized.revisedPrompt,
                 reviewPlan: normalized.reviewPlan,
                 issues: normalized.issues
-            } as LocalReviewResult, normalized.recommendedActionType || fallbackActionType)
+            } as LocalReviewResult, normalized.normalizedActionType || fallbackActionType)
         }
         : undefined
     };
