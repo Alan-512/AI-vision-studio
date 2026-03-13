@@ -170,6 +170,7 @@ type LocalReviewResult = {
     summary: string;
     warnings: string[];
     issues?: CriticIssue[];
+    quality?: StructuredCriticReview['quality'];
     reviewTrace?: ReviewTrace;
     revisedPrompt?: string;
     revisionReason?: string;
@@ -205,6 +206,7 @@ const buildReviewArtifact = (reviewId: string, reviewStepId: string, review: Loc
         summary: review.summary,
         warnings: review.warnings,
         issues: review.issues,
+        quality: review.quality,
         reviewTrace: review.reviewTrace,
         revisedPrompt: review.revisedPrompt,
         revisionReason: review.revisionReason,
@@ -279,7 +281,7 @@ const buildOptimizationPlan = (overrides?: Partial<RevisionPlan>): RevisionPlan 
 
 const buildRequiresActionPayload = (
     prompt: string,
-    review: Pick<LocalReviewResult, 'summary' | 'warnings' | 'revisedPrompt' | 'reviewPlan' | 'reviewTrace'>,
+    review: Pick<LocalReviewResult, 'summary' | 'warnings' | 'revisedPrompt' | 'reviewPlan' | 'reviewTrace' | 'quality'>,
     actionType: string,
     i18n?: {
         title?: BilingualText;
@@ -292,6 +294,7 @@ const buildRequiresActionPayload = (
     revisedPrompt: review.revisedPrompt,
     warnings: review.warnings,
     issues: (review as LocalReviewResult).issues,
+    quality: review.quality,
     reviewPlan: review.reviewPlan,
     reviewTrace: review.reviewTrace,
     titleI18n: i18n?.title,
@@ -411,6 +414,7 @@ const criticToLocalReview = (
     summary: normalized.summary,
     warnings: normalized.warnings,
     issues: normalized.issues,
+    quality: normalized.quality,
     reviewTrace: normalized.reviewTrace,
     revisedPrompt: normalized.revisedPrompt,
     revisionReason: normalized.normalizedDecisionReason || normalized.reason || normalized.summary,
@@ -422,6 +426,7 @@ const criticToLocalReview = (
             payload: buildRequiresActionPayload(prompt, {
                 summary: normalized.summary,
                 warnings: normalized.issues.map(issue => issue.detail),
+                quality: normalized.quality,
                 revisedPrompt: normalized.revisedPrompt,
                 reviewPlan: normalized.reviewPlan,
                 reviewTrace: normalized.reviewTrace,
@@ -481,6 +486,7 @@ const reviewGeneratedAssetLocally = (asset: AssetItem, prompt: string): LocalRev
             summary: 'Generated asset is missing a URL and cannot be finalized.',
         warnings,
         issues,
+        quality: undefined,
         reviewTrace: {
             rawDecision: asset.type === 'IMAGE' ? 'auto_revise' : 'requires_action',
             finalDecision: asset.type === 'IMAGE' ? 'auto_revise' : 'requires_action',
@@ -543,6 +549,7 @@ const reviewGeneratedAssetLocally = (asset: AssetItem, prompt: string): LocalRev
             detail: warnings[0],
             relatedConstraint: 'video_extension'
         }] : [],
+        quality: undefined,
         reviewTrace: {
             rawDecision: 'accept',
             finalDecision: 'accept',
@@ -1792,6 +1799,7 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
                             summary: review.summary,
                             warnings: review.warnings,
                             issues: review.issues,
+                            quality: review.quality,
                             trace: review.reviewTrace
                         },
                     error: review.decision === 'accept' ? undefined : review.summary
@@ -1810,6 +1818,7 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
                                 summary: review.summary,
                                 warnings: review.warnings,
                                 issues: review.issues,
+                                quality: review.quality,
                                 trace: review.reviewTrace,
                                 stepId: reviewStepId
                             }
@@ -1942,6 +1951,7 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
                             summary: secondReview.summary,
                             warnings: secondReview.warnings,
                             issues: secondReview.issues,
+                            quality: secondReview.quality,
                             trace: secondReview.reviewTrace
                         },
                         error: secondReview.decision === 'accept' ? undefined : secondReview.summary
@@ -1998,6 +2008,7 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
                                 summary: secondReview.summary,
                                 warnings: secondReview.warnings,
                                 issues: secondReview.issues,
+                                quality: secondReview.quality,
                                 trace: secondReview.reviewTrace,
                                 stepId: secondReviewStepId
                             }

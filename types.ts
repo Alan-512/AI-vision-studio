@@ -285,6 +285,17 @@ export interface LocalizedCriticCardCopy {
   message: string;
 }
 
+export interface CriticQualityAssessment {
+  intentAlignment: number;
+  compositionStrength: number;
+  lightingQuality: number;
+  materialFidelity: number;
+  brandAccuracy: number;
+  aestheticFinish: number;
+  commercialReadiness: number;
+  note?: string;
+}
+
 export interface RevisionPlan {
   summary: string;
   preserve: string[];
@@ -315,6 +326,7 @@ export interface StructuredCriticReview {
   decision: CriticDecision;
   summary: string;
   issues: CriticIssue[];
+  quality?: CriticQualityAssessment;
   reviewPlan: RevisionPlan;
   revisedPrompt?: string;
   reason?: string;
@@ -338,6 +350,7 @@ export interface ReviewTrace {
   calibrationConfidence?: CriticIssueConfidence;
   summary: string;
   reason?: string;
+  quality?: CriticQualityAssessment;
   primaryIssue?: {
     type: CriticIssueType;
     severity: CriticIssueSeverity;

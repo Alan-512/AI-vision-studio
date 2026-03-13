@@ -1411,6 +1411,33 @@ const ChatBubble: React.FC<ChatBubbleProps> = ({
                               </div>
                             )}
 
+                            {reviewTrace.quality && (
+                              <div className="rounded-[14px] bg-white/[0.03] px-3 py-2.5">
+                                <div className="text-slate-500/75">{language === 'zh' ? '质量评估' : 'Quality Signals'}</div>
+                                <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                                  {[
+                                    [language === 'zh' ? '意图贴合' : 'Intent', reviewTrace.quality.intentAlignment],
+                                    [language === 'zh' ? '构图' : 'Composition', reviewTrace.quality.compositionStrength],
+                                    [language === 'zh' ? '光影' : 'Lighting', reviewTrace.quality.lightingQuality],
+                                    [language === 'zh' ? '材质' : 'Materials', reviewTrace.quality.materialFidelity],
+                                    [language === 'zh' ? '品牌还原' : 'Brand', reviewTrace.quality.brandAccuracy],
+                                    [language === 'zh' ? '审美完成度' : 'Aesthetic', reviewTrace.quality.aestheticFinish],
+                                    [language === 'zh' ? '商业可用度' : 'Commercial', reviewTrace.quality.commercialReadiness]
+                                  ].map(([label, score]) => (
+                                    <div key={String(label)} className="rounded-[12px] bg-black/10 px-2.5 py-2">
+                                      <div className="text-[10px] text-slate-500/80">{label}</div>
+                                      <div className="mt-1 text-slate-100 font-medium">{score}/5</div>
+                                    </div>
+                                  ))}
+                                </div>
+                                {reviewTrace.quality.note && (
+                                  <div className="mt-2 text-[11px] text-slate-300/82 whitespace-pre-wrap break-words">
+                                    {reviewTrace.quality.note}
+                                  </div>
+                                )}
+                              </div>
+                            )}
+
                             <div className="grid gap-2 sm:grid-cols-2">
                               {reviewTrace.preserve.length > 0 && (
                                 <div className="rounded-[14px] bg-white/[0.03] px-3 py-2.5">

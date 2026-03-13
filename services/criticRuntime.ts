@@ -249,6 +249,7 @@ export const normalizeStructuredCriticReview = (
     calibrationConfidence: critic.calibration?.confidence,
     summary: critic.summary,
     reason: normalizedDecisionReason,
+    quality: critic.quality,
     primaryIssue: primaryIssue
       ? {
           type: primaryIssue.type,

@@ -225,6 +225,16 @@ describe('GeminiService', () => {
                         detail: 'The product silhouette is right, but the label is not convincing.'
                     }
                 ],
+                quality: {
+                    intentAlignment: 4,
+                    compositionStrength: 5,
+                    lightingQuality: 4,
+                    materialFidelity: 3,
+                    brandAccuracy: 2,
+                    aestheticFinish: 4,
+                    commercialReadiness: 3,
+                    note: 'Strong composition, but the product branding still feels under-resolved.'
+                },
                 reviewPlan: {
                     summary: 'Keep the composition and improve the label fidelity.',
                     preserve: ['composition', 'lighting'],
@@ -253,6 +263,8 @@ describe('GeminiService', () => {
             expect(review?.decision).toBe('auto_revise');
             expect(review?.issues).toHaveLength(1);
             expect(review?.issues[0].type).toBe('brand_incorrect');
+            expect(review?.quality?.brandAccuracy).toBe(2);
+            expect(review?.quality?.compositionStrength).toBe(5);
             expect(review?.reviewPlan.executionMode).toBe('auto');
             expect(review?.reviewPlan.localized?.zh?.summary).toContain('构图');
         });
@@ -331,6 +343,16 @@ describe('GeminiService', () => {
                         detail: 'A stronger revision could change the intended label direction.'
                     }
                 ],
+                quality: {
+                    intentAlignment: 4,
+                    compositionStrength: 5,
+                    lightingQuality: 4,
+                    materialFidelity: 4,
+                    brandAccuracy: 2,
+                    aestheticFinish: 4,
+                    commercialReadiness: 3,
+                    note: 'Brand fidelity still lags behind the overall shot quality.'
+                },
                 reviewPlan: {
                     summary: 'Keep the composition and improve the brand read.',
                     preserve: ['composition'],
@@ -360,6 +382,8 @@ describe('GeminiService', () => {
             expect(merged.calibration?.baseDecision).toBe('auto_revise');
             expect(merged.calibration?.calibratedDecision).toBe('requires_action');
             expect(merged.userFacing?.zh?.title).toContain('品牌方向');
+            expect(merged.quality?.brandAccuracy).toBe(2);
+            expect(merged.quality?.compositionStrength).toBe(5);
         });
     });
 });

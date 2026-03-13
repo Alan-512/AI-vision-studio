@@ -1,6 +1,6 @@
 
 import { GoogleGenAI, Part, Content, FunctionDeclaration, Type } from "@google/genai";
-import { ChatMessage, AppMode, SmartAsset, GenerationParams, ImageModel, AgentAction, AssetItem, AspectRatio, ImageResolution, TextModel, AssistantMode, SmartAssetRole, SearchProgress, ThinkingLevel, StructuredCriticReview, CriticDecision, CriticIssue, CriticIssueType, RevisionPlan, ConsistencyProfile, LocalizedCriticCardCopy, CriticIssueConfidence } from "../types";
+import { ChatMessage, AppMode, SmartAsset, GenerationParams, ImageModel, AgentAction, AssetItem, AspectRatio, ImageResolution, TextModel, AssistantMode, SmartAssetRole, SearchProgress, ThinkingLevel, StructuredCriticReview, CriticDecision, CriticIssue, CriticIssueType, RevisionPlan, ConsistencyProfile, LocalizedCriticCardCopy, CriticIssueConfidence, CriticQualityAssessment } from "../types";
 import { createTrackedBlobUrl } from "./storageService";
 import { buildSystemInstruction, getPromptOptimizerContent, getRoleInstruction as getSkillRoleInstruction } from "./skills/promptRouter";
 import { getAlwaysOnMemorySnippet } from "./memoryService";
@@ -1538,6 +1538,26 @@ const sanitizeCardCopy = (value: unknown): LocalizedCriticCardCopy | undefined =
     return title || message ? { title, message } : undefined;
 };
 
+const sanitizeQualityScore = (value: unknown, fallback = 3): number => {
+    if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
+    return Math.min(5, Math.max(1, Math.round(value)));
+};
+
+const sanitizeQualityAssessment = (value: unknown): CriticQualityAssessment | undefined => {
+    if (!value || typeof value !== 'object') return undefined;
+    const raw = value as Record<string, unknown>;
+    return {
+        intentAlignment: sanitizeQualityScore(raw.intentAlignment),
+        compositionStrength: sanitizeQualityScore(raw.compositionStrength),
+        lightingQuality: sanitizeQualityScore(raw.lightingQuality),
+        materialFidelity: sanitizeQualityScore(raw.materialFidelity),
+        brandAccuracy: sanitizeQualityScore(raw.brandAccuracy),
+        aestheticFinish: sanitizeQualityScore(raw.aestheticFinish),
+        commercialReadiness: sanitizeQualityScore(raw.commercialReadiness),
+        note: typeof raw.note === 'string' && raw.note.trim().length > 0 ? raw.note.trim() : undefined
+    };
+};
+
 const sanitizeRevisionPlan = (value: unknown): RevisionPlan => {
     const raw = value && typeof value === 'object' ? value as Record<string, unknown> : {};
     const localizedRaw = raw.localized && typeof raw.localized === 'object' ? raw.localized as Record<string, unknown> : {};
@@ -1624,6 +1644,7 @@ export const parseImageCriticReview = (rawText: string): StructuredCriticReview 
                 ? parsed.summary.trim()
                 : 'I reviewed the current image and prepared the next best action.',
             issues,
+            quality: sanitizeQualityAssessment(parsed.quality),
             reviewPlan,
             revisedPrompt: typeof parsed.revisedPrompt === 'string' && parsed.revisedPrompt.trim().length > 0
                 ? parsed.revisedPrompt.trim()
@@ -1805,6 +1826,14 @@ Prioritize:
 3. lighting and material rendering
 4. brand / text / artifact issues
 5. consistency with a likely follow-up edit path
+6. commercial finish, premium feel, and whether another revision would materially improve the result
+
+Quality scoring guidance:
+- 1 = clearly failing
+- 3 = acceptable but not polished
+- 5 = strong and production-ready
+- "aestheticFinish" should reflect visual polish and premium execution within the requested style
+- "commercialReadiness" should reflect whether the image is ready for real product/brand usage or still needs another meaningful pass
 
 Return JSON only with this shape:
 {
@@ -1823,6 +1852,16 @@ Return JSON only with this shape:
       "relatedConstraint": string
     }
   ],
+  "quality": {
+    "intentAlignment": 1-5,
+    "compositionStrength": 1-5,
+    "lightingQuality": 1-5,
+    "materialFidelity": 1-5,
+    "brandAccuracy": 1-5,
+    "aestheticFinish": 1-5,
+    "commercialReadiness": 1-5,
+    "note": string
+  },
   "reviewPlan": {
     "summary": string,
     "preserve": string[],
@@ -1886,6 +1925,8 @@ Calibration rules:
 - choose "accept" only when further refinement would likely add noise or needless delay
 - keep the user burden low; do not ask for prompt engineering
 - provide concise product-language copy for the action card when "requires_action" is chosen
+- use the primary critic's quality scores to judge whether the result is already commercially polished enough to stop, or whether another focused pass is still worthwhile
+- pay special attention to compositionStrength, materialFidelity, brandAccuracy, aestheticFinish, and commercialReadiness
 
 Return JSON only with this shape:
 {
