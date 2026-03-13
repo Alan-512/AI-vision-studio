@@ -320,6 +320,8 @@ export interface CriticIssue {
   title: string;
   detail: string;
   relatedConstraint?: string;
+  fixScope?: 'local' | 'subject' | 'layout' | 'global';
+  evidence?: string[];
 }
 
 export interface StructuredCriticReview {
@@ -356,6 +358,8 @@ export interface ReviewTrace {
     severity: CriticIssueSeverity;
     confidence: CriticIssueConfidence;
     title: string;
+    fixScope?: 'local' | 'subject' | 'layout' | 'global';
+    evidence?: string[];
   };
   actionType?: string;
   revisionStrength?: 'light' | 'targeted' | 'aggressive';

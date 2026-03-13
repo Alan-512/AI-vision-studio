@@ -1619,6 +1619,10 @@ const sanitizeCriticIssue = (value: unknown): CriticIssue | null => {
         autoFixable: raw.autoFixable !== false,
         title,
         detail,
+        fixScope: raw.fixScope === 'local' || raw.fixScope === 'subject' || raw.fixScope === 'layout' || raw.fixScope === 'global'
+            ? raw.fixScope
+            : undefined,
+        evidence: sanitizeStringArray(raw.evidence),
         relatedConstraint: typeof raw.relatedConstraint === 'string' && raw.relatedConstraint.trim().length > 0
             ? raw.relatedConstraint.trim()
             : undefined
@@ -1828,6 +1832,17 @@ Prioritize:
 5. consistency with a likely follow-up edit path
 6. commercial finish, premium feel, and whether another revision would materially improve the result
 
+Issue semantics:
+- For "brand_incorrect", explain whether the mismatch is local label/logo fidelity, broader packaging identity, or overall brand direction drift.
+- For "composition_weak", explain whether the weakness is framing, crop, balance, spacing, perspective, or layout hierarchy.
+- For "material_weak", explain whether the weakness is texture realism, reflections, surface separation, edge clarity, or product finish.
+- Set "fixScope" to one of:
+  - "local" for narrow fixes such as texture cleanup, lighting polish, or text cleanup
+  - "subject" for subject/product identity fixes
+  - "layout" for composition, crop, framing, or scene arrangement changes
+  - "global" for broader direction or scene-wide shifts
+- Add short "evidence" strings that describe what in the image supports your diagnosis.
+
 Quality scoring guidance:
 - 1 = clearly failing
 - 3 = acceptable but not polished
@@ -1849,6 +1864,8 @@ Return JSON only with this shape:
       "autoFixable": boolean,
       "title": string,
       "detail": string,
+      "fixScope": "local" | "subject" | "layout" | "global",
+      "evidence": string[],
       "relatedConstraint": string
     }
   ],

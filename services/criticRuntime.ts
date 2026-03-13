@@ -80,6 +80,12 @@ const inferRevisionStrength = (
   if (GUIDED_ISSUE_TYPES.has(primaryIssue.type)) {
     return 'targeted';
   }
+  if (primaryIssue.fixScope === 'layout' || primaryIssue.fixScope === 'global') {
+    return primaryIssue.severity === 'low' ? 'targeted' : 'aggressive';
+  }
+  if (primaryIssue.fixScope === 'local') {
+    return primaryIssue.severity === 'high' && primaryIssue.confidence === 'high' ? 'targeted' : 'light';
+  }
   if (
     primaryIssue.type === 'subject_mismatch' ||
     primaryIssue.type === 'composition_weak' ||
@@ -113,7 +119,8 @@ const issuePriority = (issue: CriticIssue): number => {
   const severityScore = issue.severity === 'high' ? 30 : issue.severity === 'medium' ? 20 : 10;
   const confidenceScore = issue.confidence === 'high' ? 3 : issue.confidence === 'medium' ? 2 : 1;
   const guidedBonus = GUIDED_ISSUE_TYPES.has(issue.type) ? 5 : 0;
-  return severityScore + confidenceScore + guidedBonus;
+  const scopeBonus = issue.fixScope === 'global' ? 4 : issue.fixScope === 'layout' ? 3 : issue.fixScope === 'subject' ? 2 : 0;
+  return severityScore + confidenceScore + guidedBonus + scopeBonus;
 };
 
 const selectPrimaryIssue = (issues: CriticIssue[]): CriticIssue | undefined =>
@@ -151,12 +158,13 @@ const recommendActionType = (decision: CriticDecision, primaryIssue?: CriticIssu
 const buildDecisionReason = (decision: CriticDecision, primaryIssue: CriticIssue | undefined, fallback?: string): string | undefined => {
   if (fallback) return fallback;
   if (!primaryIssue) return undefined;
+  const scopeHint = primaryIssue.fixScope ? ` The main fix scope is ${primaryIssue.fixScope}.` : '';
 
   switch (decision) {
     case 'auto_revise':
-      return `The current result is close, and ${primaryIssue.title.toLowerCase()} can be corrected automatically without changing the user's intent.`;
+      return `The current result is close, and ${primaryIssue.title.toLowerCase()} can be corrected automatically without changing the user's intent.${scopeHint}`;
     case 'requires_action':
-      return `The next step depends on ${primaryIssue.title.toLowerCase()}, so the agent should pause for a focused user decision.`;
+      return `The next step depends on ${primaryIssue.title.toLowerCase()}, so the agent should pause for a focused user decision.${scopeHint}`;
     default:
       return undefined;
   }
@@ -179,6 +187,7 @@ export const buildRevisionPromptFromPlan = (
     ...(context?.consistencyProfile?.hardConstraints || [])
   ]);
   const issueHints = dedupeStrings(issues.map(issue => ISSUE_PROMPT_HINTS[issue.type]));
+  const issueEvidence = dedupeStrings(issues.flatMap(issue => issue.evidence || []), 6);
   const revisionStrength = plan.revisionStrength || inferRevisionStrength(
     selectPrimaryIssue(issues),
     plan.executionMode === 'guided' ? 'requires_action' : 'auto_revise'
@@ -196,6 +205,7 @@ export const buildRevisionPromptFromPlan = (
   preserve.forEach(item => lines.push(`- Keep: ${item}`));
   plan.adjust.forEach(item => lines.push(`- Improve: ${item}`));
   issueHints.forEach(item => lines.push(`- Focus: ${item}`));
+  issueEvidence.forEach(item => lines.push(`- Evidence: ${item}`));
   hardConstraints.forEach(item => lines.push(`- Constraint: ${item}`));
 
   return lines.join('\n').trim();
@@ -255,7 +265,9 @@ export const normalizeStructuredCriticReview = (
           type: primaryIssue.type,
           severity: primaryIssue.severity,
           confidence: primaryIssue.confidence,
-          title: primaryIssue.title
+          title: primaryIssue.title,
+          fixScope: primaryIssue.fixScope,
+          evidence: primaryIssue.evidence
         }
       : undefined,
     actionType: normalizedActionType,

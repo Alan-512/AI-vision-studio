@@ -289,4 +289,40 @@ describe('criticRuntime', () => {
         expect(normalized.revisedPrompt).toContain('Strength: aggressive');
         expect(normalized.revisedPrompt).toContain('Scope: Prioritize fixing the main mismatch decisively.');
     });
+
+    it('should use issue evidence and layout scope to drive stronger composition revisions', () => {
+        const critic: StructuredCriticReview = {
+            decision: 'auto_revise',
+            summary: 'The composition feels cramped and the product has lost hierarchy.',
+            issues: [
+                {
+                    type: 'composition_weak',
+                    severity: 'medium',
+                    confidence: 'high',
+                    autoFixable: true,
+                    title: 'Composition hierarchy is weak',
+                    detail: 'The crop is too tight and the product lacks breathing room.',
+                    fixScope: 'layout',
+                    evidence: ['The product touches the frame edge.', 'Negative space is too limited for a premium poster feel.']
+                }
+            ],
+            reviewPlan: {
+                summary: 'Open up the layout while keeping the existing visual direction.',
+                preserve: ['lighting mood', 'product identity'],
+                adjust: ['layout hierarchy', 'negative space'],
+                confidence: 'high',
+                executionMode: 'auto',
+                issueTypes: ['composition_weak'],
+                localized: {}
+            }
+        };
+
+        const normalized = normalizeStructuredCriticReview('Luxury poster prompt', critic);
+
+        expect(normalized.reviewPlan.revisionStrength).toBe('aggressive');
+        expect(normalized.reviewTrace.primaryIssue?.fixScope).toBe('layout');
+        expect(normalized.reviewTrace.primaryIssue?.evidence?.[0]).toContain('frame edge');
+        expect(normalized.revisedPrompt).toContain('Evidence: The product touches the frame edge.');
+        expect(normalized.revisedPrompt).toContain('Evidence: Negative space is too limited for a premium poster feel.');
+    });
 });

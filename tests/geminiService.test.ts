@@ -222,7 +222,9 @@ describe('GeminiService', () => {
                         confidence: 'high',
                         autoFixable: true,
                         title: 'Brand match is weak',
-                        detail: 'The product silhouette is right, but the label is not convincing.'
+                        detail: 'The product silhouette is right, but the label is not convincing.',
+                        fixScope: 'subject',
+                        evidence: ['The bottle silhouette matches, but the label block is soft and off-brand.']
                     }
                 ],
                 quality: {
@@ -263,6 +265,8 @@ describe('GeminiService', () => {
             expect(review?.decision).toBe('auto_revise');
             expect(review?.issues).toHaveLength(1);
             expect(review?.issues[0].type).toBe('brand_incorrect');
+            expect(review?.issues[0].fixScope).toBe('subject');
+            expect(review?.issues[0].evidence?.[0]).toContain('label block');
             expect(review?.quality?.brandAccuracy).toBe(2);
             expect(review?.quality?.compositionStrength).toBe(5);
             expect(review?.reviewPlan.executionMode).toBe('auto');
