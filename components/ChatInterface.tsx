@@ -31,6 +31,9 @@ interface ChatInterfaceProps {
   setThoughtImages?: React.Dispatch<React.SetStateAction<Array<{ id: string; data: string; mimeType: string; isFinal: boolean; timestamp: number }>>>;
 }
 
+// Dev-only toggle for review trace visibility (accessible by ChatBubble)
+const isDevReviewTraceVisible = (import.meta as any).env?.DEV || false;
+
 
 // Improved Parser for Streaming Thoughts and Tools
 interface AgentStep { type: 'ORCHESTRATOR' | 'PLANNER' | 'TOOL' | 'PROTOCOL' | 'SYSTEM' | 'THOUGHT'; title: string; content: string; isComplete: boolean; timestamp: number; }
@@ -234,7 +237,6 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   setThoughtImages
 }) => {
   const { t, language } = useLanguage();
-  const isDevReviewTraceVisible = import.meta.env.DEV;
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [selectedModel, setSelectedModel] = useState<TextModel>(TextModel.FLASH);
@@ -605,8 +607,16 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
             const lastIdx = updated.length - 1;
             if (lastIdx >= 0 && updated[lastIdx].role === 'model') {
               const currentContent = updated[lastIdx].content;
-              const errorMsg = `\n\n*[System Error: ${error.message || "Connection timed out"}]*`;
-              updated[lastIdx] = { ...updated[lastIdx], content: currentContent ? currentContent + errorMsg : errorMsg, isThinking: false };
+              const suppressInlineError = (updated[lastIdx].toolCalls || []).some(record =>
+                record.toolName === 'generate_image' || record.toolName === 'generate_video'
+              );
+              updated[lastIdx] = {
+                ...updated[lastIdx],
+                content: suppressInlineError ? currentContent : (currentContent
+                  ? `${currentContent}\n\n*[System Error: ${error.message || "Connection timed out"}]*`
+                  : `*[System Error: ${error.message || "Connection timed out"}]*`),
+                isThinking: false
+              };
             }
             return updated;
           });
@@ -740,11 +750,29 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
               }
               const isLastAiMessage = idx === lastAiIdx;
               const isStreaming = isLastAiMessage && msg.isThinking;
+              const hasPreviewFeedback = !!(
+                msg.relatedJobId &&
+                history.some(entry =>
+                  entry.isSystem &&
+                  entry.relatedJobId === msg.relatedJobId &&
+                  !!entry.image
+                )
+              );
+              const feedbackActionCardSource = msg.isSystem && msg.relatedJobId
+                ? [...history.slice(0, idx)].reverse().find(entry =>
+                  !entry.isSystem &&
+                  entry.relatedJobId === msg.relatedJobId &&
+                  (entry.toolCalls || []).some(record => record.result?.status === 'requires_action' && !!record.result.requiresAction)
+                )
+                : undefined;
+              const shouldDeferActionCards = !msg.isSystem && hasPreviewFeedback;
 
               return (
                 <ChatBubble
                   key={idx}
                   message={msg}
+                  actionCardSourceMessage={feedbackActionCardSource}
+                  suppressActionCards={shouldDeferActionCards}
                   nativeThinkingText={isStreaming ? thinkingText : undefined}
                   // Pass search/tool data: use persisted data from message, OR current streaming data for last message
                   searchProgress={msg.searchProgress || (isLastAiMessage ? searchProgress : undefined)}
@@ -758,13 +786,13 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                       ? () => setSearchCollapsedMap(prev => ({ ...prev, [msg.timestamp]: !(prev[msg.timestamp] ?? true) }))
                       : (isLastAiMessage ? () => setSearchIsCollapsed(!searchIsCollapsed) : undefined)
                   }
-                  toolCallStatus={isLastAiMessage ? toolCallStatus : undefined}
+                  toolCallStatus={isLastAiMessage && !hasPreviewFeedback ? toolCallStatus : undefined}
                   toolCallExpanded={isLastAiMessage ? toolCallExpanded : undefined}
                   onToolCallToggle={isLastAiMessage ? () => setToolCallExpanded(!toolCallExpanded) : undefined}
                   dismissedActionCardIds={dismissedActionCardIds}
                   onApplyActionCard={handleApplyActionCard}
                   onDismissActionCard={handleDismissActionCard}
-                  isApplyingAction={applyingActionCardId === msg.toolCalls?.find(record => record.result?.status === 'requires_action')?.id}
+                  isApplyingAction={applyingActionCardId === (feedbackActionCardSource || msg).toolCalls?.find(record => record.result?.status === 'requires_action')?.id}
                 />
               );
             })}
@@ -949,6 +977,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
 
 interface ChatBubbleProps {
   message: ChatMessage;
+  actionCardSourceMessage?: ChatMessage;
+  suppressActionCards?: boolean;
   nativeThinkingText?: string;
   // Search flow props (only passed for current AI message during loading)
   searchProgress?: SearchProgress | null;
@@ -966,6 +996,8 @@ interface ChatBubbleProps {
 
 const ChatBubble: React.FC<ChatBubbleProps> = ({
   message,
+  actionCardSourceMessage,
+  suppressActionCards = false,
   nativeThinkingText,
   searchProgress,
   searchIsCollapsed,
@@ -1008,10 +1040,20 @@ const ChatBubble: React.FC<ChatBubbleProps> = ({
     setTimeout(() => setIsCopied(false), 2000);
   };
 
-  const actionRequiredToolCalls = (message.toolCalls || []).filter(record => {
+  const cardSourceMessage = actionCardSourceMessage || message;
+  const actionRequiredToolCalls = suppressActionCards ? [] : (cardSourceMessage.toolCalls || []).filter(record => {
     if (dismissedActionCardIds?.[record.id]) return false;
     return record.result?.status === 'requires_action' && !!record.result.requiresAction;
   });
+  const hasToolCallRecords = (message.toolCalls?.length || 0) > 0;
+  const shouldHideEmptyAssistantRow = !isUser
+    && !isSystem
+    && !message.isThinking
+    && !finalContent
+    && !message.thinkingContent
+    && !nativeThinkingText
+    && actionRequiredToolCalls.length === 0
+    && hasToolCallRecords;
 
   const MarkdownComponents = {
     p: ({ children }: any) => <p className="mb-2 last:mb-0 break-words whitespace-pre-wrap">{children}</p>,
@@ -1032,6 +1074,10 @@ const ChatBubble: React.FC<ChatBubbleProps> = ({
     code: ({ node, inline, className, children, ...props }: any) => { return inline ? (<code className="bg-white/10 px-1.5 py-0.5 rounded font-mono text-xs text-brand-200 break-words whitespace-pre-wrap" {...props}>{children}</code>) : (<div className="bg-black/40 rounded-lg my-2 overflow-hidden border border-white/5"> <div className="bg-white/5 px-3 py-1.5 border-b border-white/5 text-[10px] text-gray-500 font-mono flex items-center gap-2"> <div className="flex gap-1"><div className="w-2 h-2 rounded-full bg-red-500/50" /><div className="w-2 h-2 rounded-full bg-yellow-500/50" /><div className="w-2 h-2 rounded-full bg-green-500/50" /></div> Code </div> <div className="p-3 overflow-x-auto"><code className="font-mono text-xs text-gray-300 block whitespace-pre-wrap break-words" {...props}>{children}</code></div> </div>) },
     a: ({ href, children }: any) => <a href={href} target="_blank" rel="noreferrer" className="text-brand-400 hover:underline">{children}</a>
   };
+
+  if (shouldHideEmptyAssistantRow) {
+    return null;
+  }
 
   return (
     <div className={`flex gap-4 ${isUser && !isSystem ? 'flex-row-reverse' : ''} group animate-in fade-in slide-in-from-bottom-2`}>
@@ -1239,15 +1285,21 @@ const ChatBubble: React.FC<ChatBubbleProps> = ({
               } | undefined;
               const localizedMessage = (() => {
                 const messageI18n = payload?.messageI18n as { zh?: string; en?: string } | undefined;
-                return language === 'zh' ? messageI18n?.zh : messageI18n?.en;
+                return language === 'zh'
+                  ? (messageI18n?.zh || messageI18n?.en)
+                  : (messageI18n?.en || messageI18n?.zh);
               })();
               const localizedTitle = (() => {
                 const titleI18n = payload?.titleI18n as { zh?: string; en?: string } | undefined;
-                return language === 'zh' ? titleI18n?.zh : titleI18n?.en;
+                return language === 'zh'
+                  ? (titleI18n?.zh || titleI18n?.en)
+                  : (titleI18n?.en || titleI18n?.zh);
               })();
               const localizedWarnings = (() => {
                 const warningsI18n = payload?.warningsI18n as { zh?: string[]; en?: string[] } | undefined;
-                const localized = language === 'zh' ? warningsI18n?.zh : warningsI18n?.en;
+                const localized = language === 'zh'
+                  ? (warningsI18n?.zh || warningsI18n?.en)
+                  : (warningsI18n?.en || warningsI18n?.zh);
                 return Array.isArray(localized)
                   ? localized.filter((warning): warning is string => typeof warning === 'string')
                   : null;
@@ -1315,7 +1367,7 @@ const ChatBubble: React.FC<ChatBubbleProps> = ({
                                   {preserveList.map((item, index) => (
                                     <span
                                       key={`${record.id}-preserve-${index}`}
-                                      className="rounded-full bg-white/[0.06] px-2.5 py-1.5 text-[11px] leading-none text-slate-200/90"
+                                      className="rounded-[12px] bg-white/[0.06] px-2.5 py-1.5 text-[11px] leading-[1.4] text-slate-200/90"
                                     >
                                       {item}
                                     </span>
@@ -1333,7 +1385,7 @@ const ChatBubble: React.FC<ChatBubbleProps> = ({
                                   {adjustList.map((item, index) => (
                                     <span
                                       key={`${record.id}-adjust-${index}`}
-                                      className="rounded-full bg-sky-500/[0.12] px-2.5 py-1.5 text-[11px] leading-none text-sky-200/90 tracking-wide"
+                                      className="rounded-[12px] bg-sky-500/[0.12] px-2.5 py-1.5 text-[11px] leading-[1.4] text-sky-200/90 tracking-wide"
                                     >
                                       {item}
                                     </span>
@@ -1444,7 +1496,7 @@ const ChatBubble: React.FC<ChatBubbleProps> = ({
                                   <div className="text-slate-500/75">{language === 'zh' ? '保持目标' : 'Preserve Targets'}</div>
                                   <div className="mt-1 flex flex-wrap gap-1.5">
                                     {reviewTrace.preserve.map((item, index) => (
-                                      <span key={`${record.id}-trace-preserve-${index}`} className="rounded-full bg-white/[0.05] px-2 py-1 text-[10px] text-slate-200/88">
+                                      <span key={`${record.id}-trace-preserve-${index}`} className="rounded-[10px] bg-white/[0.05] px-2 py-1 text-[10px] leading-[1.4] text-slate-200/88">
                                         {item}
                                       </span>
                                     ))}
@@ -1456,7 +1508,7 @@ const ChatBubble: React.FC<ChatBubbleProps> = ({
                                   <div className="text-slate-500/75">{language === 'zh' ? '优化目标' : 'Adjust Targets'}</div>
                                   <div className="mt-1 flex flex-wrap gap-1.5">
                                     {reviewTrace.adjust.map((item, index) => (
-                                      <span key={`${record.id}-trace-adjust-${index}`} className="rounded-full bg-sky-500/[0.10] px-2 py-1 text-[10px] text-sky-200/90">
+                                      <span key={`${record.id}-trace-adjust-${index}`} className="rounded-[10px] bg-sky-500/[0.10] px-2 py-1 text-[10px] leading-[1.4] text-sky-200/90">
                                         {item}
                                       </span>
                                     ))}
@@ -1470,7 +1522,7 @@ const ChatBubble: React.FC<ChatBubbleProps> = ({
                                 <div className="text-slate-500/75">{language === 'zh' ? '问题类型' : 'Issue Types'}</div>
                                 <div className="mt-1 flex flex-wrap gap-1.5">
                                   {reviewTrace.issueTypes.map((item, index) => (
-                                    <span key={`${record.id}-trace-issue-${index}`} className="rounded-full bg-white/[0.05] px-2 py-1 text-[10px] text-slate-200/88">
+                                    <span key={`${record.id}-trace-issue-${index}`} className="rounded-[10px] bg-white/[0.05] px-2 py-1 text-[10px] leading-[1.4] text-slate-200/88">
                                       {item}
                                     </span>
                                   ))}

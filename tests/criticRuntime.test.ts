@@ -361,6 +361,74 @@ describe('criticRuntime', () => {
         expect(normalized.revisedPrompt).toContain('Evidence: Negative space is too limited for a premium poster feel.');
     });
 
+    it('should interrupt for broad composition changes when the plan is guided', () => {
+        const critic: StructuredCriticReview = {
+            decision: 'auto_revise',
+            summary: 'The next improvement would require a much denser, more theatrical composition.',
+            issues: [
+                {
+                    type: 'composition_weak',
+                    severity: 'high',
+                    confidence: 'medium',
+                    autoFixable: false,
+                    title: 'Composition direction needs confirmation',
+                    detail: 'The current minimal framing would need a broader layout rewrite to satisfy the request.',
+                    fixScope: 'global',
+                    evidence: ['The requested fuller frame would materially change the current negative-space composition.']
+                }
+            ],
+            reviewPlan: {
+                summary: 'Pause and confirm how far the composition should move away from the current minimal layout.',
+                preserve: ['product identity'],
+                adjust: ['scene density', 'layout hierarchy'],
+                confidence: 'medium',
+                executionMode: 'guided',
+                issueTypes: ['composition_weak'],
+                localized: {}
+            }
+        };
+
+        const normalized = normalizeStructuredCriticReview('Add many more elements around the product so it fills the whole frame.', critic);
+
+        expect(normalized.decision).toBe('requires_action');
+        expect(normalized.normalizedActionType).toBe('confirm_refinement_scope');
+        expect(normalized.reviewTrace.finalDecision).toBe('requires_action');
+    });
+
+    it('should interrupt for vague global refinement directions instead of auto-revising blindly', () => {
+        const critic: StructuredCriticReview = {
+            decision: 'auto_revise',
+            summary: 'The request is too open-ended to choose a single refinement direction confidently.',
+            issues: [
+                {
+                    type: 'other',
+                    severity: 'medium',
+                    confidence: 'low',
+                    autoFixable: false,
+                    title: 'Refinement direction is ambiguous',
+                    detail: 'The instruction could imply stronger color, contrast, composition, or styling changes.',
+                    fixScope: 'global',
+                    evidence: ['The phrase "make it pop" leaves multiple plausible artistic directions.']
+                }
+            ],
+            reviewPlan: {
+                summary: 'Pause and confirm whether the user wants more contrast, more luxury styling, or a stronger compositional change.',
+                preserve: ['current subject'],
+                adjust: ['overall scene direction'],
+                confidence: 'low',
+                executionMode: 'guided',
+                issueTypes: ['other'],
+                localized: {}
+            }
+        };
+
+        const normalized = normalizeStructuredCriticReview('Make it pop!', critic);
+
+        expect(normalized.decision).toBe('requires_action');
+        expect(normalized.reviewTrace.primaryIssue?.type).toBe('other');
+        expect(normalized.userFacing?.en?.title).toContain('Confirm');
+    });
+
     it('should accept commercially polished results instead of over-revising minor issues', () => {
         const critic: StructuredCriticReview = {
             decision: 'auto_revise',

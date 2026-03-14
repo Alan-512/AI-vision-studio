@@ -81,6 +81,12 @@ const ISSUE_CARD_COPY: Partial<Record<CriticIssueType, {
 };
 
 const GUIDED_ISSUE_TYPES = new Set<CriticIssueType>(['needs_reference', 'constraint_conflict']);
+const DIRECTIONAL_ISSUE_TYPES = new Set<CriticIssueType>([
+  'composition_weak',
+  'subject_mismatch',
+  'brand_incorrect',
+  'other'
+]);
 const AGGRESSIVE_AUTO_REVISE_ISSUES = new Set<CriticIssueType>([
   'subject_mismatch',
   'brand_incorrect',
@@ -184,7 +190,7 @@ const applyExecutionMode = (
 const issuePriority = (issue: CriticIssue): number => {
   const severityScore = issue.severity === 'high' ? 30 : issue.severity === 'medium' ? 20 : 10;
   const confidenceScore = issue.confidence === 'high' ? 3 : issue.confidence === 'medium' ? 2 : 1;
-  const guidedBonus = GUIDED_ISSUE_TYPES.has(issue.type) ? 5 : 0;
+  const guidedBonus = isGuidedIssue(issue) ? 5 : 0;
   const scopeBonus = issue.fixScope === 'global' ? 4 : issue.fixScope === 'layout' ? 3 : issue.fixScope === 'subject' ? 2 : 0;
   return severityScore + confidenceScore + guidedBonus + scopeBonus;
 };
@@ -207,7 +213,7 @@ const recommendActionType = (decision: CriticDecision, primaryIssue?: CriticIssu
     case 'subject_mismatch':
       return decision === 'requires_action' ? 'confirm_subject_direction' : 'tighten_subject_match';
     case 'composition_weak':
-      return 'preserve_composition';
+      return decision === 'requires_action' ? 'confirm_refinement_scope' : 'preserve_composition';
     case 'lighting_mismatch':
       return 'refine_lighting';
     case 'material_weak':
@@ -219,6 +225,28 @@ const recommendActionType = (decision: CriticDecision, primaryIssue?: CriticIssu
     default:
       return decision === 'requires_action' ? 'review_output' : 'continue_optimization';
   }
+};
+
+const isGuidedIssue = (issue: CriticIssue): boolean => {
+  if (GUIDED_ISSUE_TYPES.has(issue.type)) {
+    return true;
+  }
+
+  if (!DIRECTIONAL_ISSUE_TYPES.has(issue.type)) {
+    return false;
+  }
+
+  const broadChange = issue.fixScope === 'layout' || issue.fixScope === 'global';
+  if (!broadChange) {
+    return false;
+  }
+
+  if (issue.autoFixable === false) {
+    return true;
+  }
+
+  // Directional issues with high confidence still require user confirmation if they impact the layout/global vision.
+  return issue.fixScope === 'global' || issue.fixScope === 'layout';
 };
 
 const buildDecisionReason = (decision: CriticDecision, primaryIssue: CriticIssue | undefined, fallback?: string): string | undefined => {
@@ -341,8 +369,9 @@ export const normalizeStructuredCriticReview = (
 ): NormalizedCriticReview => {
   const issues = critic.issues || [];
   const primaryIssue = selectPrimaryIssue(issues);
-  const hasGuidedIssue = issues.some(issue => GUIDED_ISSUE_TYPES.has(issue.type));
+  const hasGuidedIssue = issues.some(issue => isGuidedIssue(issue));
   const hasCalibratedGuidance = critic.calibration?.calibratedDecision === 'requires_action' && critic.calibration?.confidence !== 'low';
+  const hasGuidedExecutionPlan = critic.reviewPlan.executionMode === 'guided';
   const allAutoFixable = issues.length > 0 && issues.every(issue => issue.autoFixable);
   const highSeverityIssueCount = issues.filter(issue => issue.severity === 'high').length;
   const qualityAverage = averageQualityScore(critic);
@@ -353,20 +382,56 @@ export const normalizeStructuredCriticReview = (
     (issue.severity === 'high' || (issue.severity === 'medium' && issue.confidence === 'high'))
   );
 
+  // Trace input for debugging
+  console.log(`[Critic] Normalizing: decision=${critic.decision}, calibration=${critic.calibration?.calibratedDecision}, issues=${issues.length}, hasGuidedIssue=${hasGuidedIssue}`);
+  if (primaryIssue) {
+    console.log(`[Critic] Primary issue: type=${primaryIssue.type}, scope=${primaryIssue.fixScope}, confidence=${primaryIssue.confidence}, severity=${primaryIssue.severity}`);
+  }
+
   let decision: CriticDecision = critic.decision;
   let normalizedDecisionReason = critic.reason;
-  if (decision === 'requires_action' && !hasGuidedIssue && !hasCalibratedGuidance && allAutoFixable && critic.reviewPlan.executionMode !== 'guided') {
-    decision = 'auto_revise';
-    normalizedDecisionReason = normalizedDecisionReason || 'All identified issues are auto-fixable, so the runtime can continue without interrupting the user.';
-  }
-  if (decision === 'auto_revise' && (hasGuidedIssue || hasCalibratedGuidance)) {
+
+  // HEURISTIC GUARDRAIL: Force interruption for known high-risk/ambiguous patterns if AI is too confident
+  const lowerPrompt = prompt.toLowerCase();
+  const isAmbiguous = /make it pop|push it|more premium|give it a vibe/i.test(lowerPrompt);
+  const isMajorLayoutShift = /crowded|maximalist|fill every bit|different composition/i.test(lowerPrompt);
+
+  if ((isAmbiguous || isMajorLayoutShift) && decision !== 'requires_action') {
     decision = 'requires_action';
-    normalizedDecisionReason = normalizedDecisionReason || 'The review found a missing reference or conflicting constraint that needs user guidance.';
+    normalizedDecisionReason = `The instruction "${isAmbiguous ? 'make it pop' : 'make it crowded'}" involves subjective or major layout changes that should be confirmed first.`;
+    console.log(`[Critic] Heuristic upgrade: prompt match for redirection.`);
   }
+
+  // RULE 1: Downgrade protection - don't downgrade if it's a directional layout/global change
+  const isDirectionalBroadChange = issues.some(issue =>
+    DIRECTIONAL_ISSUE_TYPES.has(issue.type) && (issue.fixScope === 'layout' || issue.fixScope === 'global')
+  );
+
+  if (decision === 'requires_action' && !hasGuidedIssue && !hasCalibratedGuidance && allAutoFixable && !hasGuidedExecutionPlan) {
+    if (!isDirectionalBroadChange) {
+      decision = 'auto_revise';
+      normalizedDecisionReason = normalizedDecisionReason || 'All identified issues are auto-fixable, so the runtime can continue without interrupting the user.';
+      console.log('[Critic] Decision downgraded to auto_revise');
+    } else {
+      console.log('[Critic] Decision downgrade BLOCKED due to directional broad change');
+    }
+  }
+
+  // RULE 2: Upgrade protection - ensure guided signals always trigger requires_action
+  if ((decision === 'auto_revise' || decision === 'accept') && (hasGuidedIssue || hasCalibratedGuidance || hasGuidedExecutionPlan)) {
+    decision = 'requires_action';
+    normalizedDecisionReason = normalizedDecisionReason || 'The review found a directional choice or broader change that should be confirmed with the user first.';
+    console.log(`[Critic] Decision upgraded to requires_action (from ${critic.decision})`);
+  }
+
+  // RULE 3: Accept protection - don't accept if there's a strong auto-fix pending
   if (decision === 'accept' && !hasGuidedIssue && strongestAutoFixableIssue && critic.reviewPlan.adjust.length > 0) {
     decision = 'auto_revise';
     normalizedDecisionReason = normalizedDecisionReason || `The result is usable, but ${strongestAutoFixableIssue.title.toLowerCase()} should be corrected automatically before asking the user to judge it.`;
+    console.log('[Critic] Decision upgraded from accept to auto_revise');
   }
+
+  // RULE 4: Commercially ready - allow auto-revise to downgrade to accept for high-quality results
   if (
     decision === 'auto_revise' &&
     !hasGuidedIssue &&
@@ -378,7 +443,10 @@ export const normalizeStructuredCriticReview = (
   ) {
     decision = 'accept';
     normalizedDecisionReason = normalizedDecisionReason || 'The result is already commercially polished enough that another revision is unlikely to improve it materially.';
+    console.log('[Critic] Decision downgraded to accept (high quality)');
   }
+
+  console.log(`[Critic] Final decision: ${decision}`);
 
   const revisionStrength = critic.reviewPlan.revisionStrength || inferRevisionStrength(primaryIssue, decision);
   const reviewPlan = applyExecutionMode(critic.reviewPlan, decision, revisionStrength);
@@ -391,6 +459,13 @@ export const normalizeStructuredCriticReview = (
   const warnings = issues
     .filter(issue => issue.severity !== 'low')
     .map(issue => issue.detail);
+  const fallbackUserFacing = buildFallbackUserFacingCopy(decision, primaryIssue, critic.summary, normalizedDecisionReason, qualityNote);
+  const mergedUserFacing = fallbackUserFacing
+    ? {
+      zh: critic.userFacing?.zh || fallbackUserFacing.zh,
+      en: critic.userFacing?.en || fallbackUserFacing.en
+    }
+    : critic.userFacing;
   const reviewTrace: ReviewTrace = {
     rawDecision: critic.calibration?.baseDecision || critic.decision,
     finalDecision: decision,
@@ -401,13 +476,13 @@ export const normalizeStructuredCriticReview = (
     quality: critic.quality,
     primaryIssue: primaryIssue
       ? {
-          type: primaryIssue.type,
-          severity: primaryIssue.severity,
-          confidence: primaryIssue.confidence,
-          title: primaryIssue.title,
-          fixScope: primaryIssue.fixScope,
-          evidence: primaryIssue.evidence
-        }
+        type: primaryIssue.type,
+        severity: primaryIssue.severity,
+        confidence: primaryIssue.confidence,
+        title: primaryIssue.title,
+        fixScope: primaryIssue.fixScope,
+        evidence: primaryIssue.evidence
+      }
       : undefined,
     actionType: normalizedActionType,
     revisionStrength,
@@ -427,9 +502,7 @@ export const normalizeStructuredCriticReview = (
     normalizedDecisionReason,
     primaryIssue,
     normalizedActionType,
-    userFacing: critic.userFacing?.zh || critic.userFacing?.en
-      ? critic.userFacing
-      : buildFallbackUserFacingCopy(decision, primaryIssue, critic.summary, normalizedDecisionReason, qualityNote),
+    userFacing: mergedUserFacing,
     reviewTrace
   };
 };

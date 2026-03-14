@@ -282,7 +282,7 @@ const buildOptimizationPlan = (overrides?: Partial<RevisionPlan>): RevisionPlan 
 const buildRequiresActionPayload = (
     prompt: string,
     review: Pick<LocalReviewResult, 'summary' | 'warnings' | 'revisedPrompt' | 'reviewPlan' | 'reviewTrace' | 'quality'>,
-    actionType: string,
+    _actionType: string,
     i18n?: {
         title?: BilingualText;
         message?: BilingualText;
@@ -377,7 +377,7 @@ const buildConsistencyProfile = (
 };
 
 const buildCriticContext = (
-    prompt: string,
+    _prompt: string,
     params: GenerationParams,
     selectedReferences: SelectedReferenceRecord[],
     consistencyProfile?: ConsistencyProfile,
@@ -422,7 +422,7 @@ const criticToLocalReview = (
     requiresAction: normalized.decision === 'requires_action'
         ? {
             type: normalized.normalizedActionType || fallbackActionType,
-            message: normalized.userFacing?.en?.message || normalized.normalizedDecisionReason || normalized.summary,
+            message: normalized.userFacing?.zh?.message || normalized.userFacing?.en?.message || normalized.normalizedDecisionReason || normalized.summary,
             payload: buildRequiresActionPayload(prompt, {
                 summary: normalized.summary,
                 warnings: normalized.issues.map(issue => issue.detail),
@@ -703,7 +703,7 @@ export function App() {
     const generatingStates = useMemo(() => {
         const states: Record<string, number> = {};
         tasks.forEach(task => {
-            if (task.status === 'GENERATING' || task.status === 'QUEUED') {
+            if (task.status === 'GENERATING' || task.status === 'QUEUED' || task.status === 'REVIEWING') {
                 // Use executionStartTime if available, otherwise startTime
                 if (!states[task.projectId] || (task.executionStartTime && task.executionStartTime < states[task.projectId])) {
                     states[task.projectId] = task.executionStartTime || task.startTime;
@@ -795,7 +795,7 @@ export function App() {
                 const persistedTasks = await loadTasks();
                 const recoveredTasks = persistedTasks.map(task => {
                     // Mark interrupted tasks as FAILED (they can't be resumed after refresh)
-                    if (task.status === 'GENERATING' || task.status === 'QUEUED') {
+                    if (task.status === 'GENERATING' || task.status === 'QUEUED' || task.status === 'REVIEWING') {
                         const failedTask = { ...task, status: 'FAILED' as const, error: 'Task interrupted by page refresh' };
                         saveTask(failedTask); // Persist the updated status
                         return failedTask;
@@ -874,7 +874,7 @@ export function App() {
 
     // CRASH PROTECTION: Warn user before closing if tasks are in progress
     useEffect(() => {
-        const hasActiveTasks = tasks.some(t => t.status === 'GENERATING' || t.status === 'QUEUED');
+        const hasActiveTasks = tasks.some(t => t.status === 'GENERATING' || t.status === 'QUEUED' || t.status === 'REVIEWING');
 
         const handleBeforeUnload = (e: BeforeUnloadEvent) => {
             if (hasActiveTasks) {
@@ -1360,6 +1360,46 @@ export function App() {
                 };
             }
 
+            const upsertChatFeedbackImage = (asset: AssetItem, imageUrl: string) => {
+                if (!imageUrl) return;
+                const assetSignatures = (asset.metadata as any)?.thoughtSignatures;
+                setChatHistory(prev => {
+                    const next = [...prev];
+                    const feedbackIndex = next.findIndex(message =>
+                        message.isSystem &&
+                        message.relatedJobId === asset.jobId &&
+                        message.content.startsWith('[SYSTEM_FEEDBACK]: Image generated successfully')
+                    );
+                    const feedbackMessage: ChatMessage = {
+                        role: 'user',
+                        content: `[SYSTEM_FEEDBACK]: Image generated successfully based on prompt: "${asset.prompt}".\nHere is the visual result (Thumbnail). Use this as context for consistency.`,
+                        timestamp: Date.now(),
+                        image: imageUrl,
+                        isSystem: true,
+                        relatedJobId: asset.jobId,
+                        thoughtSignatures: assetSignatures
+                    };
+                    if (feedbackIndex >= 0) {
+                        next[feedbackIndex] = {
+                            ...next[feedbackIndex],
+                            ...feedbackMessage
+                        };
+                        return next;
+                    }
+                    return [...next, feedbackMessage];
+                });
+            };
+
+            const onPreview = (asset: AssetItem) => {
+                if (asset.jobId) {
+                    updateLastModelMessage(message => ({
+                        ...message,
+                        relatedJobId: asset.jobId
+                    }));
+                }
+                upsertChatFeedbackImage(asset, asset.url);
+            };
+
             const onComplete = async (asset: AssetItem) => {
                 if (onSuccessCallback) await onSuccessCallback(asset);
                 let contextImageBase64 = '';
@@ -1369,23 +1409,13 @@ export function App() {
                     contextImageBase64 = await compressImageForContext(blob);
                 } catch (e) { console.warn("Failed to fetch image data for chat context", e); }
                 if (contextImageBase64) {
-                    // Extract thoughtSignatures from asset metadata for multi-turn editing
-                    const assetSignatures = (asset.metadata as any)?.thoughtSignatures;
-                        setChatHistory(prev => [
-                        ...prev,
-                        {
-                            role: 'user', content: `[SYSTEM_FEEDBACK]: Image generated successfully based on prompt: "${asset.prompt}".\nHere is the visual result (Thumbnail). Use this as context for consistency.`,
-                            timestamp: Date.now(), image: contextImageBase64, isSystem: true,
-                            relatedJobId: asset.jobId,
-                            // Pass thoughtSignatures for Pro model multi-turn editing stability
-                            thoughtSignatures: assetSignatures
-                        }
-                    ]);
+                    upsertChatFeedbackImage(asset, contextImageBase64);
                 }
             };
             try {
                 const toolResults = await handleGenerate(executionParams as GenerationParams, {
                     modeOverride: AppMode.IMAGE,
+                    onPreview,
                     onSuccess: onComplete,
                     historyOverride: chatHistory,
                     useParamsAsBase: false, // CLEAN ISOLATION: Don't merge with params config page
@@ -1479,6 +1509,7 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
         fullParams: GenerationParams,
         options?: {
             modeOverride?: AppMode;
+            onPreview?: (asset: AssetItem) => void;
             onSuccess?: (asset: AssetItem) => void;
             historyOverride?: ChatMessage[];
             useParamsAsBase?: boolean; // Default false for isolation
@@ -1492,6 +1523,7 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
     ): Promise<AgentToolResult[]> => {
         const {
             modeOverride,
+            onPreview,
             onSuccess,
             historyOverride,
             useParamsAsBase = false,
@@ -1605,6 +1637,9 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
                     steps: [createGenerationStep(stepId, currentMode, activeParams, toolCall)],
                     artifacts: initialRuntimeArtifacts
                 };
+            let latestVisibleAsset: AssetItem | null = null;
+            let taskMarkedVisibleComplete = false;
+            let successSoundPlayed = false;
             const persistJob = async (updates: Partial<AgentJob>) => {
                 agentJob = {
                     ...agentJob,
@@ -1612,6 +1647,18 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
                     updatedAt: updates.updatedAt ?? Date.now()
                 };
                 await saveAgentJob(agentJob);
+            };
+            const markTaskVisibleComplete = async () => {
+                if (taskMarkedVisibleComplete) return;
+                taskMarkedVisibleComplete = true;
+                const completedTask = { ...newTask, status: 'COMPLETED' as const };
+                setTasks(prev => prev.map(t => t.id === taskId ? completedTask : t));
+                await saveTask(completedTask);
+            };
+            const playVisibleSuccess = () => {
+                if (successSoundPlayed) return;
+                successSoundPlayed = true;
+                playSuccessSound();
             };
             setTasks(prev => [...prev.filter(task => task.jobId !== jobId), newTask]);
             previousTaskIds.forEach(previousTaskId => {
@@ -1693,9 +1740,16 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
                     if (controller.signal.aborted) throw new Error("Cancelled");
                     asset.isNew = true;
                     asset.jobId = jobId;
+                    latestVisibleAsset = asset;
                     await saveAsset(asset);
                     if (controller.signal.aborted) throw new Error("Cancelled");
                     if (activeProjectIdRef.current === currentProjectId) setAssets(prev => prev.map(a => a.id === taskId ? asset : a));
+                    if (onPreview) onPreview(asset);
+                    if (onSuccess) {
+                        void onSuccess(asset);
+                    }
+                    playVisibleSuccess();
+                    await markTaskVisibleComplete();
                     const completedAt = Date.now();
                     const completedSteps = agentJob.steps.map(step => step.id === stepId
                         ? {
@@ -1706,6 +1760,7 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
                         }
                         : step
                     );
+                    persistJob({ steps: completedSteps }).catch(console.error);
                     toolResult = {
                         jobId,
                         stepId,
@@ -1749,6 +1804,7 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
                         }
                         : step
                     );
+                    persistJob({ steps: completedSteps }).catch(console.error);
                     toolResult = {
                         jobId,
                         stepId,
@@ -1771,6 +1827,11 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
                     status: 'running' as const,
                     startTime: reviewStartedAt
                 };
+                if (currentMode !== AppMode.IMAGE) {
+                    const reviewingTask = { ...newTask, status: 'REVIEWING' as const };
+                    setTasks(prev => prev.map(t => t.id === taskId ? reviewingTask : t));
+                    saveTask(reviewingTask).catch(console.error);
+                }
                 persistJob({
                     status: 'reviewing',
                     currentStepId: reviewStepId,
@@ -1792,7 +1853,7 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
                 const reviewArtifact = buildReviewArtifact(reviewArtifactId, reviewStepId, review);
                 const finalizedReviewStep = {
                     ...reviewStep,
-                    status: (review.decision === 'accept' ? 'success' : 'failed') as const,
+                    status: (review.decision === 'accept' ? 'success' : 'failed') as 'success' | 'failed',
                     endTime: reviewEndedAt,
                     output: {
                             decision: review.decision,
@@ -1892,11 +1953,17 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
                     if (controller.signal.aborted) throw new Error("Cancelled");
                     revisedAsset.isNew = true;
                     revisedAsset.jobId = jobId;
+                    latestVisibleAsset = revisedAsset;
                     await saveAsset(revisedAsset);
                     if (controller.signal.aborted) throw new Error("Cancelled");
                     if (activeProjectIdRef.current === currentProjectId) {
                         setAssets(prev => prev.map(a => a.id === taskId ? revisedAsset : a));
                     }
+                    if (onPreview) onPreview(revisedAsset);
+                    if (onSuccess) {
+                        void onSuccess(revisedAsset);
+                    }
+                    playVisibleSuccess();
 
                     const revisedGenerationEndedAt = Date.now();
                     const finalizedRevisedGenerationStep = {
@@ -1944,7 +2011,7 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
                     const secondReviewArtifact = buildReviewArtifact(secondReviewArtifactId, secondReviewStepId, secondReview);
                     const finalizedSecondReviewStep = {
                         ...secondReviewStep,
-                        status: (secondReview.decision === 'accept' ? 'success' : 'failed') as const,
+                        status: (secondReview.decision === 'accept' ? 'success' : 'failed') as 'success' | 'failed',
                         endTime: Date.now(),
                         output: {
                             decision: secondReview.decision,
@@ -2016,7 +2083,7 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
                     };
 
                     if (secondReview.decision !== 'accept') {
-                        const blockedTask = { ...newTask, status: 'FAILED' as const, error: secondReview.summary };
+                        const blockedTask = { ...newTask, status: 'ACTION_REQUIRED' as const, error: secondReview.summary };
                         persistJob({
                             status: 'requires_action',
                             currentStepId: undefined,
@@ -2057,8 +2124,10 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
                             steps: [...stepsAfterRevision, finalizedRevisedGenerationStep, finalizedSecondReviewStep],
                             artifacts: [...agentJob.artifacts, generatedArtifact, reviewArtifact, revisionArtifact, revisedGeneratedArtifact, secondReviewArtifact]
                         }).catch(console.error);
-                        setTasks(prev => prev.map(t => t.id === taskId ? blockedTask : t));
-                        saveTask(blockedTask).catch(console.error);
+                        if (currentMode !== AppMode.IMAGE) {
+                            setTasks(prev => prev.map(t => t.id === taskId ? blockedTask : t));
+                            saveTask(blockedTask).catch(console.error);
+                        }
                         addToast('info', language === 'zh' ? '我建议继续优化这一版' : 'Refinement Suggestion', secondReview.summary);
                         return revisedToolResult;
                     }
@@ -2071,19 +2140,22 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
                         steps: [...stepsAfterRevision, finalizedRevisedGenerationStep, finalizedSecondReviewStep],
                         artifacts: [...agentJob.artifacts, generatedArtifact, reviewArtifact, revisionArtifact, revisedGeneratedArtifact, secondReviewArtifact]
                     }).catch(console.error);
-                    setTasks(prev => prev.map(t => t.id === taskId ? { ...t, status: 'COMPLETED' } : t));
-                    saveTask({ ...newTask, status: 'COMPLETED' }).catch(console.error);
-                    if (onSuccess) onSuccess(revisedAsset);
+                    if (currentMode !== AppMode.IMAGE) {
+                        setTasks(prev => prev.map(t => t.id === taskId ? { ...t, status: 'COMPLETED' } : t));
+                        saveTask({ ...newTask, status: 'COMPLETED' }).catch(console.error);
+                    }
                     runMemoryExtractionTask(currentProjectId, historyOverride || chatHistory, userKey).catch(err => {
                         console.error('[App] Background memory extraction failed:', err);
                     });
-                    playSuccessSound();
+                    if (currentMode !== AppMode.IMAGE) {
+                        playSuccessSound();
+                    }
                     if (activeParams.continuousMode) handleUseAsReference(revisedAsset, false);
                     return revisedToolResult;
                 }
 
                 if (review.decision === 'requires_action') {
-                    const blockedTask = { ...newTask, status: 'FAILED' as const, error: review.summary };
+                    const blockedTask = { ...newTask, status: 'ACTION_REQUIRED' as const, error: review.summary };
                     persistJob({
                         status: 'requires_action',
                         currentStepId: undefined,
@@ -2121,8 +2193,10 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
                         steps: [...agentJob.steps.filter(step => step.id !== reviewStepId), finalizedReviewStep],
                         artifacts: [...agentJob.artifacts, generatedArtifact, reviewArtifact]
                     }).catch(console.error);
-                    setTasks(prev => prev.map(t => t.id === taskId ? blockedTask : t));
-                    saveTask(blockedTask).catch(console.error);
+                    if (currentMode !== AppMode.IMAGE) {
+                        setTasks(prev => prev.map(t => t.id === taskId ? blockedTask : t));
+                        saveTask(blockedTask).catch(console.error);
+                    }
                     addToast('info', language === 'zh' ? '我建议继续优化这一版' : 'Refinement Suggestion', review.summary);
                     return reviewedToolResult;
                 }
@@ -2135,18 +2209,20 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
                     steps: [...agentJob.steps.filter(step => step.id !== reviewStepId), finalizedReviewStep],
                     artifacts: [...agentJob.artifacts, generatedArtifact, reviewArtifact]
                 }).catch(console.error);
-                setTasks(prev => prev.map(t => t.id === taskId ? { ...t, status: 'COMPLETED' } : t));
-                saveTask({ ...newTask, status: 'COMPLETED' }).catch(console.error);
+                if (currentMode !== AppMode.IMAGE) {
+                    setTasks(prev => prev.map(t => t.id === taskId ? { ...t, status: 'COMPLETED' } : t));
+                    saveTask({ ...newTask, status: 'COMPLETED' }).catch(console.error);
+                }
                 if (currentMode === AppMode.IMAGE) {
-                    if (onSuccess) onSuccess(asset);
-
                     // Background Memory Extraction Task (writes to Daily Logs only)
                     // Consolidation is now decoupled - runs at most once per day at app startup
                     runMemoryExtractionTask(currentProjectId, historyOverride || chatHistory, userKey).catch(err => {
                         console.error('[App] Background memory extraction failed:', err);
                     });
                 }
-                playSuccessSound();
+                if (currentMode !== AppMode.IMAGE) {
+                    playSuccessSound();
+                }
                 if (activeParams.continuousMode && asset.type === 'IMAGE') handleUseAsReference(asset, false);
                 return reviewedToolResult;
             } catch (error: any) {
@@ -2192,6 +2268,32 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
                     };
                 } else {
                     const errorText = error.message || "";
+                    if (currentMode === AppMode.IMAGE && latestVisibleAsset) {
+                        persistJob({
+                            status: 'completed',
+                            currentStepId: undefined,
+                            lastError: errorText
+                        }).catch(console.error);
+                        if (!taskMarkedVisibleComplete) {
+                            markTaskVisibleComplete().catch(console.error);
+                        }
+                        console.warn('[App] Review/post-processing failed after image was already shown:', errorText);
+                        addToast('info', language === 'zh' ? '图片已生成，后续评审未完成' : 'Image ready; post-review did not finish', errorText);
+                        return {
+                            jobId,
+                            stepId,
+                            toolName: currentMode === AppMode.IMAGE ? 'generate_image' : 'generate_video',
+                            status: 'success',
+                            artifactIds: [latestVisibleAsset.id],
+                            message: 'Image generation completed',
+                            metadata: {
+                                taskId,
+                                assetId: latestVisibleAsset.id,
+                                lifecycleStatus: 'completed',
+                                reviewError: errorText
+                            }
+                        };
+                    }
                     const friendlyError = getFriendlyError(errorText);
                     const failedTask = { ...newTask, status: 'FAILED' as const, error: errorText };
                     const failedAt = Date.now();
@@ -2269,8 +2371,8 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
 
     const handleClearCompletedTasks = () => {
         setTasks(prev => {
-            prev.filter(t => t.status === 'COMPLETED' || t.status === 'FAILED').forEach(t => deleteTask(t.id));
-            return prev.filter(t => t.status === 'GENERATING' || t.status === 'QUEUED');
+            prev.filter(t => t.status === 'COMPLETED' || t.status === 'FAILED' || t.status === 'ACTION_REQUIRED').forEach(t => deleteTask(t.id));
+            return prev.filter(t => t.status === 'GENERATING' || t.status === 'QUEUED' || t.status === 'REVIEWING');
         });
     };
     const openConfirmDeleteProject = (projectId: string) => {
@@ -2576,7 +2678,7 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
             <ProjectSidebar isOpen={showProjects} onClose={() => setShowProjects(false)} projects={projects} activeProjectId={activeProjectId} generatingStates={generatingStates} onSelectProject={(id) => switchProject(id)} onCreateProject={() => createNewProject()} onRenameProject={(id, name) => { const p = projects.find(p => p.id === id); if (p) { const updated = { ...p, name }; setProjects(prev => prev.map(prj => prj.id === id ? updated : prj)); updateProject(id, { name }); } }} onDeleteProject={openConfirmDeleteProject} />
 
             <div className="flex-1 flex overflow-hidden relative">
-                <GenerationForm mode={mode} params={params} setParams={setParams} chatParams={chatParams} setChatParams={setChatParams} isGenerating={tasks.some(t => t.projectId === activeProjectId && (t.status === 'GENERATING' || t.status === 'QUEUED'))} startTime={generatingStates[activeProjectId]} onGenerate={handleParamsGenerate} onVerifyVeo={handleAuthVerify} veoVerified={veoVerified} chatHistory={chatHistory} setChatHistory={setChatHistory} activeTab={activeTab} onTabChange={setActiveTab} chatSelectedImages={chatSelectedImages} setChatSelectedImages={setChatSelectedImages} projectId={activeProjectId} cooldownEndTime={videoCooldownEndTime} thoughtImages={thoughtImages} setThoughtImages={setThoughtImages} {...({ projectContextSummary: contextSummary, projectSummaryCursor: summaryCursor, onUpdateProjectContext: (s: string, c: number) => { setContextSummary(s); setSummaryCursor(c); }, onToolCall: handleAgentToolCall, agentContextAssets: mode === AppMode.IMAGE ? agentContextAssets : [], onRemoveContextAsset: (assetId: string) => setAgentContextAssets(prev => prev.filter(a => a.id !== assetId)), onClearContextAssets: () => setAgentContextAssets([]) } as any)} />
+                <GenerationForm mode={mode} params={params} setParams={setParams} chatParams={chatParams} setChatParams={setChatParams} isGenerating={tasks.some(t => t.projectId === activeProjectId && (t.status === 'GENERATING' || t.status === 'QUEUED' || t.status === 'REVIEWING'))} startTime={generatingStates[activeProjectId]} onGenerate={handleParamsGenerate} onVerifyVeo={handleAuthVerify} veoVerified={veoVerified} chatHistory={chatHistory} setChatHistory={setChatHistory} activeTab={activeTab} onTabChange={setActiveTab} chatSelectedImages={chatSelectedImages} setChatSelectedImages={setChatSelectedImages} projectId={activeProjectId} cooldownEndTime={videoCooldownEndTime} thoughtImages={thoughtImages} setThoughtImages={setThoughtImages} {...({ projectContextSummary: contextSummary, projectSummaryCursor: summaryCursor, onUpdateProjectContext: (s: string, c: number) => { setContextSummary(s); setSummaryCursor(c); }, onToolCall: handleAgentToolCall, agentContextAssets: mode === AppMode.IMAGE ? agentContextAssets : [], onRemoveContextAsset: (assetId: string) => setAgentContextAssets(prev => prev.filter(a => a.id !== assetId)), onClearContextAssets: () => setAgentContextAssets([]) } as any)} />
 
                 <div className="flex-1 bg-dark-bg flex flex-col min-w-0 relative">
                     {rightPanelMode === 'CANVAS' && activeCanvasAsset ? (

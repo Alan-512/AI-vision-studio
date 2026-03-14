@@ -545,7 +545,7 @@ export interface AssetItem {
   blob?: Blob; // For IndexedDB storage
 }
 
-export type TaskStatus = 'QUEUED' | 'GENERATING' | 'COMPLETED' | 'FAILED';
+export type TaskStatus = 'QUEUED' | 'GENERATING' | 'REVIEWING' | 'ACTION_REQUIRED' | 'COMPLETED' | 'FAILED';
 
 export interface BackgroundTask {
   id: string;

@@ -11,6 +11,7 @@ import {
     buildImageCriticContextText,
     parseImageCriticCalibration,
     applyImageCriticCalibration,
+    stripVisibleToolPlanningText,
     StructuredFact
 } from '../services/geminiService';
 import { AssistantMode } from '../types';
@@ -147,6 +148,14 @@ describe('GeminiService', () => {
 
         it('should reject unsupported tool names', () => {
             expect(normalizeSupportedToolName('unknown_tool')).toBeNull();
+        });
+    });
+
+    describe('stripVisibleToolPlanningText', () => {
+        it('should remove leaked generate_image planning JSON from visible assistant text', () => {
+            const raw = `This direction looks strong overall.\n\n{\n  "action": "generate_image",\n  "parameters": {\n    "prompt": "A premium metallic can on a matte surface",\n    "model": "gemini-3.1-flash-image-preview"\n  }\n}`;
+
+            expect(stripVisibleToolPlanningText(raw)).toBe('This direction looks strong overall.');
         });
     });
 

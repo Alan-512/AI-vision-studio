@@ -110,6 +110,42 @@ export const buildPromptWithFacts = (rawPrompt: string, factsBlock: StructuredFa
     ].join('\n');
 };
 
+const TOOL_PLANNING_JSON_MARKERS = [
+    '"action"',
+    '"parameters"',
+    '"generate_image"',
+    '"generate_video"'
+];
+
+export const stripVisibleToolPlanningText = (text: string): string => {
+    if (!text) return text;
+
+    const planningStartPatterns = [
+        /\n\s*\{\s*"action"\s*:/m,
+        /\n\s*```json\s*\{\s*"action"\s*:/im,
+        /^\s*\{\s*"action"\s*:/m
+    ];
+
+    for (const pattern of planningStartPatterns) {
+        const match = text.match(pattern);
+        if (!match || typeof match.index !== 'number') continue;
+
+        const candidate = text.slice(match.index);
+        const looksLikeToolPlan = TOOL_PLANNING_JSON_MARKERS.every(marker => candidate.includes(marker))
+            || (
+                candidate.includes('"action"') &&
+                candidate.includes('"parameters"') &&
+                (candidate.includes('generate_image') || candidate.includes('generate_video'))
+            );
+
+        if (!looksLikeToolPlan) continue;
+
+        return text.slice(0, match.index).trimEnd();
+    }
+
+    return text;
+};
+
 const resolveSmartAssetRole = (asset: SmartAsset): SmartAssetRole | null => {
     if (asset.role && Object.values(SmartAssetRole).includes(asset.role)) return asset.role;
     const legacyType = asset.type ? String(asset.type).toUpperCase() : '';
@@ -442,7 +478,8 @@ export const runInternalToolResultLoop = async ({
         }
 
         if (followUpText.trim()) {
-            nextFullText = nextFullText.trim().length > 0 ? `${nextFullText}\n${followUpText}` : followUpText;
+            const combinedText = nextFullText.trim().length > 0 ? `${nextFullText}\n${followUpText}` : followUpText;
+            nextFullText = stripVisibleToolPlanningText(combinedText);
             onChunk(nextFullText);
         } else if (!nextFullText.trim() && fallbackText) {
             nextFullText = fallbackText;
@@ -907,10 +944,12 @@ Rules:
                         if (onThoughtText) {
                             onThoughtText(part.text);
                         }
+                        // Preserving thought part for history stability (Gemini 2.0 protocol)
+                        assistantTurnParts.push({ text: part.text, thought: true, thoughtSignature: part.thoughtSignature });
                     } else {
                         // Regular answer text - accumulate and send to main chunk callback
-                        fullText += part.text;
-                        assistantTurnParts.push({ text: part.text });
+                        fullText = stripVisibleToolPlanningText(fullText + part.text);
+                        assistantTurnParts.push({ text: part.text, thoughtSignature: part.thoughtSignature });
                         onChunk(fullText);
                     }
                 }
@@ -926,7 +965,10 @@ Rules:
                     console.log('[Stream] FunctionCall detected (deferred):', part.functionCall.name, '→', normalizedToolName);
 
                     if (normalizedToolName) {
-                        assistantTurnParts.push({ functionCall: { name: normalizedToolName, args: part.functionCall.args } });
+                        assistantTurnParts.push({
+                            functionCall: { name: normalizedToolName, args: part.functionCall.args },
+                            thoughtSignature: part.thoughtSignature
+                        });
                         pendingToolCalls.push({ toolName: normalizedToolName, args: part.functionCall.args });
                     }
                 }
@@ -1819,9 +1861,11 @@ export const reviewGeneratedImageWithAI = async (
 Review the generated image against the user's prompt. Your job is to decide whether the result should be accepted, automatically revised, or paused for user input.
 
 Decision rules:
-- choose "accept" if the image broadly satisfies the request and only minor imperfections remain
-- choose "auto_revise" if the next fix is clear, low-risk, and can be done while preserving what is already working
-- choose "requires_action" only if the user must make a directional choice, provide a new reference, clarify style/brand intent, or approve a stronger change
+- choose "requires_action" (MANDATORY) if the user instruction is vague, subjective, or open to multiple interpretations (e.g. "make it pop", "more premium", "push it further", "give it a better vibe"). Even if you think you implemented it, you MUST let the user confirm your interpretation.
+- choose "requires_action" (MANDATORY) if the revision involves a major directional shift in composition, density, or overall visual layout (e.g. from minimalist/clean to crowded/complex, or moving the main subject significantly). These large scope changes require user approval before finalizing.
+- choose "auto_revise" ONLY for clear, objective fixes where the user's intent is unambiguous and the change is safely local (e.g. "remove this small artifact", "make the lighting slightly warmer").
+- choose "accept" ONLY if the image matches the prompt and needs zero further refinement.
+- If in doubt, ALWAYS prefer "requires_action". Never automatically "accept" a major directional change.
 
 You must focus on practical refinement quality, not abstract art critique.
 Prioritize:
@@ -1836,6 +1880,7 @@ Issue semantics:
 - For "brand_incorrect", explain whether the mismatch is local label/logo fidelity, broader packaging identity, or overall brand direction drift.
 - For "composition_weak", explain whether the weakness is framing, crop, balance, spacing, perspective, or layout hierarchy.
 - For "material_weak", explain whether the weakness is texture realism, reflections, surface separation, edge clarity, or product finish.
+- For vague or multi-interpretation requests, prefer "other" with a clear explanation of why the direction is ambiguous, and set "fixScope" to "global" if the likely change would affect the whole scene direction.
 - Set "fixScope" to one of:
   - "local" for narrow fixes such as texture cleanup, lighting polish, or text cleanup
   - "subject" for subject/product identity fixes
@@ -1937,12 +1982,11 @@ You will receive:
 3. the primary critic's structured review JSON
 
 Calibration rules:
-- prefer "auto_revise" when the primary critic already knows how to improve the image without changing the user's intent
-- choose "requires_action" only when the user truly needs to decide direction, approve a stronger change, clarify brand/style/subject intent, or provide missing references
-- choose "accept" only when further refinement would likely add noise or needless delay
-- keep the user burden low; do not ask for prompt engineering
-- provide concise product-language copy for the action card when "requires_action" is chosen
-- use the primary critic's quality scores to judge whether the result is already commercially polished enough to stop, or whether another focused pass is still worthwhile
+- choose "requires_action" (MANDATORY) if the revision involves a directional layout/composition shift, or responds to vague terms (pop/vibe/premium).
+- forbid "auto_revise" for major changes. Use it ONLY for safe, objective, local refinements where the user intent is 100% specific.
+- choose "requires_action" if the change materially alters scene density, framing, or visual direction.
+- prioritize safe interruption over immediate generation.
+- choose "accept" only when refinement is no longer possible.
 - pay special attention to compositionStrength, materialFidelity, brandAccuracy, aestheticFinish, and commercialReadiness
 
 Return JSON only with this shape:

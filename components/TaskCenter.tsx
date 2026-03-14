@@ -11,7 +11,9 @@ interface TaskCenterProps {
 }
 
 export const TaskCenter: React.FC<TaskCenterProps> = ({ tasks, onClearCompleted, onRemoveTask }) => {
-  const { t } = useLanguage();
+  const { t, language } = useLanguage();
+  const reviewLabel = language === 'zh' ? '评审中' : 'Reviewing';
+  const actionRequiredLabel = language === 'zh' ? '待你处理' : 'Needs attention';
   const [isExpanded, setIsExpanded] = useState(false);
   const [now, setNow] = useState(Date.now());
 
@@ -21,9 +23,10 @@ export const TaskCenter: React.FC<TaskCenterProps> = ({ tasks, onClearCompleted,
     return () => clearInterval(interval);
   }, []);
 
-  const activeTasks = tasks.filter(t => t.status === 'QUEUED' || t.status === 'GENERATING');
+  const activeTasks = tasks.filter(t => t.status === 'QUEUED' || t.status === 'GENERATING' || t.status === 'REVIEWING');
   const failedTasks = tasks.filter(t => t.status === 'FAILED');
-  const completedTasks = tasks.filter(t => t.status === 'COMPLETED' || t.status === 'FAILED');
+  const actionRequiredTasks = tasks.filter(t => t.status === 'ACTION_REQUIRED');
+  const completedTasks = tasks.filter(t => t.status === 'COMPLETED' || t.status === 'FAILED' || t.status === 'ACTION_REQUIRED');
 
   // Sort tasks: Newest first
   const sortedTasks = [...tasks].sort((a, b) => b.startTime - a.startTime);
@@ -39,6 +42,7 @@ export const TaskCenter: React.FC<TaskCenterProps> = ({ tasks, onClearCompleted,
 
   const hasActive = activeTasks.length > 0;
   const hasFailed = failedTasks.length > 0;
+  const hasActionRequired = actionRequiredTasks.length > 0;
 
   return (
     <div className={`fixed bottom-6 right-6 z-50 transition-all duration-300 ${isExpanded ? 'w-80' : 'w-auto'}`}>
@@ -47,7 +51,7 @@ export const TaskCenter: React.FC<TaskCenterProps> = ({ tasks, onClearCompleted,
       {!isExpanded && (
         <button
           onClick={() => setIsExpanded(true)}
-          className={`flex items-center gap-3 bg-dark-panel border border-dark-border shadow-2xl shadow-black/50 rounded-full px-4 py-3 hover:bg-dark-surface transition-colors group animate-in slide-in-from-bottom-5 fade-in ${hasFailed && !hasActive ? 'border-red-500/50' : ''
+          className={`flex items-center gap-3 bg-dark-panel border border-dark-border shadow-2xl shadow-black/50 rounded-full px-4 py-3 hover:bg-dark-surface transition-colors group animate-in slide-in-from-bottom-5 fade-in ${hasFailed && !hasActive ? 'border-red-500/50' : hasActionRequired ? 'border-amber-500/40' : ''
             }`}
         >
           <div className="relative">
@@ -58,22 +62,30 @@ export const TaskCenter: React.FC<TaskCenterProps> = ({ tasks, onClearCompleted,
               </>
             ) : hasFailed ? (
               <AlertCircle size={16} className="text-red-500" />
+            ) : hasActionRequired ? (
+              <AlertCircle size={16} className="text-amber-400" />
             ) : (
               <CheckCircle size={16} className="text-green-500" />
             )}
           </div>
           <div className="flex flex-col items-start">
-            <span className={`text-xs font-bold leading-none ${hasFailed && !hasActive ? 'text-red-400' : 'text-white'}`}>
+            <span className={`text-xs font-bold leading-none ${hasFailed && !hasActive ? 'text-red-400' : hasActionRequired ? 'text-amber-300' : 'text-white'}`}>
               {hasActive
                 ? `${activeTasks.length} ${t('task.active')}`
                 : hasFailed
                   ? t('task.failed')
+                  : hasActionRequired
+                    ? actionRequiredLabel
                   : t('task.complete')
               }
             </span>
             {activeTasks.length > 0 && (
               <span className="text-[10px] text-gray-400 leading-none mt-1">
-                {activeTasks.some(t => t.status === 'GENERATING') ? t('task.processing') : t('task.queued')}
+                {activeTasks.some(t => t.status === 'GENERATING')
+                  ? t('task.processing')
+                  : activeTasks.some(t => t.status === 'REVIEWING')
+                    ? reviewLabel
+                    : t('task.queued')}
               </span>
             )}
           </div>
@@ -109,15 +121,17 @@ export const TaskCenter: React.FC<TaskCenterProps> = ({ tasks, onClearCompleted,
           {/* List */}
           <div className="overflow-y-auto p-2 space-y-2 custom-scrollbar">
             {sortedTasks.map(task => {
-              const isActive = task.status === 'QUEUED' || task.status === 'GENERATING';
+              const isActive = task.status === 'QUEUED' || task.status === 'GENERATING' || task.status === 'REVIEWING';
               return (
                 <div key={task.id} className="bg-black/20 rounded-lg p-3 border border-dark-border/50 relative group">
                   <div className="flex items-start justify-between gap-3">
                     {/* Icon */}
                     <div className="mt-0.5 shrink-0">
                       {task.status === 'GENERATING' && <Loader2 size={16} className="text-brand-500 animate-spin" />}
+                      {task.status === 'REVIEWING' && <Clock size={16} className="text-sky-400" />}
                       {task.status === 'QUEUED' && <Clock size={16} className="text-yellow-500" />}
                       {task.status === 'COMPLETED' && <CheckCircle size={16} className="text-green-500" />}
+                      {task.status === 'ACTION_REQUIRED' && <AlertCircle size={16} className="text-amber-400" />}
                       {task.status === 'FAILED' && <AlertCircle size={16} className="text-red-500" />}
                     </div>
 
@@ -131,7 +145,13 @@ export const TaskCenter: React.FC<TaskCenterProps> = ({ tasks, onClearCompleted,
 
                       <div className="flex items-center justify-between">
                         <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${getStatusColor(task.status)}`}>
-                          {task.status === 'GENERATING' ? `${t('task.running')} ${formatDuration(task.executionStartTime || task.startTime)}` : task.status}
+                          {task.status === 'GENERATING'
+                            ? `${t('task.running')} ${formatDuration(task.executionStartTime || task.startTime)}`
+                            : task.status === 'REVIEWING'
+                              ? reviewLabel
+                              : task.status === 'ACTION_REQUIRED'
+                                ? actionRequiredLabel
+                                : task.status}
                         </span>
                         {task.status === 'QUEUED' && (
                           <span className="text-[10px] text-gray-600">{t('task.waiting')}</span>
@@ -139,8 +159,12 @@ export const TaskCenter: React.FC<TaskCenterProps> = ({ tasks, onClearCompleted,
                       </div>
 
                       {/* Error Message */}
-                      {task.status === 'FAILED' && task.error && (
-                        <div className="mt-2 text-[10px] text-red-300 bg-red-500/10 border border-red-500/20 p-2 rounded leading-tight break-words font-mono">
+                      {(task.status === 'FAILED' || task.status === 'ACTION_REQUIRED') && task.error && (
+                        <div className={`mt-2 text-[10px] p-2 rounded leading-tight break-words font-mono ${
+                          task.status === 'ACTION_REQUIRED'
+                            ? 'text-amber-200 bg-amber-500/10 border border-amber-500/20'
+                            : 'text-red-300 bg-red-500/10 border border-red-500/20'
+                        }`}>
                           {task.error}
                         </div>
                       )}
@@ -168,7 +192,9 @@ export const TaskCenter: React.FC<TaskCenterProps> = ({ tasks, onClearCompleted,
 const getStatusColor = (status: string) => {
   switch (status) {
     case 'GENERATING': return 'bg-brand-500/10 text-brand-400';
+    case 'REVIEWING': return 'bg-sky-500/10 text-sky-300';
     case 'QUEUED': return 'bg-yellow-500/10 text-yellow-400';
+    case 'ACTION_REQUIRED': return 'bg-amber-500/10 text-amber-300';
     case 'COMPLETED': return 'bg-green-500/10 text-green-400';
     case 'FAILED': return 'bg-red-500/10 text-red-400';
     default: return 'bg-gray-800 text-gray-500';
