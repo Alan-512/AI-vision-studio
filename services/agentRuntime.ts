@@ -6,6 +6,11 @@ export type SelectedReferenceRecord = {
   messageTimestamp?: number;
 };
 
+type ArtifactReferenceCandidate = {
+  candidateIds: Set<string>;
+  record: SelectedReferenceRecord;
+};
+
 export const buildReferenceArtifacts = (references: SelectedReferenceRecord[]): JobArtifact[] =>
   references.map(reference => ({
     id: crypto.randomUUID(),
@@ -111,28 +116,43 @@ export const dataUrlToSmartAsset = (imgData: string, id: string): SmartAsset | n
   return match ? { id, mimeType: match[1], data: match[2] } : null;
 };
 
-export const buildArtifactReferenceCandidates = (jobs: AgentJob[]): Array<{ candidateIds: Set<string>; record: SelectedReferenceRecord }> =>
+const buildArtifactReferenceCandidate = (artifact: JobArtifact): ArtifactReferenceCandidate | undefined => {
+  const asset = artifactToSmartAsset(artifact);
+  if (!asset) return undefined;
+
+  const candidateIds = new Set<string>();
+  if (typeof artifact.id === 'string') candidateIds.add(artifact.id);
+  if (typeof artifact.metadata?.runtimeKey === 'string') candidateIds.add(artifact.metadata.runtimeKey);
+  if (typeof artifact.metadata?.sourceImageId === 'string') candidateIds.add(artifact.metadata.sourceImageId);
+
+  const sourceRole: SelectedReferenceRecord['sourceRole'] =
+    artifact.origin === 'generated'
+      ? 'model'
+      : artifact.metadata?.sourceRole === 'model'
+        ? 'model'
+        : 'user';
+
+  return {
+    candidateIds,
+    record: {
+      asset,
+      sourceRole,
+      messageTimestamp: artifact.relatedMessageTimestamp
+    }
+  };
+};
+
+const isArtifactReferenceCandidate = (
+  candidate: ArtifactReferenceCandidate | undefined
+): candidate is ArtifactReferenceCandidate => candidate !== undefined;
+
+export const buildArtifactReferenceCandidates = (jobs: AgentJob[]): ArtifactReferenceCandidate[] =>
   [...jobs]
     .sort((a, b) => b.updatedAt - a.updatedAt)
     .flatMap(job => job.artifacts)
     .filter(artifact => artifact.role === 'reference' || artifact.origin === 'generated')
-    .map(artifact => {
-      const asset = artifactToSmartAsset(artifact);
-      if (!asset) return null;
-      const candidateIds = new Set<string>();
-      if (typeof artifact.id === 'string') candidateIds.add(artifact.id);
-      if (typeof artifact.metadata?.runtimeKey === 'string') candidateIds.add(artifact.metadata.runtimeKey);
-      if (typeof artifact.metadata?.sourceImageId === 'string') candidateIds.add(artifact.metadata.sourceImageId);
-      return {
-        candidateIds,
-        record: {
-          asset,
-          sourceRole: artifact.origin === 'generated' ? 'model' as const : ((artifact.metadata?.sourceRole === 'model' ? 'model' : 'user') as const),
-          messageTimestamp: artifact.relatedMessageTimestamp
-        }
-      };
-    })
-    .filter((candidate): candidate is { candidateIds: Set<string>; record: SelectedReferenceRecord } => candidate !== null);
+    .map(buildArtifactReferenceCandidate)
+    .filter(isArtifactReferenceCandidate);
 
 export const selectReferenceRecords = ({
   jobs,

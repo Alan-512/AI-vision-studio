@@ -182,7 +182,7 @@ describe('GeminiService', () => {
 
             expect(result.externalToolCalls).toEqual([]);
             expect(result.fullText).toContain('4:5 aspect ratio');
-            expect(emittedChunks.at(-1)).toContain('4:5 aspect ratio');
+            expect(emittedChunks[emittedChunks.length - 1]).toContain('4:5 aspect ratio');
         });
 
         it('should enqueue external tool calls emitted after an internal memory lookup', async () => {
