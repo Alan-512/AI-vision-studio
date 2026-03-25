@@ -256,7 +256,7 @@ export type AgentArtifactRole =
   | 'retrieved_context'
   | 'review_note';
 
-export type AgentToolCallStatus = 'pending' | 'running' | 'success' | 'failed' | 'cancelled';
+export type AgentToolCallStatus = 'pending' | 'running' | 'success' | 'failed' | 'cancelled' | 'requires_action';
 export type AgentToolResultStatus = 'success' | 'error' | 'requires_action';
 
 export type CriticDecision = 'accept' | 'auto_revise' | 'requires_action';

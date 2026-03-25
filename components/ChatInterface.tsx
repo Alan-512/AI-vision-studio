@@ -5,6 +5,8 @@ import { ChatMessage, GenerationParams, ImageResolution, AppMode, ImageModel, Vi
 import { streamChatResponse } from '../services/geminiService';
 import { normalizeImageUrlForChat } from '../services/imageUtils';
 import { AgentStateMachine, AgentState, createInitialAgentState, PendingAction, createGenerateAction } from '../services/agentService';
+import { ActiveChatToolCallStatus, resolveActiveToolCallMessageTimestamp, shouldShowActiveToolCallForMessage } from '../services/chatToolCallRuntime';
+import { removeChatMessageByTimestamp, resolveChatHistoryKeepCurrent } from '../services/requiresActionRuntime';
 import { useLanguage } from '../contexts/LanguageContext';
 import ReactMarkdown from 'react-markdown';
 import rehypeSanitize from 'rehype-sanitize';
@@ -23,6 +25,7 @@ interface ChatInterfaceProps {
   projectSummaryCursor?: number;
   onUpdateProjectContext?: (summary: string, cursor: number) => void;
   onToolCall?: (action: AgentAction) => Promise<any> | any;
+  onKeepCurrentAction?: (toolCall: ToolCallRecord) => Promise<void> | void;
   agentContextAssets?: SmartAsset[];
   onRemoveContextAsset?: (assetId: string) => void;
   onClearContextAssets?: () => void;
@@ -230,6 +233,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   projectSummaryCursor,
   onUpdateProjectContext,
   onToolCall,
+  onKeepCurrentAction,
   agentContextAssets,
   onRemoveContextAsset,
   onClearContextAssets,
@@ -247,6 +251,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const projectIdRef = useRef(projectId);
+  const historyRef = useRef(history);
   const abortControllerRef = useRef<AbortController | null>(null);
 
   // NEW: Track LLM thinking process text
@@ -330,12 +335,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   };
 
   // NEW: Track active tool call status for UI display
-  const [toolCallStatus, setToolCallStatus] = useState<{
-    isActive: boolean;
-    toolName: string;
-    model?: string;
-    prompt?: string;
-  } | null>(null);
+  const [toolCallStatus, setToolCallStatus] = useState<ActiveChatToolCallStatus | null>(null);
   const [toolCallExpanded, setToolCallExpanded] = useState(false);
   const [dismissedActionCardIds, setDismissedActionCardIds] = useState<Record<string, boolean>>({});
   const [applyingActionCardId, setApplyingActionCardId] = useState<string | null>(null);
@@ -436,11 +436,13 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
       if (finalArgs.model === ImageModel.PRO) modelNameStr = 'Nano Banana Pro';
       if (finalArgs.model === ImageModel.FLASH_3_1) modelNameStr = 'Nano Banana 2';
       const modelName = modelNameStr;
+      const sourceMessageTimestamp = resolveActiveToolCallMessageTimestamp(historyRef.current);
       setToolCallStatus({
         isActive: true,
         toolName: 'generate_image',
         model: modelName,
-        prompt: finalArgs.prompt || ''
+        prompt: finalArgs.prompt || '',
+        sourceMessageTimestamp
       });
       setToolCallExpanded(false); // Start collapsed
       await agentMachine.setPendingAction(pendingAction);
@@ -456,6 +458,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
 
   const isAutoMode = params.isAutoMode ?? true;
   const getRatioLabel = (r: AspectRatio) => { const enumKey = Object.keys(AspectRatio).find(k => AspectRatio[k as keyof typeof AspectRatio] === r); return t(`ratio.${enumKey}` as any) || r; };
+  historyRef.current = history;
+
   useEffect(() => {
     projectIdRef.current = projectId;
     setIsLoading(false);
@@ -659,8 +663,23 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
     return '';
   };
 
-  const handleDismissActionCard = (toolCallId: string) => {
-    setDismissedActionCardIds(prev => ({ ...prev, [toolCallId]: true }));
+  const handleDismissActionCard = async (toolCall: ToolCallRecord) => {
+    const resolvedAt = Date.now();
+    const previousHistory = history;
+    setDismissedActionCardIds(prev => ({ ...prev, [toolCall.id]: true }));
+    setHistory(resolveChatHistoryKeepCurrent(history, toolCall.id, resolvedAt));
+
+    try {
+      await onKeepCurrentAction?.(toolCall);
+    } catch (error) {
+      console.error('[ChatInterface] Failed to keep current result', error);
+      setHistory(previousHistory);
+      setDismissedActionCardIds(prev => {
+        const next = { ...prev };
+        delete next[toolCall.id];
+        return next;
+      });
+    }
   };
 
   const handleApplyActionCard = async (toolCall: ToolCallRecord) => {
@@ -672,6 +691,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const localizedPlanSummary = language === 'zh'
       ? reviewPlan?.localized?.zh?.summary
       : reviewPlan?.localized?.en?.summary;
+    const optimisticMessageTimestamp = Date.now();
     setApplyingActionCardId(toolCall.id);
     setDismissedActionCardIds(prev => ({ ...prev, [toolCall.id]: true }));
     setHistory(prev => [
@@ -682,7 +702,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         content: language === 'zh'
           ? `继续按当前优化方向处理这一版。${localizedPlanSummary ? `\n${localizedPlanSummary}` : ''}`
           : `Continuing with the current refinement plan.${localizedPlanSummary ? `\n${localizedPlanSummary}` : ''}`,
-        timestamp: Date.now()
+        timestamp: optimisticMessageTimestamp
       }
     ]);
 
@@ -698,6 +718,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
       });
     } catch (error) {
       console.error('[ChatInterface] Failed to apply action card', error);
+      setHistory(prev => removeChatMessageByTimestamp(prev, optimisticMessageTimestamp));
       setDismissedActionCardIds(prev => {
         const next = { ...prev };
         delete next[toolCall.id];
@@ -766,6 +787,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 )
                 : undefined;
               const shouldDeferActionCards = !msg.isSystem && hasPreviewFeedback;
+              const shouldShowActiveToolCall = shouldShowActiveToolCallForMessage(toolCallStatus, msg, hasPreviewFeedback);
 
               return (
                 <ChatBubble
@@ -786,9 +808,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                       ? () => setSearchCollapsedMap(prev => ({ ...prev, [msg.timestamp]: !(prev[msg.timestamp] ?? true) }))
                       : (isLastAiMessage ? () => setSearchIsCollapsed(!searchIsCollapsed) : undefined)
                   }
-                  toolCallStatus={isLastAiMessage && !hasPreviewFeedback ? toolCallStatus : undefined}
-                  toolCallExpanded={isLastAiMessage ? toolCallExpanded : undefined}
-                  onToolCallToggle={isLastAiMessage ? () => setToolCallExpanded(!toolCallExpanded) : undefined}
+                  toolCallStatus={shouldShowActiveToolCall ? toolCallStatus : undefined}
+                  toolCallExpanded={shouldShowActiveToolCall ? toolCallExpanded : undefined}
+                  onToolCallToggle={shouldShowActiveToolCall ? () => setToolCallExpanded(!toolCallExpanded) : undefined}
                   dismissedActionCardIds={dismissedActionCardIds}
                   onApplyActionCard={handleApplyActionCard}
                   onDismissActionCard={handleDismissActionCard}
@@ -990,7 +1012,7 @@ interface ChatBubbleProps {
   onToolCallToggle?: () => void;
   dismissedActionCardIds?: Record<string, boolean>;
   onApplyActionCard?: (toolCall: ToolCallRecord) => void;
-  onDismissActionCard?: (toolCallId: string) => void;
+  onDismissActionCard?: (toolCall: ToolCallRecord) => void;
   isApplyingAction?: boolean;
 }
 
@@ -1548,7 +1570,7 @@ const ChatBubble: React.FC<ChatBubbleProps> = ({
                           )}
                           {onDismissActionCard && (
                             <button
-                              onClick={() => onDismissActionCard(record.id)}
+                              onClick={() => onDismissActionCard(record)}
                               className="w-full rounded-[16px] border border-white/8 bg-transparent px-4 py-3 text-[12px] font-medium text-slate-300 transition-colors hover:bg-white/[0.05]"
                             >
                               {language === 'zh' ? '保留当前结果' : 'Keep Current'}

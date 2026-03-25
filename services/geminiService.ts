@@ -110,6 +110,19 @@ export const buildPromptWithFacts = (rawPrompt: string, factsBlock: StructuredFa
     ].join('\n');
 };
 
+const buildGoogleSearchTools = (includeImageSearch = false) => [{
+    googleSearch: includeImageSearch
+        ? {
+            searchTypes: {
+                webSearch: {},
+                imageSearch: {}
+            }
+        }
+        : {}
+}] as any[];
+
+const SEARCH_PHASE_TIMEOUT_MS = 15000;
+
 const TOOL_PLANNING_JSON_MARKERS = [
     '"action"',
     '"parameters"',
@@ -661,6 +674,7 @@ export const streamChatResponse = async (
     // LLM_ONLY mode: LLM searches, image model does NOT use grounding
     const allowSearch = !!useSearch;
     const runLlmSearch = allowSearch;
+    const searchModelName = TextModel.FLASH;
 
     console.log('[Chat] Search config:', { allowSearch, isImageMode, runLlmSearch });
 
@@ -703,85 +717,106 @@ Rules:
 - Keep your response concise (under 400 words for narrative, 5-8 facts max).
 `;
 
-        const searchContents = convertHistoryToNativeFormat(activeHistory, realModelName);
+        const searchContents = convertHistoryToNativeFormat(activeHistory, searchModelName);
         if (signal.aborted) throw new Error('Cancelled');
 
         // NOTE: Don't notify UI immediately - only show search UI when actual groundingMetadata is detected
         // This ensures the UI only appears when AI actually uses the search tool
-
-        // Use streaming for search to show real-time progress
-        const searchResult = await ai.models.generateContentStream({
-            model: realModelName,
-            contents: searchContents,
-            config: {
-                systemInstruction: searchInstruction,
-                tools: [{
-                    googleSearch: isReasoning ? {
-                        searchTypes: {
-                            webSearch: {},
-                            imageSearch: {}
-                        }
-                    } : {}
-                } as any],
-                abortSignal: signal
-            }
-        });
 
         let searchFullText = '';
         let collectedQueries: string[] = [];
         let hasNotifiedSearchStart = false; // Track if we've shown the initial "searching" UI
         let collectedSources: Array<{ title: string; url: string }> = [];
 
-        for await (const chunk of searchResult) {
-            if (signal.aborted) throw new Error('Cancelled');
-
-            const chunkText = chunk.text ?? '';
-            if (chunkText) {
-                searchFullText += chunkText;
+        let searchTimeoutId: ReturnType<typeof setTimeout> | undefined;
+        try {
+            // Use Flash for search collection even when the final answer uses Thinking/Pro.
+            // This stage only needs grounded facts and should prefer low latency.
+            const searchTimeout = new Promise<never>((_, reject) => {
+                searchTimeoutId = setTimeout(() => {
+                    reject(new Error(`Search phase timed out after ${SEARCH_PHASE_TIMEOUT_MS}ms`));
+                }, SEARCH_PHASE_TIMEOUT_MS);
+            });
+            const searchResult = await Promise.race([
+                ai.models.generateContentStream({
+                    model: searchModelName,
+                    contents: searchContents,
+                    config: {
+                        systemInstruction: searchInstruction,
+                        // Gemini text models in this app should only use the generic googleSearch tool.
+                        // Preview reasoning models currently reject imageSearch as a search subtype.
+                        tools: buildGoogleSearchTools(),
+                        abortSignal: signal
+                    }
+                }),
+                searchTimeout
+            ]);
+            if (searchTimeoutId) {
+                clearTimeout(searchTimeoutId);
             }
 
-            // Extract groundingMetadata from chunk if available
-            const candidates = (chunk as any).candidates;
-            if (candidates && candidates[0]?.groundingMetadata) {
-                const gm = candidates[0].groundingMetadata;
+            for await (const chunk of searchResult) {
+                if (signal.aborted) throw new Error('Cancelled');
 
-                // First time we detect groundingMetadata - show initial "searching" UI
-                if (!hasNotifiedSearchStart && onSearchProgress) {
-                    hasNotifiedSearchStart = true;
-                    onSearchProgress({
-                        status: 'searching',
-                        title: language === 'zh' ? '正在搜索中...' : 'Searching...',
-                        queries: [],
-                        sources: []
-                    });
+                const chunkText = chunk.text ?? '';
+                if (chunkText) {
+                    searchFullText += chunkText;
                 }
 
-                // Extract search queries
-                if (gm.webSearchQueries && gm.webSearchQueries.length > 0) {
-                    collectedQueries = [...new Set([...collectedQueries, ...gm.webSearchQueries])];
-                }
-                // Extract sources from groundingChunks
-                if (gm.groundingChunks) {
-                    for (const gc of gm.groundingChunks) {
-                        if (gc.web && gc.web.uri && gc.web.title) {
-                            const exists = collectedSources.some(s => s.url === gc.web.uri);
-                            if (!exists) {
-                                collectedSources.push({ title: gc.web.title, url: gc.web.uri });
+                // Extract groundingMetadata from chunk if available
+                const candidates = (chunk as any).candidates;
+                if (candidates && candidates[0]?.groundingMetadata) {
+                    const gm = candidates[0].groundingMetadata;
+
+                    // First time we detect groundingMetadata - show initial "searching" UI
+                    if (!hasNotifiedSearchStart && onSearchProgress) {
+                        hasNotifiedSearchStart = true;
+                        onSearchProgress({
+                            status: 'searching',
+                            title: language === 'zh' ? '正在搜索中...' : 'Searching...',
+                            queries: [],
+                            sources: []
+                        });
+                    }
+
+                    // Extract search queries
+                    if (gm.webSearchQueries && gm.webSearchQueries.length > 0) {
+                        collectedQueries = [...new Set([...collectedQueries, ...gm.webSearchQueries])];
+                    }
+                    // Extract sources from groundingChunks
+                    if (gm.groundingChunks) {
+                        for (const gc of gm.groundingChunks) {
+                            if (gc.web && gc.web.uri && gc.web.title) {
+                                const exists = collectedSources.some(s => s.url === gc.web.uri);
+                                if (!exists) {
+                                    collectedSources.push({ title: gc.web.title, url: gc.web.uri });
+                                }
                             }
                         }
                     }
-                }
 
-                // Update UI with progress - send on every new data (streaming effect)
-                if (onSearchProgress && (collectedQueries.length > 0 || collectedSources.length > 0)) {
-                    onSearchProgress({
-                        status: 'searching',
-                        title: language === 'zh' ? '收集关键信息' : 'Gathering key information',
-                        queries: collectedQueries,
-                        sources: collectedSources.slice(0, 5) // Limit to 5 sources in UI
-                    });
+                    // Update UI with progress - send on every new data (streaming effect)
+                    if (onSearchProgress && (collectedQueries.length > 0 || collectedSources.length > 0)) {
+                        onSearchProgress({
+                            status: 'searching',
+                            title: language === 'zh' ? '收集关键信息' : 'Gathering key information',
+                            queries: collectedQueries,
+                            sources: collectedSources.slice(0, 5) // Limit to 5 sources in UI
+                        });
+                    }
                 }
             }
+        } catch (error: any) {
+            if (searchTimeoutId) {
+                clearTimeout(searchTimeoutId);
+            }
+            if (signal.aborted || error?.message === 'Cancelled' || error?.name === 'AbortError') {
+                throw error;
+            }
+            console.warn('[Search] Search phase failed, continuing without search context.', error);
+            searchFullText = '';
+            collectedQueries = [];
+            collectedSources = [];
         }
 
         // Mark search as complete with final data (only if actual search was performed)
@@ -905,7 +940,7 @@ Rules:
         systemInstruction: systemInstruction,
         tools: isImageMode
             ? [{ functionDeclarations: [generateImageTool, updateMemoryTool, memorySearchTool] }]
-            : (allowSearch ? [{ googleSearch: {} }] : undefined)
+            : (allowSearch ? buildGoogleSearchTools() : undefined)
     };
 
     if (isReasoning) {
@@ -1254,18 +1289,9 @@ When generating images, strictly replicate the visual details, colors, materials
     }
 
     if ((isPro || isFlash31) && params.useGrounding) {
-        // Use camelCase for SDK compatibility at top level
-        // Official docs specify googleSearch with searchTypes
-        messageConfig.tools = isFlash31
-            ? [{
-                googleSearch: {
-                    searchTypes: {
-                        webSearch: {},
-                        imageSearch: {}
-                    }
-                }
-            }]
-            : [{ googleSearch: {} }];
+        // Use camelCase for SDK compatibility at top level.
+        // Native image generation on Flash can use image-aware grounding, Pro stays on web grounding.
+        messageConfig.tools = buildGoogleSearchTools(isFlash31);
     }
 
     if (isFlash31) {

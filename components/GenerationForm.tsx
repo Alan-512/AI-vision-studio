@@ -1,6 +1,6 @@
 
 import React, { useRef, useState, useEffect } from 'react';
-import { AppMode, AspectRatio, GenerationParams, ImageResolution, VideoResolution, ImageModel, VideoModel, ImageStyle, VideoStyle, VideoDuration, ChatMessage, AssetItem, SmartAsset, APP_LIMITS, AgentAction, SmartAssetRole, ThinkingLevel } from '../types';
+import { AppMode, AspectRatio, GenerationParams, ImageResolution, VideoResolution, ImageModel, VideoModel, ImageStyle, VideoStyle, VideoDuration, ChatMessage, AssetItem, SmartAsset, APP_LIMITS, AgentAction, SmartAssetRole, ThinkingLevel, ToolCallRecord } from '../types';
 import { Settings2, Sparkles, Image as ImageIcon, Video as VideoIcon, X, Palette, MessageSquare, Layers, ChevronDown, ChevronUp, SlidersHorizontal, Monitor, Eye, Lock, ScanFace, Frame, ArrowRight, Loader2, Clock, BookTemplate, Clapperboard, XCircle, Search, Briefcase } from 'lucide-react';
 import { ChatInterface } from './ChatInterface';
 import { extractPromptFromHistory, optimizePrompt, describeImage } from '../services/geminiService';
@@ -27,6 +27,7 @@ interface GenerationFormProps {
   projectId: string;
   cooldownEndTime?: number;
   onToolCall?: (action: AgentAction) => Promise<any> | any;
+  onKeepCurrentAction?: (toolCall: ToolCallRecord) => Promise<void> | void;
   projectContextSummary?: string;
   projectSummaryCursor?: number;
   onUpdateProjectContext?: (summary: string, cursor: number) => void;
@@ -86,6 +87,7 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
   projectId,
   cooldownEndTime = 0,
   onToolCall,
+  onKeepCurrentAction,
   projectContextSummary,
   projectSummaryCursor,
   onUpdateProjectContext,
@@ -650,6 +652,7 @@ export const GenerationForm: React.FC<GenerationFormProps> = ({
             setParams={setChatParams}
             mode={mode}
             onToolCall={onToolCall}
+            onKeepCurrentAction={onKeepCurrentAction}
             projectContextSummary={projectContextSummary}
             projectSummaryCursor={projectSummaryCursor}
             onUpdateProjectContext={onUpdateProjectContext}

@@ -22,6 +22,7 @@ import {
     selectReferenceRecords
 } from './services/agentRuntime';
 import { normalizeStructuredCriticReview } from './services/criticRuntime';
+import { resolveAgentJobKeepCurrent, resolveToolCallRecordStatus } from './services/requiresActionRuntime';
 import {
     initDB, loadProjects, saveProject, saveAsset, loadAssets, updateAsset, updateProject,
     deleteProjectFromDB, softDeleteAssetInDB, restoreAssetInDB,
@@ -1040,6 +1041,37 @@ export function App() {
         });
     };
 
+    const handleKeepCurrentAction = async (toolCall: ToolCallRecord): Promise<void> => {
+        const jobId = toolCall.result?.jobId || toolCall.jobId;
+        if (!jobId) return;
+
+        const existingJobs = await loadAgentJobsByProject(activeProjectIdRef.current);
+        const job = existingJobs.find(entry => entry.id === jobId);
+        if (!job) return;
+
+        const now = Date.now();
+        const resolvedJob = resolveAgentJobKeepCurrent(job, {
+            now,
+            stepId: crypto.randomUUID(),
+            actionType: toolCall.result?.requiresAction?.type,
+            prompt: typeof toolCall.args?.prompt === 'string' ? toolCall.args.prompt : undefined
+        });
+
+        await saveAgentJob(resolvedJob);
+
+        const relatedTasks = tasks.filter(task => task.jobId === jobId);
+        if (relatedTasks.length > 0) {
+            setTasks(prev => prev.map(task => task.jobId === jobId
+                ? { ...task, status: 'COMPLETED', error: undefined }
+                : task));
+            await Promise.all(relatedTasks.map(task => saveTask({
+                ...task,
+                status: 'COMPLETED',
+                error: undefined
+            })));
+        }
+    };
+
     const handleAuthVerify = async () => {
         if (window.aistudio) {
             const hasKey = await window.aistudio.hasSelectedApiKey();
@@ -1433,7 +1465,7 @@ export function App() {
                         toolName: action.toolName,
                         args: toolArgs
                     }),
-                    status: primaryResult.status === 'success' ? 'success' : 'failed',
+                    status: resolveToolCallRecordStatus(primaryResult.status),
                     jobId: primaryResult.jobId,
                     stepId: primaryResult.stepId,
                     completedAt: Date.now(),
@@ -2678,7 +2710,7 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
             <ProjectSidebar isOpen={showProjects} onClose={() => setShowProjects(false)} projects={projects} activeProjectId={activeProjectId} generatingStates={generatingStates} onSelectProject={(id) => switchProject(id)} onCreateProject={() => createNewProject()} onRenameProject={(id, name) => { const p = projects.find(p => p.id === id); if (p) { const updated = { ...p, name }; setProjects(prev => prev.map(prj => prj.id === id ? updated : prj)); updateProject(id, { name }); } }} onDeleteProject={openConfirmDeleteProject} />
 
             <div className="flex-1 flex overflow-hidden relative">
-                <GenerationForm mode={mode} params={params} setParams={setParams} chatParams={chatParams} setChatParams={setChatParams} isGenerating={tasks.some(t => t.projectId === activeProjectId && (t.status === 'GENERATING' || t.status === 'QUEUED' || t.status === 'REVIEWING'))} startTime={generatingStates[activeProjectId]} onGenerate={handleParamsGenerate} onVerifyVeo={handleAuthVerify} veoVerified={veoVerified} chatHistory={chatHistory} setChatHistory={setChatHistory} activeTab={activeTab} onTabChange={setActiveTab} chatSelectedImages={chatSelectedImages} setChatSelectedImages={setChatSelectedImages} projectId={activeProjectId} cooldownEndTime={videoCooldownEndTime} thoughtImages={thoughtImages} setThoughtImages={setThoughtImages} {...({ projectContextSummary: contextSummary, projectSummaryCursor: summaryCursor, onUpdateProjectContext: (s: string, c: number) => { setContextSummary(s); setSummaryCursor(c); }, onToolCall: handleAgentToolCall, agentContextAssets: mode === AppMode.IMAGE ? agentContextAssets : [], onRemoveContextAsset: (assetId: string) => setAgentContextAssets(prev => prev.filter(a => a.id !== assetId)), onClearContextAssets: () => setAgentContextAssets([]) } as any)} />
+                <GenerationForm mode={mode} params={params} setParams={setParams} chatParams={chatParams} setChatParams={setChatParams} isGenerating={tasks.some(t => t.projectId === activeProjectId && (t.status === 'GENERATING' || t.status === 'QUEUED' || t.status === 'REVIEWING'))} startTime={generatingStates[activeProjectId]} onGenerate={handleParamsGenerate} onVerifyVeo={handleAuthVerify} veoVerified={veoVerified} chatHistory={chatHistory} setChatHistory={setChatHistory} activeTab={activeTab} onTabChange={setActiveTab} chatSelectedImages={chatSelectedImages} setChatSelectedImages={setChatSelectedImages} projectId={activeProjectId} cooldownEndTime={videoCooldownEndTime} thoughtImages={thoughtImages} setThoughtImages={setThoughtImages} {...({ projectContextSummary: contextSummary, projectSummaryCursor: summaryCursor, onUpdateProjectContext: (s: string, c: number) => { setContextSummary(s); setSummaryCursor(c); }, onToolCall: handleAgentToolCall, onKeepCurrentAction: handleKeepCurrentAction, agentContextAssets: mode === AppMode.IMAGE ? agentContextAssets : [], onRemoveContextAsset: (assetId: string) => setAgentContextAssets(prev => prev.filter(a => a.id !== assetId)), onClearContextAssets: () => setAgentContextAssets([]) } as any)} />
 
                 <div className="flex-1 bg-dark-bg flex flex-col min-w-0 relative">
                     {rightPanelMode === 'CANVAS' && activeCanvasAsset ? (
