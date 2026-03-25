@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <defs>
+    <!-- Background Gradient: Slightly elevated from pure black to provide contrast -->
+    <linearGradient id="bg" x1="0" y1="0" x2="512" y2="512" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#1c1c21" />
+      <stop offset="100%" stop-color="#0a0a0c" />
+    </linearGradient>
+
+    <!-- Vibrant Brand Cyan -->
+    <linearGradient id="cyan" x1="50" y1="50" x2="462" y2="462" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#7dd3fc" />
+      <stop offset="50%" stop-color="#0ea5e9" />
+      <stop offset="100%" stop-color="#0284c7" />
+    </linearGradient>
+    
+    <!-- Ultra Bright Core -->
+    <linearGradient id="core" x1="150" y1="150" x2="362" y2="362" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#ffffff" />
+      <stop offset="100%" stop-color="#bae6fd" />
+    </linearGradient>
+  </defs>
+
+  <!-- Solid Background -->
+  <rect width="512" height="512" rx="120" fill="url(#bg)" />
+
+  <!-- Outer Ring (Camera Lens Motif) - Extremely thick for visibility at 16x16 -->
+  <circle cx="256" cy="256" r="190" fill="none" stroke="url(#cyan)" stroke-width="48" opacity="0.4" />
+  
+  <g transform="translate(256, 256)">
+    <!-- Huge AI Star - Scaled up significantly -->
+    <path d="M0 -180 C0 -50, -50 0, -180 0 C-50 0, 0 50, 0 180 C0 50, 50 0, 180 0 C50 0, 0 -50, 0 -180 Z" fill="url(#cyan)" />
+    
+    <!-- Inner bright core for high contrast popping -->
+    <path d="M0 -90 C0 -25, -25 0, -90 0 C-25 0, 0 25, 0 90 C0 25, 25 0, 90 0 C25 0, 0 -25, 0 -90 Z" fill="url(#core)" />
+    
+    <!-- Absolute center pupil for eye/vision context -->
+    <circle cx="0" cy="0" r="32" fill="#ffffff" />
+  </g>
+</svg>
