@@ -1127,7 +1127,7 @@ export function App() {
                 };
                 setParams(prev => ({ ...prev, smartAssets: [...(prev.smartAssets || []), newSmartAsset] }));
                 if (navigateToStudio) setActiveTab('studio');
-                addToast('success', 'Reference Added', 'Image added to Smart Assets.');
+                // AUDIT: Removed redundant Reference Added toast
             } else {
                 addToast('error', 'Error', 'Failed to load asset as reference.');
             }
@@ -1370,7 +1370,7 @@ export function App() {
 
             if (selectedReferences.length > 0) {
                 console.log(`[Agent] Selected ${selectedReferences.length} reference images`);
-                addToast('info', 'Reference Active', `Using ${selectedReferences.length} reference image(s).`);
+                // AUDIT: Removed redundant Reference Active toast
             }
 
             let onSuccessCallback: ((asset: AssetItem) => void) | undefined;
@@ -1386,7 +1386,7 @@ export function App() {
                                 id: crypto.randomUUID(), data: matches[2], mimeType: matches[1]
                             };
                             setAgentContextAssets(prev => [...prev, newSmartAsset]);
-                            addToast('success', 'Context Anchored', `New ${save_as_reference} reference saved.`);
+                            // AUDIT: Removed redundant Context Anchored toast
                         }
                     } catch (e) { console.error("Failed to capture asset context", e); }
                 };
@@ -2728,8 +2728,8 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
                                         isSelectionMode ? (
                                             <div className="flex items-center gap-2 animate-in slide-in-from-left-5 fade-in">
                                                 <span className="px-2 py-1 bg-brand-500/20 text-brand-400 text-xs font-bold rounded-lg border border-brand-500/30">{selectedAssetIds.size} {t('header.selected')}</span>
-                                                {selectedAssetIds.size === 2 && (<button onClick={handleCompare} className="flex items-center gap-1.5 px-3 py-1.5 bg-white/10 hover:bg-white/20 text-white rounded-lg text-xs font-medium transition-colors" title={t('header.compare')}><MoveHorizontal size={14} /></button>)}
-                                                {selectedAssetIds.size > 0 && (<><button onClick={handleBulkDownload} className="flex items-center gap-1.5 px-3 py-1.5 bg-white/10 hover:bg-white/20 text-white rounded-lg text-xs font-medium transition-colors" title={t('btn.download_selected')}><Download size={14} /></button><button onClick={handleBulkDelete} className="flex items-center gap-1.5 px-3 py-1.5 bg-red-500/20 hover:bg-red-500/30 text-red-400 rounded-lg text-xs font-medium transition-colors" title={t('btn.delete_selected')}><Trash2 size={14} /></button></>)}
+                                                {selectedAssetIds.size === 2 && (<button onClick={handleCompare} aria-label={t('header.compare')} className="flex items-center gap-1.5 px-3 py-1.5 bg-white/10 hover:bg-white/20 text-white rounded-lg text-xs font-medium transition-colors" title={t('header.compare')}><MoveHorizontal size={14} /></button>)}
+                                                {selectedAssetIds.size > 0 && (<><button onClick={handleBulkDownload} aria-label={t('btn.download_selected')} className="flex items-center gap-1.5 px-3 py-1.5 bg-white/10 hover:bg-white/20 text-white rounded-lg text-xs font-medium transition-colors" title={t('btn.download_selected')}><Download size={14} /></button><button onClick={handleBulkDelete} aria-label={t('btn.delete_selected')} className="flex items-center gap-1.5 px-3 py-1.5 bg-red-500/20 hover:bg-red-500/30 text-red-400 rounded-lg text-xs font-medium transition-colors" title={t('btn.delete_selected')}><Trash2 size={14} /></button></>)}
                                                 <button onClick={() => { setIsSelectionMode(false); setSelectedAssetIds(new Set()); }} className="px-3 py-1.5 bg-white/5 hover:bg-white/10 text-gray-300 rounded-lg text-xs font-medium transition-colors">{t('btn.cancel')}</button>
                                             </div>
                                         ) : (

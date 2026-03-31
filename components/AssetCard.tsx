@@ -35,6 +35,7 @@ export const AssetCard: React.FC<AssetCardProps> = ({
   onRestore
 }) => {
   const { t } = useLanguage();
+  const [isDownloaded, setIsDownloaded] = React.useState(false);
   const isGenerating = asset.status === 'GENERATING';
   const isPending = asset.status === 'PENDING';
   const isFailed = asset.status === 'FAILED';
@@ -90,6 +91,10 @@ export const AssetCard: React.FC<AssetCardProps> = ({
       link.click();
       document.body.removeChild(link);
     }
+    
+    // AUDIT: Micro-interaction for download feedback
+    setIsDownloaded(true);
+    setTimeout(() => setIsDownloaded(false), 2000);
   };
 
   const handleDelete = (e: React.MouseEvent) => {
@@ -128,10 +133,10 @@ export const AssetCard: React.FC<AssetCardProps> = ({
 
   return (
     <div
-      className={`group relative bg-dark-surface rounded-xl overflow-hidden border transition-all duration-300 shadow-lg aspect-square 
+      className={`group relative bg-dark-surface rounded-xl overflow-hidden border shadow-lg aspect-square smooth-transition
         ${isSelected
-          ? 'border-brand-500 ring-2 ring-brand-500/50 scale-95'
-          : 'border-transparent hover:border-brand-500 hover:shadow-xl hover:-translate-y-1'
+          ? 'border-brand-500 ring-2 ring-brand-500/50'
+          : 'border-transparent hover:border-brand-500/60 hover-lift'
         }
         ${asset.isFavorite && !isSelected && !isTrashMode ? 'border-yellow-500/50' : ''}
         ${isTrashMode ? 'opacity-80 hover:opacity-100 grayscale-[0.3] hover:grayscale-0' : ''}
@@ -221,7 +226,7 @@ export const AssetCard: React.FC<AssetCardProps> = ({
       )}
 
       {!isSelectionMode && !isGenerating && !isPending && !isFailed && (
-        <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col justify-end p-3 z-10">
+        <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/40 to-transparent opacity-0 group-hover:opacity-100 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col justify-end p-3 z-10">
           <p className="text-xs text-white line-clamp-2 mb-2 font-medium pointer-events-none">{asset.prompt}</p>
           <div className="flex gap-2 justify-end z-20 flex-wrap">
             {isTrashMode ? (
@@ -232,9 +237,11 @@ export const AssetCard: React.FC<AssetCardProps> = ({
             ) : (
               <>
                 {onToggleFavorite && (
-                  <button onClick={handleFavorite} className={`p-1.5 rounded-lg backdrop-blur-md transition-colors ${asset.isFavorite ? 'bg-yellow-500 text-white' : 'bg-white/10 text-white hover:bg-yellow-500/50'}`} title={asset.isFavorite ? "Unfavorite" : "Favorite"}><Star size={16} fill={asset.isFavorite ? "currentColor" : "none"} /></button>
+                  <button onClick={handleFavorite} className={`p-1.5 rounded-lg backdrop-blur-md transition-colors ${asset.isFavorite ? 'bg-yellow-500 text-white' : 'bg-white/10 text-white hover:bg-yellow-500/50'}`} title={asset.isFavorite ? "Unfavorite" : "Favorite"}><Star size={16} fill={asset.isFavorite ? "currentColor" : "none"}/></button>
                 )}
-                <button onClick={handleDownload} className="p-1.5 bg-white/10 hover:bg-white/20 rounded-lg text-white backdrop-blur-md transition-colors" title="Download"><Download size={16} /></button>
+                <button onClick={handleDownload} className={`p-1.5 rounded-lg backdrop-blur-md transition-colors ${isDownloaded ? 'bg-green-500 text-white' : 'bg-white/10 hover:bg-white/20 text-white'}`} title="Download">
+                  {isDownloaded ? <Check size={16} /> : <Download size={16} />}
+                </button>
                 {onDelete && (
                   <button onClick={handleDelete} className="p-1.5 bg-red-500/80 hover:bg-red-600 rounded-lg text-white backdrop-blur-md transition-colors" title="Delete"><Trash2 size={16} /></button>
                 )}

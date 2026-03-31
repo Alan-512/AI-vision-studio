@@ -187,8 +187,8 @@ const AgentStepItem: React.FC<{ step: AgentStep; isLast: boolean; isThinking: bo
   else { statusIcon = <CheckCircle2 size={14} className="text-green-500" />; }
 
   return (
-    <div className={`rounded-lg border ${bgClass} overflow-hidden mb-2 animate-in fade-in slide-in-from-top-1 transition-all`}>
-      <button onClick={() => setIsOpen(!isOpen)} className="w-full flex items-center gap-3 px-3 py-2 text-left hover:bg-white/5 transition-colors">
+    <div className={`rounded-lg border ${bgClass} overflow-hidden mb-2 animate-in fade-in slide-in-from-top-1 smooth-transition hover-lift shadow-sm relative ${isActive ? 'glow-pulse' : ''}`}>
+      <button onClick={() => setIsOpen(!isOpen)} className="w-full flex items-center gap-3 px-3 py-2 text-left hover:bg-white/5 smooth-transition cursor-pointer">
         <div className={`p-1.5 rounded-full bg-black/20 shrink-0`}> <Icon size={14} className={colorClass} /> </div>
         <div className="flex-1 min-w-0 flex items-center justify-between">
           <div className={`text-xs font-bold ${colorClass} flex items-center gap-2`}>
@@ -739,7 +739,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
     >
       {isDragging && (
         <div className="absolute inset-0 z-50 bg-brand-500/20 backdrop-blur-sm border-2 border-brand-500 border-dashed rounded-xl flex flex-col items-center justify-center pointer-events-none animate-in fade-in duration-200">
-          <div className="bg-dark-panel p-6 rounded-full shadow-2xl mb-4 text-brand-400 animate-bounce">
+          <div className="bg-dark-panel p-6 rounded-full shadow-2xl mb-4 text-brand-400 animate-pulse">
             <Upload size={48} />
           </div>
           <h3 className="text-xl font-bold text-white mb-2">{t('chat.drop_to_upload') || 'Release to Upload'}</h3>
@@ -875,7 +875,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
             </div>
           )}
 
-          <div className="flex flex-col bg-dark-surface border border-dark-border rounded-2xl p-3 shadow-inner transition-colors relative gap-2">
+          <div className="flex flex-col bg-dark-surface border border-dark-border rounded-xl p-3 shadow-inner smooth-transition focus-within:ring-2 focus-within:ring-brand-500/50 focus-within:shadow-glow-focus focus-within:border-brand-500/30 relative gap-2">
             <textarea
               ref={inputRef}
               value={input}
@@ -888,7 +888,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
               style={{ minHeight: '32px' }}
             />
 
-            <div className="flex items-center justify-between pt-2 border-t border-white/5">
+            <div className="flex items-center justify-between pt-2 border-t border-white/10 mt-1">
               <div className="flex items-center gap-1">
                 <button onClick={() => fileInputRef.current?.click()} className="p-2 text-gray-400 hover:text-white hover:bg-white/10 rounded-full transition-colors" title={t('chat.upload')}><Plus size={20} /></button>
                 <button onClick={() => setUseSearch(!useSearch)} className={`p-2 rounded-full transition-colors flex items-center gap-1.5 ${useSearch ? 'text-brand-400 bg-brand-500/10' : 'text-gray-400 hover:text-white hover:bg-white/10'}`} title={useSearch ? t('chat.search_on') : t('chat.search_off')}><Globe size={18} /></button>
@@ -1139,7 +1139,7 @@ const ChatBubble: React.FC<ChatBubbleProps> = ({
           <div className={`w-full min-w-full max-w-md mb-2 bg-gradient-to-r from-blue-500/10 to-purple-500/10 border border-blue-500/30 rounded-xl overflow-hidden transition-all duration-300 ${searchIsCollapsed ? 'max-h-10' : 'max-h-96'}`}>
             <button
               onClick={onSearchToggle}
-              className="w-full flex items-center justify-between px-3 py-2 text-xs text-blue-300 hover:bg-white/5 transition-colors"
+              className="w-full flex items-center justify-between px-3 py-2 text-xs text-blue-300 hover:bg-white/5 smooth-transition cursor-pointer"
             >
               <div className="flex items-center gap-2">
                 <Search size={14} className={searchProgress.status === 'complete' ? '' : 'animate-pulse'} />
@@ -1262,10 +1262,10 @@ const ChatBubble: React.FC<ChatBubbleProps> = ({
 
         {/* TOOL CALL SECTION - Shows when AI is calling a tool */}
         {!isUser && !isSystem && toolCallStatus && toolCallStatus.isActive && (
-          <div className="w-full max-w-md mt-2 bg-gradient-to-r from-purple-500/10 to-pink-500/10 border border-purple-500/30 rounded-xl overflow-hidden animate-in fade-in">
+          <div className="w-full max-w-md mt-2 bg-gradient-to-r from-purple-500/10 to-pink-500/10 border border-purple-500/30 rounded-xl overflow-hidden animate-in fade-in smooth-transition hover-lift shadow-glow">
             <button
               onClick={onToolCallToggle}
-              className="w-full flex items-center gap-3 p-3 hover:bg-white/5 transition-colors"
+              className="w-full flex items-center gap-3 p-3 hover:bg-white/5 smooth-transition cursor-pointer"
             >
               <div className="w-8 h-8 rounded-lg bg-purple-500/20 flex items-center justify-center shrink-0">
                 <ImageIcon size={16} className="text-purple-400 animate-pulse" />
@@ -1612,9 +1612,9 @@ const ChatBubble: React.FC<ChatBubbleProps> = ({
         {/* Thinking Indicator if no steps and no content yet */}
         {!isUser && message.isThinking && steps.length === 0 && !finalContent && (
           <div className="flex gap-1 items-center h-5 ml-2">
-            <div className="w-1.5 h-1.5 bg-gray-500 rounded-full animate-bounce [animation-delay:-0.3s]" />
-            <div className="w-1.5 h-1.5 bg-gray-500 rounded-full animate-bounce [animation-delay:-0.15s]" />
-            <div className="w-1.5 h-1.5 bg-gray-500 rounded-full animate-bounce" />
+            <div className="w-1.5 h-1.5 bg-gray-500 rounded-full animate-pulse [animation-delay:-0.3s]" />
+            <div className="w-1.5 h-1.5 bg-gray-500 rounded-full animate-pulse [animation-delay:-0.15s]" />
+            <div className="w-1.5 h-1.5 bg-gray-500 rounded-full animate-pulse" />
           </div>
         )}
       </div>

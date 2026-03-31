@@ -36,3 +36,9 @@ output/
 
 # Skill files
 *.skill
+
+# AI Agent Skills & Design System
+.agent/skills/ui-ux-pro-max/
+.agents/skills/ui-ux-pro-max-skill/
+design-system/aivisionstudio/
+openspec/
