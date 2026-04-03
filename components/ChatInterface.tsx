@@ -1,11 +1,11 @@
 
-import React, { useState, useRef, useEffect, useMemo } from 'react';
+import React, { useState, useRef, useEffect, useMemo, useSyncExternalStore } from 'react';
 import { Send, User, Sparkles, ChevronDown, BrainCircuit, Zap, X, Box, Copy, Check, Plus, MonitorPlay, Film, Bot, Square, Crop, CheckCircle2, Globe, Brain, CircuitBoard, Wrench, Image as ImageIcon, CircleDashed, Terminal, RefreshCw, AlertCircle, Search, Upload, ShieldCheck, ArrowUpRight } from 'lucide-react';
 import { ChatMessage, GenerationParams, ImageResolution, AppMode, ImageModel, VideoResolution, VideoModel, AspectRatio, SmartAsset, APP_LIMITS, AgentAction, TextModel, SearchProgress, ThinkingLevel, ToolCallRecord, ReviewTrace } from '../types';
 import { streamChatResponse } from '../services/geminiService';
 import { normalizeImageUrlForChat } from '../services/imageUtils';
-import { AgentStateMachine, AgentState, createInitialAgentState, PendingAction, createGenerateAction } from '../services/agentService';
-import { ActiveChatToolCallStatus, resolveActiveToolCallMessageTimestamp, shouldShowActiveToolCallForMessage } from '../services/chatToolCallRuntime';
+import { createChatAgentRuntimeStore } from '../services/chatAgentRuntime';
+import { ActiveChatToolCallStatus, shouldShowActiveToolCallForMessage } from '../services/chatToolCallRuntime';
 import { removeChatMessageByTimestamp, resolveChatHistoryKeepCurrent } from '../services/requiresActionRuntime';
 import { useLanguage } from '../contexts/LanguageContext';
 import ReactMarkdown from 'react-markdown';
@@ -252,6 +252,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const projectIdRef = useRef(projectId);
   const historyRef = useRef(history);
+  const paramsRef = useRef(params);
   const abortControllerRef = useRef<AbortController | null>(null);
 
   // NEW: Track LLM thinking process text
@@ -341,118 +342,28 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   const [applyingActionCardId, setApplyingActionCardId] = useState<string | null>(null);
 
   // NEW: Agent state machine for workflow management and retry
-  const [agentState, setAgentState] = useState<AgentState>(createInitialAgentState());
-
-  // FIX: Use ref to hold onToolCall so agentMachine doesn't recreate when prop changes
-  // This prevents resetting internal state on every parent re-render
+  // FIX: Use ref to hold onToolCall so runtime store doesn't recreate when prop changes
   const onToolCallRef = useRef(onToolCall);
   onToolCallRef.current = onToolCall; // Always keep ref up-to-date
 
-  // Create stable agent machine instance - only created once (no dependencies)
-  const agentMachine = useMemo(() => new AgentStateMachine(
-    createInitialAgentState(),
-    {
-      onStateChange: (newState) => setAgentState(newState),
-      onExecuteAction: async (action: PendingAction) => {
-        console.log('[Agent] onExecuteAction called:', action.type, 'hasOnToolCall:', !!onToolCallRef.current);
-        // Execute the action via onToolCall (read from ref for latest value)
-        if (onToolCallRef.current && action.type === 'GENERATE_IMAGE') {
-          console.log('[Agent] Calling onToolCall with params:', action.params);
-          try {
-            const result = await onToolCallRef.current!({ toolName: 'generate_image', args: action.params });
-            if (result?.status === 'error') {
-              const toolError = new Error(result.error || 'Tool execution failed') as Error & {
-                retryable?: boolean;
-                lifecycleStatus?: string;
-              };
-              if (result.retryable === false) {
-                toolError.retryable = false;
-              }
-              const lifecycleStatus = typeof result.metadata?.lifecycleStatus === 'string'
-                ? result.metadata.lifecycleStatus
-                : undefined;
-              if (lifecycleStatus) {
-                toolError.lifecycleStatus = lifecycleStatus;
-              }
-              throw toolError;
-            }
-            return result;
-          } catch (error) {
-            throw error;
-          }
-        }
-        console.warn('[Agent] onExecuteAction condition not met');
-        throw new Error(`Unknown action type: ${action.type}`);
-      }
-    }
-  ), []); // Empty deps - machine is stable for component lifetime
+  paramsRef.current = params;
+  const agentRuntime = useMemo(() => createChatAgentRuntimeStore({
+    getParams: () => paramsRef.current,
+    getHistory: () => historyRef.current,
+    onToolCallRef,
+    setToolCallStatus,
+    setToolCallExpanded
+  }), []);
+  const agentState = useSyncExternalStore(agentRuntime.subscribe, agentRuntime.getState, agentRuntime.getState);
 
   // Tool call handler with retry support
   const handleToolCallWithRetry = async (action: AgentAction) => {
-    // Merge AI args with user's manual settings based on Auto Mode
-    const isAutoMode = params.isAutoMode ?? true;
-
-    let finalArgs = action.args;
-    if (!isAutoMode) {
-      // Manual mode: user's selections override AI's choices
-      finalArgs = {
-        ...action.args,
-        model: params.imageModel,
-        aspectRatio: params.aspectRatio,
-        resolution: params.imageResolution,
-        thinkingLevel: params.thinkingLevel,
-        negativePrompt: params.negativePrompt || action.args.negativePrompt,
-        numberOfImages: params.numberOfImages || action.args.numberOfImages || 1,
-        useGrounding: params.useGrounding ?? action.args.useGrounding ?? false,
-      };
-    } else {
-      // Auto mode: use AI's choices but ensure valid model value
-      const validModels = Object.values(ImageModel);
-      if (action.args.thinkingLevel) {
-        // Respect AI's selection of thinking level in Auto Mode
-        finalArgs.thinkingLevel = action.args.thinkingLevel;
-      }
-      if (finalArgs.model && !validModels.includes(finalArgs.model)) {
-        console.warn(`[ChatInterface] Validated invalid model: ${finalArgs.model}, keeping current`);
-        finalArgs = { ...finalArgs, model: params.imageModel };
-      }
-      if (!validModels.includes(finalArgs.model)) {
-        finalArgs = { ...finalArgs, model: ImageModel.FLASH_3_1 };
-      }
-    }
-
-    const pendingAction = createGenerateAction(
-      finalArgs,
-      `Generate: ${action.args.prompt?.slice(0, 50)}...`,
-      false // Don't require UI confirmation, use conversation-based HITL
-    );
-
-    // Set the action and let state machine handle execution with retry
-    // Since requiresConfirmation=false, setPendingAction will auto-execute
     try {
-      console.log('[Agent] Setting pending action (will auto-execute)');
-      // Show tool call status in UI (collapsed by default)
-      let modelNameStr = 'Nano Banana 2';
-      if (finalArgs.model === ImageModel.PRO) modelNameStr = 'Nano Banana Pro';
-      if (finalArgs.model === ImageModel.FLASH_3_1) modelNameStr = 'Nano Banana 2';
-      const modelName = modelNameStr;
-      const sourceMessageTimestamp = resolveActiveToolCallMessageTimestamp(historyRef.current);
-      setToolCallStatus({
-        isActive: true,
-        toolName: 'generate_image',
-        model: modelName,
-        prompt: finalArgs.prompt || '',
-        sourceMessageTimestamp
-      });
-      setToolCallExpanded(false); // Start collapsed
-      await agentMachine.setPendingAction(pendingAction);
+      await agentRuntime.executeGenerateAction(action);
       console.log('[Agent] Action execution completed');
     } catch (error) {
       console.error('[Agent] Action failed after retries:', error);
       // State machine will have transitioned to ERROR state
-    } finally {
-      // Clear tool call status after completion
-      setToolCallStatus(null);
     }
   };
 
@@ -468,8 +379,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
     setShowModelSelector(false);
     setDismissedActionCardIds({});
     setApplyingActionCardId(null);
-    agentMachine.reset();
-  }, [projectId, agentMachine]);
+    agentRuntime.reset();
+  }, [projectId, agentRuntime]);
   // Smart auto-scroll logic
   const prevHistoryLengthRef = useRef(history.length);
 

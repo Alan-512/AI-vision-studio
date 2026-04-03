@@ -1,9 +1,26 @@
-import { AgentJob, ChatMessage, JobArtifact, SearchProgress, SmartAsset } from '../types';
+import { AgentAction, AgentJob, AgentToolResult, AppMode, AssetItem, ChatMessage, CriticDecision, CriticIssue, GenerationParams, JobArtifact, ReviewTrace, SearchProgress, SmartAsset, StructuredCriticReview, RevisionPlan } from '../types';
 
 export type SelectedReferenceRecord = {
   asset: SmartAsset;
   sourceRole: 'user' | 'model';
   messageTimestamp?: number;
+};
+
+export type RuntimeReviewPayload = {
+  decision: CriticDecision;
+  summary: string;
+  warnings: string[];
+  issues?: CriticIssue[];
+  quality?: StructuredCriticReview['quality'];
+  reviewTrace?: ReviewTrace;
+  revisedPrompt?: string;
+  revisionReason?: string;
+  reviewPlan?: RevisionPlan;
+  requiresAction?: {
+    type: string;
+    message: string;
+    payload?: Record<string, unknown>;
+  };
 };
 
 type ArtifactReferenceCandidate = {
@@ -27,6 +44,262 @@ export const buildReferenceArtifacts = (references: SelectedReferenceRecord[]): 
       runtimeKey: `reference:${reference.asset.id}`
     }
   }));
+
+export const createGenerationStep = (
+  stepId: string,
+  mode: AppMode,
+  params: GenerationParams,
+  toolCall?: AgentAction
+) => ({
+  id: stepId,
+  kind: 'generation' as const,
+  name: mode === AppMode.IMAGE ? 'generate_image' : 'generate_video',
+  toolName: toolCall?.toolName || (mode === AppMode.IMAGE ? 'generate_image' : 'generate_video'),
+  status: 'pending' as const,
+  input: {
+    prompt: params.prompt,
+    model: mode === AppMode.IMAGE ? params.imageModel : params.videoModel,
+    aspectRatio: params.aspectRatio,
+    resolution: mode === AppMode.IMAGE ? params.imageResolution : params.videoResolution,
+    duration: mode === AppMode.VIDEO ? params.videoDuration : undefined,
+    useGrounding: params.useGrounding,
+    toolArgs: toolCall?.args
+  }
+});
+
+export const buildGeneratedArtifact = (
+  asset: AssetItem,
+  stepId: string,
+  overrides?: Partial<JobArtifact>
+): JobArtifact => ({
+  id: asset.id,
+  type: asset.type === 'IMAGE' ? 'image' : 'video',
+  origin: 'generated',
+  role: 'final',
+  url: asset.url,
+  mimeType: asset.type === 'IMAGE' && asset.url.startsWith('data:') ? asset.url.match(/^data:(.+);base64,/)?.[1] : undefined,
+  createdAt: asset.createdAt,
+  relatedStepId: stepId,
+  metadata: {
+    ...asset.metadata,
+    runtimeKey: `generated:${asset.id}`
+  },
+  ...overrides
+});
+
+export const createReviewStep = (stepId: string, toolResult: AgentToolResult) => ({
+  id: stepId,
+  kind: 'review' as const,
+  name: 'review_generated_asset',
+  status: 'pending' as const,
+  input: {
+    toolName: toolResult.toolName,
+    artifactIds: toolResult.artifactIds || [],
+    jobId: toolResult.jobId
+  }
+});
+
+export const buildReviewArtifact = (
+  reviewId: string,
+  reviewStepId: string,
+  review: RuntimeReviewPayload
+): JobArtifact => ({
+  id: reviewId,
+  type: 'text',
+  origin: 'review',
+  role: 'review_note',
+  createdAt: Date.now(),
+  relatedStepId: reviewStepId,
+  metadata: {
+    decision: review.decision,
+    summary: review.summary,
+    warnings: review.warnings,
+    issues: review.issues,
+    quality: review.quality,
+    reviewTrace: review.reviewTrace,
+    revisedPrompt: review.revisedPrompt,
+    revisionReason: review.revisionReason,
+    requiresAction: review.requiresAction
+  }
+});
+
+export const createRevisionStep = (
+  stepId: string,
+  review: RuntimeReviewPayload,
+  previousPrompt: string
+) => ({
+  id: stepId,
+  kind: 'revision' as const,
+  name: 'revise_generation_prompt',
+  status: 'pending' as const,
+  input: {
+    previousPrompt,
+    revisionReason: review.revisionReason || review.summary,
+    revisedPrompt: review.revisedPrompt || previousPrompt
+  }
+});
+
+const updateJobStep = (
+  job: AgentJob,
+  stepId: string,
+  updater: (step: AgentJob['steps'][number]) => AgentJob['steps'][number]
+): AgentJob['steps'] => job.steps.map(step => step.id === stepId ? updater(step) : step);
+
+export const mergeAgentJobStepOutput = (
+  job: AgentJob,
+  options: {
+    stepId: string;
+    output: Record<string, unknown>;
+    now: number;
+  }
+): AgentJob => ({
+  ...job,
+  updatedAt: options.now,
+  steps: updateJobStep(job, options.stepId, step => ({
+    ...step,
+    output: {
+      ...(step.output || {}),
+      ...options.output
+    }
+  }))
+});
+
+export const succeedAgentJobStep = (
+  job: AgentJob,
+  options: {
+    stepId: string;
+    output: Record<string, unknown>;
+    now: number;
+  }
+): AgentJob => ({
+  ...job,
+  updatedAt: options.now,
+  steps: updateJobStep(job, options.stepId, step => ({
+    ...step,
+    status: 'success',
+    endTime: options.now,
+    output: {
+      ...(step.output || {}),
+      ...options.output
+    }
+  }))
+});
+
+export const startAgentJobExecution = (
+  job: AgentJob,
+  options: {
+    stepId: string;
+    now: number;
+  }
+): AgentJob => ({
+  ...job,
+  status: 'executing',
+  currentStepId: options.stepId,
+  updatedAt: options.now,
+  steps: updateJobStep(job, options.stepId, step => ({
+    ...step,
+    status: 'running',
+    startTime: step.startTime ?? options.now
+  }))
+});
+
+export const startAgentJobReview = (
+  job: AgentJob,
+  options: {
+    reviewStep: AgentJob['steps'][number];
+    generatedArtifact: JobArtifact;
+    now: number;
+  }
+): AgentJob => ({
+  ...job,
+  status: 'reviewing',
+  currentStepId: options.reviewStep.id,
+  lastError: undefined,
+  updatedAt: options.now,
+  steps: [...job.steps, options.reviewStep],
+  artifacts: [...job.artifacts, options.generatedArtifact]
+});
+
+export const completeAgentJob = (
+  job: AgentJob,
+  options: {
+    now: number;
+    steps?: AgentJob['steps'];
+    artifacts?: JobArtifact[];
+    lastError?: string;
+  }
+): AgentJob => ({
+  ...job,
+  status: 'completed',
+  currentStepId: undefined,
+  lastError: options.lastError,
+  requiresAction: undefined,
+  updatedAt: options.now,
+  steps: options.steps ?? job.steps,
+  artifacts: options.artifacts ?? job.artifacts
+});
+
+export const requireAgentJobAction = (
+  job: AgentJob,
+  options: {
+    now: number;
+    lastError: string;
+    requiresAction: NonNullable<AgentJob['requiresAction']>;
+    steps?: AgentJob['steps'];
+    artifacts?: JobArtifact[];
+  }
+): AgentJob => ({
+  ...job,
+  status: 'requires_action',
+  currentStepId: undefined,
+  lastError: options.lastError,
+  requiresAction: options.requiresAction,
+  updatedAt: options.now,
+  steps: options.steps ?? job.steps,
+  artifacts: options.artifacts ?? job.artifacts
+});
+
+export const failAgentJob = (
+  job: AgentJob,
+  options: {
+    stepId: string;
+    error: string;
+    now: number;
+  }
+): AgentJob => ({
+  ...job,
+  status: 'failed',
+  currentStepId: undefined,
+  lastError: options.error,
+  updatedAt: options.now,
+  steps: updateJobStep(job, options.stepId, step => ({
+    ...step,
+    status: 'failed',
+    endTime: options.now,
+    error: options.error
+  }))
+});
+
+export const cancelAgentJob = (
+  job: AgentJob,
+  options: {
+    stepId: string;
+    reason: string;
+    now: number;
+  }
+): AgentJob => ({
+  ...job,
+  status: 'cancelled',
+  currentStepId: undefined,
+  lastError: options.reason,
+  updatedAt: options.now,
+  steps: updateJobStep(job, options.stepId, step => ({
+    ...step,
+    status: 'cancelled',
+    endTime: options.now,
+    error: options.reason
+  }))
+});
 
 export const extractSearchContextFromProgress = (searchProgress?: SearchProgress | null): AgentJob['searchContext'] | undefined => {
   if (!searchProgress || searchProgress.status !== 'complete') return undefined;

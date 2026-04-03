@@ -3,17 +3,9 @@ import {
     saveUserApiKey,
     getUserApiKey,
     removeUserApiKey,
-    parseFactsFromLLM,
-    buildPromptWithFacts,
-    runInternalToolResultLoop,
-    normalizeSupportedToolName,
-    parseImageCriticReview,
-    buildImageCriticContextText,
-    parseImageCriticCalibration,
-    applyImageCriticCalibration,
-    stripVisibleToolPlanningText,
-    StructuredFact
+    stripVisibleToolPlanningText
 } from '../services/geminiService';
+import { applyImageCriticCalibration, buildImageCriticContextText, parseImageCriticCalibration, parseImageCriticReview } from '../services/imageCriticService';
 import { AssistantMode } from '../types';
 
 describe('GeminiService', () => {
@@ -48,172 +40,11 @@ describe('GeminiService', () => {
         });
     });
 
-    describe('parseFactsFromLLM', () => {
-        it('should parse valid JSON with facts and promptDraft', () => {
-            const input = JSON.stringify({
-                facts: [
-                    { item: 'Eiffel Tower', source: 'Located in Paris, France' },
-                    { item: 'Built in 1889' }
-                ],
-                promptDraft: 'A photo of the Eiffel Tower'
-            });
-
-            const result = parseFactsFromLLM(input);
-
-            expect(result.facts).toHaveLength(2);
-            expect(result.facts[0].item).toBe('Eiffel Tower');
-            expect(result.facts[0].source).toBe('Located in Paris, France');
-            expect(result.facts[1].item).toBe('Built in 1889');
-            expect(result.promptDraft).toBe('A photo of the Eiffel Tower');
-        });
-
-        it('should return empty facts for invalid JSON', () => {
-            const result = parseFactsFromLLM('not valid json');
-
-            expect(result.facts).toEqual([]);
-            expect(result.promptDraft).toBe('');
-        });
-
-        it('should handle JSON without facts array', () => {
-            const result = parseFactsFromLLM('{"other": "data"}');
-
-            expect(result.facts).toEqual([]);
-        });
-
-        it('should handle empty string input', () => {
-            const result = parseFactsFromLLM('');
-
-            expect(result.facts).toEqual([]);
-            expect(result.promptDraft).toBe('');
-        });
-    });
-
-    describe('buildPromptWithFacts', () => {
-        it('should return raw prompt when no facts provided', () => {
-            const result = buildPromptWithFacts('Generate a cat', []);
-            expect(result).toBe('Generate a cat');
-        });
-
-        it('should append facts to prompt', () => {
-            const facts: StructuredFact[] = [
-                { item: 'Cat breeds', source: 'Persian, Siamese, Maine Coon' }
-            ];
-
-            const result = buildPromptWithFacts('Generate a cat', facts);
-
-            expect(result).toContain('Generate a cat');
-            expect(result).toContain('Reference Notes:');
-            expect(result).toContain('Cat breeds: Persian, Siamese, Maine Coon');
-        });
-
-        it('should handle facts without source', () => {
-            const facts: StructuredFact[] = [
-                { item: 'Orange tabby cat' }
-            ];
-
-            const result = buildPromptWithFacts('A cute cat', facts);
-
-            expect(result).toContain('- Orange tabby cat');
-        });
-
-        it('should format multiple facts correctly', () => {
-            const facts: StructuredFact[] = [
-                { item: 'Sunset colors', source: 'Orange, pink, purple' },
-                { item: 'Beach location', source: 'Malibu, California' },
-                { item: 'Golden hour' }
-            ];
-
-            const result = buildPromptWithFacts('Beach sunset', facts);
-
-            expect(result).toContain('- Sunset colors: Orange, pink, purple');
-            expect(result).toContain('- Beach location: Malibu, California');
-            expect(result).toContain('- Golden hour');
-        });
-
-        it('should trim whitespace from prompt', () => {
-            const result = buildPromptWithFacts('  spaced prompt  ', []);
-            expect(result).toBe('spaced prompt');
-        });
-    });
-
-    describe('normalizeSupportedToolName', () => {
-        it('should normalize the legacy read_memory alias to memory_search', () => {
-            expect(normalizeSupportedToolName('read_memory')).toBe('memory_search');
-        });
-
-        it('should keep supported tool names unchanged', () => {
-            expect(normalizeSupportedToolName('memory_search')).toBe('memory_search');
-            expect(normalizeSupportedToolName('generate_image')).toBe('generate_image');
-        });
-
-        it('should reject unsupported tool names', () => {
-            expect(normalizeSupportedToolName('unknown_tool')).toBeNull();
-        });
-    });
-
     describe('stripVisibleToolPlanningText', () => {
         it('should remove leaked generate_image planning JSON from visible assistant text', () => {
             const raw = `This direction looks strong overall.\n\n{\n  "action": "generate_image",\n  "parameters": {\n    "prompt": "A premium metallic can on a matte surface",\n    "model": "gemini-3.1-flash-image-preview"\n  }\n}`;
 
             expect(stripVisibleToolPlanningText(raw)).toBe('This direction looks strong overall.');
-        });
-    });
-
-    describe('runInternalToolResultLoop', () => {
-        it('should feed an internal memory tool result into a same-turn follow-up response', async () => {
-            const emittedChunks: string[] = [];
-            const result = await runInternalToolResultLoop({
-                pendingToolCalls: [{
-                    toolName: 'memory_search',
-                    args: { query: 'preferred aspect ratio' }
-                }],
-                workingContents: [],
-                fullText: '',
-                signal: new AbortController().signal,
-                onChunk: (text) => emittedChunks.push(text),
-                executeToolCall: async () => ({
-                    response: { ok: true, result: 'The user prefers 4:5.' },
-                    fallbackText: 'The user prefers 4:5.'
-                }),
-                generateFollowUpParts: async () => ([
-                    { text: 'I found a stored preference: use a 4:5 aspect ratio.' }
-                ])
-            });
-
-            expect(result.externalToolCalls).toEqual([]);
-            expect(result.fullText).toContain('4:5 aspect ratio');
-            expect(emittedChunks[emittedChunks.length - 1]).toContain('4:5 aspect ratio');
-        });
-
-        it('should enqueue external tool calls emitted after an internal memory lookup', async () => {
-            const result = await runInternalToolResultLoop({
-                pendingToolCalls: [{
-                    toolName: 'memory_search',
-                    args: { query: 'poster style' }
-                }],
-                workingContents: [],
-                fullText: '',
-                signal: new AbortController().signal,
-                onChunk: () => undefined,
-                executeToolCall: async () => ({
-                    response: { ok: true, result: 'Poster style: minimalist.' }
-                }),
-                generateFollowUpParts: async () => ([
-                    {
-                        functionCall: {
-                            name: 'generate_image',
-                            args: { prompt: 'Minimalist poster' }
-                        }
-                    }
-                ])
-            });
-
-            expect(result.externalToolCalls).toEqual([
-                {
-                    toolName: 'generate_image',
-                    args: { prompt: 'Minimalist poster' }
-                }
-            ]);
         });
     });
 

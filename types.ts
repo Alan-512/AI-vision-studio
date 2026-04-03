@@ -547,26 +547,67 @@ export interface AssetItem {
 
 export type TaskStatus = 'QUEUED' | 'GENERATING' | 'REVIEWING' | 'ACTION_REQUIRED' | 'COMPLETED' | 'FAILED';
 
-export interface BackgroundTask {
-  id: string;
-  projectId: string;
-  projectName: string;
-  type: 'IMAGE' | 'VIDEO';
-  status: TaskStatus;
-  startTime: number; // When it was added
-  executionStartTime?: number; // When it actually started running (left queue)
-  prompt: string;
-  error?: string;
-
-  // Link to Job System
-  jobId?: string;
-}
-
 export interface AgentAction {
   toolName: string;
   args: any;
   thought?: string;
 }
+
+export type RuntimeProjectionEventType =
+  | 'JobQueued'
+  | 'StepStarted'
+  | 'AssetProduced'
+  | 'ReviewStarted'
+  | 'ReviewCompleted'
+  | 'RequiresActionRaised'
+  | 'RequiresActionResolved'
+  | 'JobInterrupted'
+  | 'JobCancelled'
+  | 'JobCompleted'
+  | 'JobFailed';
+
+export interface RuntimeProjectionEvent {
+  type: RuntimeProjectionEventType;
+  jobId: string;
+  timestamp: number;
+  stepId?: string;
+  artifactId?: string;
+  payload?: Record<string, unknown>;
+}
+
+export type JobCommand =
+  | { type: 'start_generation'; projectId: string; jobId?: string }
+  | { type: 'resume_job'; jobId: string; actionType?: string }
+  | { type: 'cancel_job'; jobId: string; reason?: string }
+  | { type: 'resolve_requires_action'; jobId: string; resolutionType: string; payload?: Record<string, unknown> }
+  | { type: 'retry_job'; jobId: string; stepId?: string };
+
+export interface JobTransitionResult {
+  job: AgentJob;
+  events: RuntimeProjectionEvent[];
+  toolResult?: AgentToolResult;
+}
+
+export type BackgroundTaskViewStatus = TaskStatus;
+
+export interface BackgroundTaskView {
+  id: string;
+  projectId: string;
+  projectName: string;
+  type: 'IMAGE' | 'VIDEO';
+  status: BackgroundTaskViewStatus;
+  startTime: number;
+  executionStartTime?: number;
+  prompt: string;
+  error?: string;
+  jobId?: string;
+}
+
+export type BackgroundTask = BackgroundTaskView;
+
+export type TaskViewIntent =
+  | { type: 'cancel_job'; taskId: string; jobId: string }
+  | { type: 'dismiss_task_view'; taskId: string; jobId?: string };
 
 // Window augmentation for Veo Key selection
 declare global {

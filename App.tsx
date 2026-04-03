@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { Image as ImageIcon, Video, LayoutGrid, Folder, Sparkles, Settings, Star, CheckSquare, MoveHorizontal, Languages, Trash2, Recycle, Download, RotateCcw, ArrowRight, Key, X } from 'lucide-react';
-import { AppMode, AspectRatio, GenerationParams, AssetItem, ImageResolution, VideoResolution, ImageModel, VideoModel, ImageStyle, Project, ChatMessage, BackgroundTask, SmartAsset, VideoDuration, VideoStyle, AgentAction, EditRegion, SearchPolicy, AssistantMode, SmartAssetRole, ThinkingLevel, AgentJob, AgentJobStatus, JobStep, JobArtifact, AgentToolResult, ToolCallRecord, CriticDecision, CriticIssue, RevisionPlan, StructuredCriticReview, ConsistencyProfile, ReviewTrace } from './types';
+import { AppMode, AspectRatio, GenerationParams, AssetItem, ImageResolution, VideoResolution, ImageModel, VideoModel, ImageStyle, Project, ChatMessage, BackgroundTask, SmartAsset, VideoDuration, VideoStyle, AgentAction, EditRegion, SearchPolicy, AssistantMode, SmartAssetRole, ThinkingLevel, AgentJob, AgentJobStatus, JobStep, JobArtifact, AgentToolResult, ToolCallRecord, ConsistencyProfile, TaskViewIntent } from './types';
 import { GenerationForm } from './components/GenerationForm';
 import { AssetCard } from './components/AssetCard';
 import { ProjectSidebar } from './components/ProjectSidebar';
@@ -11,17 +11,26 @@ import { ConfirmDialog } from './components/ConfirmDialog';
 import { ComparisonView } from './components/ComparisonView';
 import { CanvasEditor } from './components/CanvasEditor';
 import { CanvasView } from './components/CanvasView';
-import { generateImage, generateVideo, getUserApiKey, generateTitle, reviewGeneratedImageWithAI, ImageCriticContextInput } from './services/geminiService';
+import { generateImage, generateVideo, getUserApiKey, generateTitle } from './services/geminiService';
 import { compressImageForContext, normalizeImageUrlForChat } from './services/imageUtils';
+import { buildImageCriticContext } from './services/imageCriticService';
 import {
     SelectedReferenceRecord,
-    buildReferenceArtifacts,
-    buildSearchArtifacts,
     extractSearchContextFromProgress,
-    mergeRuntimeArtifacts,
-    selectReferenceRecords
+    selectReferenceRecords,
 } from './services/agentRuntime';
-import { normalizeStructuredCriticReview } from './services/criticRuntime';
+import { buildTaskViewPersistencePlan, deriveBackgroundTaskView, deriveBackgroundTaskViews, dismissTaskViewsByIds, planTaskViewSyncForJob } from './services/taskReadModel';
+import { applyTaskViewProjectionResult, createTaskViewDismissalController, createTaskViewProjectionController, persistTaskViewPersistencePlan } from './services/taskProjectionPersistence';
+import { createAssetProjectionController } from './services/assetProjectionPersistence';
+import { reviewGeneratedAsset } from './services/assetReviewRuntime';
+import { createAgentJobSnapshotPersister } from './services/agentJobPersistence';
+import { createGenerationTaskLaunchController } from './services/generationTaskLaunchController';
+import { executeAutoRevisionAttempt, executeGenerationAttempt } from './services/generationExecutionRuntime';
+import { executeAutoRevisionFlow } from './services/generationAutoRevisionRuntime';
+import { resolveGenerationFailure } from './services/generationFailureRuntime';
+import { executeAutoRevisionReview, executePrimaryReview } from './services/generationReviewRuntime';
+import { resolveAutoRevision, resolvePrimaryReview } from './services/generationResolutionRuntime';
+import { buildDefaultRefinePromptRequiresAction, buildEditPrompt, normalizeGenerationParamsForExecution, prepareGenerationLaunch } from './services/generationOrchestrator';
 import { resolveAgentJobKeepCurrent, resolveToolCallRecordStatus } from './services/requiresActionRuntime';
 import {
     initDB, loadProjects, saveProject, saveAsset, loadAssets, updateAsset, updateProject,
@@ -122,111 +131,6 @@ const getPlaybookDefaults = (assistantMode: AssistantMode | undefined): Playbook
 
 const INTERRUPTIBLE_AGENT_JOB_STATUSES: AgentJobStatus[] = ['queued', 'planning', 'executing', 'reviewing', 'revising'];
 
-const createGenerationStep = (
-    stepId: string,
-    mode: AppMode,
-    params: GenerationParams,
-    toolCall?: AgentAction
-): JobStep => ({
-    id: stepId,
-    kind: 'generation',
-    name: mode === AppMode.IMAGE ? 'generate_image' : 'generate_video',
-    toolName: toolCall?.toolName || (mode === AppMode.IMAGE ? 'generate_image' : 'generate_video'),
-    status: 'pending',
-    input: {
-        prompt: params.prompt,
-        model: mode === AppMode.IMAGE ? params.imageModel : params.videoModel,
-        aspectRatio: params.aspectRatio,
-        resolution: mode === AppMode.IMAGE ? params.imageResolution : params.videoResolution,
-        duration: mode === AppMode.VIDEO ? params.videoDuration : undefined,
-        useGrounding: params.useGrounding,
-        toolArgs: toolCall?.args
-    }
-});
-
-const buildGeneratedArtifact = (
-    asset: AssetItem,
-    stepId: string,
-    overrides?: Partial<JobArtifact>
-): JobArtifact => ({
-    id: asset.id,
-    type: asset.type === 'IMAGE' ? 'image' : 'video',
-    origin: 'generated',
-    role: 'final',
-    url: asset.url,
-    mimeType: asset.type === 'IMAGE' && asset.url.startsWith('data:') ? asset.url.match(/^data:(.+);base64,/)?.[1] : undefined,
-    createdAt: asset.createdAt,
-    relatedStepId: stepId,
-    metadata: {
-        ...asset.metadata,
-        runtimeKey: `generated:${asset.id}`
-    },
-    ...overrides
-});
-
-type BilingualText = { zh: string; en: string };
-
-type LocalReviewResult = {
-    decision: CriticDecision;
-    summary: string;
-    warnings: string[];
-    issues?: CriticIssue[];
-    quality?: StructuredCriticReview['quality'];
-    reviewTrace?: ReviewTrace;
-    revisedPrompt?: string;
-    revisionReason?: string;
-    reviewPlan?: RevisionPlan;
-    requiresAction?: {
-        type: string;
-        message: string;
-        payload?: Record<string, unknown>;
-    };
-};
-
-const createReviewStep = (stepId: string, toolResult: AgentToolResult): JobStep => ({
-    id: stepId,
-    kind: 'review',
-    name: 'review_generated_asset',
-    status: 'pending',
-    input: {
-        toolName: toolResult.toolName,
-        artifactIds: toolResult.artifactIds || [],
-        jobId: toolResult.jobId
-    }
-});
-
-const buildReviewArtifact = (reviewId: string, reviewStepId: string, review: LocalReviewResult): JobArtifact => ({
-    id: reviewId,
-    type: 'text',
-    origin: 'review',
-    role: 'review_note',
-    createdAt: Date.now(),
-    relatedStepId: reviewStepId,
-    metadata: {
-        decision: review.decision,
-        summary: review.summary,
-        warnings: review.warnings,
-        issues: review.issues,
-        quality: review.quality,
-        reviewTrace: review.reviewTrace,
-        revisedPrompt: review.revisedPrompt,
-        revisionReason: review.revisionReason,
-        requiresAction: review.requiresAction
-    }
-});
-
-const createRevisionStep = (stepId: string, review: LocalReviewResult, previousPrompt: string): JobStep => ({
-    id: stepId,
-    kind: 'revision',
-    name: 'revise_generation_prompt',
-    status: 'pending',
-    input: {
-        previousPrompt,
-        revisionReason: review.revisionReason || review.summary,
-        revisedPrompt: review.revisedPrompt || previousPrompt
-    }
-});
-
 const createResumeActionStep = (stepId: string, jobId: string, prompt: string, actionType?: string): JobStep => ({
     id: stepId,
     kind: 'system',
@@ -242,82 +146,6 @@ const createResumeActionStep = (stepId: string, jobId: string, prompt: string, a
         prompt
     }
 });
-
-const buildRevisionArtifact = (artifactId: string, stepId: string, review: LocalReviewResult, previousPrompt: string): JobArtifact => ({
-    id: artifactId,
-    type: 'text',
-    origin: 'system',
-    role: 'review_note',
-    createdAt: Date.now(),
-    relatedStepId: stepId,
-    metadata: {
-        previousPrompt,
-        revisedPrompt: review.revisedPrompt || previousPrompt,
-        revisionReason: review.revisionReason || review.summary
-    }
-});
-
-const buildOptimizationPlan = (overrides?: Partial<RevisionPlan>): RevisionPlan => ({
-    summary: overrides?.summary || 'I can continue optimizing the current result while preserving the overall composition and lighting.',
-    preserve: overrides?.preserve || ['composition', 'lighting', 'overall visual direction'],
-    adjust: overrides?.adjust || ['subject fidelity', 'product clarity'],
-    confidence: overrides?.confidence || 'medium',
-    executionMode: overrides?.executionMode || 'auto',
-    issueTypes: overrides?.issueTypes || ['other'],
-    hardConstraints: overrides?.hardConstraints || [],
-    preferredContinuity: overrides?.preferredContinuity || ['composition', 'lighting', 'overall visual direction'],
-    localized: overrides?.localized || {
-        zh: {
-            summary: '我可以继续优化当前结果，同时保持整体构图和光影方向不变。',
-            preserve: ['构图', '光影', '整体视觉方向'],
-            adjust: ['主体还原度', '产品清晰度']
-        },
-        en: {
-            summary: 'I can continue optimizing the current result while preserving the overall composition and lighting.',
-            preserve: ['composition', 'lighting', 'overall visual direction'],
-            adjust: ['subject fidelity', 'product clarity']
-        }
-    }
-});
-
-const buildRequiresActionPayload = (
-    prompt: string,
-    review: Pick<LocalReviewResult, 'summary' | 'warnings' | 'revisedPrompt' | 'reviewPlan' | 'reviewTrace' | 'quality'>,
-    _actionType: string,
-    i18n?: {
-        title?: BilingualText;
-        message?: BilingualText;
-        warnings?: { zh: string[]; en: string[] };
-    },
-    extra?: Record<string, unknown>
-): Record<string, unknown> => ({
-    prompt,
-    revisedPrompt: review.revisedPrompt,
-    warnings: review.warnings,
-    issues: (review as LocalReviewResult).issues,
-    quality: review.quality,
-    reviewPlan: review.reviewPlan,
-    reviewTrace: review.reviewTrace,
-    titleI18n: i18n?.title,
-    messageI18n: i18n?.message,
-    warningsI18n: i18n?.warnings,
-    availableActions: [
-        { type: 'continue_optimization', label: 'Continue' },
-        { type: 'dismiss', label: 'Keep Current' }
-    ],
-    recommendedAction: 'continue_optimization',
-    ...extra
-});
-
-const dataUrlToInlineImage = (dataUrl: string): { mimeType: string; data: string } | null => {
-    if (!dataUrl.startsWith('data:')) return null;
-    const match = dataUrl.match(/^data:(.+?);base64,(.+)$/);
-    if (!match) return null;
-    return {
-        mimeType: match[1],
-        data: match[2]
-    };
-};
 
 const dedupeStrings = (values: Array<string | undefined | null>, limit = 8): string[] => {
     const seen = new Set<string>();
@@ -375,246 +203,6 @@ const buildConsistencyProfile = (
         referenceCount: selectedReferences.length,
         assistantMode
     };
-};
-
-const buildCriticContext = (
-    _prompt: string,
-    params: GenerationParams,
-    selectedReferences: SelectedReferenceRecord[],
-    consistencyProfile?: ConsistencyProfile,
-    searchContext?: AgentJob['searchContext']
-): ImageCriticContextInput => ({
-    assistantMode: normalizeAssistantMode((params as any).assistant_mode) || consistencyProfile?.assistantMode,
-    searchFacts: dedupeStrings((searchContext?.facts || []).map(fact => fact.source ? `${fact.item} (${fact.source})` : fact.item)),
-    referenceHints: dedupeStrings([
-        selectedReferences.length > 0 ? `${selectedReferences.length} reference image(s) were used for this generation.` : undefined,
-        ...selectedReferences.map(reference => reference.sourceRole === 'user'
-            ? 'User-provided reference should influence subject, style, or composition continuity.'
-            : 'Prior generated image should be treated as follow-up continuity context.')
-    ]),
-    hardConstraints: consistencyProfile?.hardConstraints || [],
-    preferredContinuity: consistencyProfile?.preferredContinuity || [],
-    negativePrompt: params.negativePrompt,
-    consistencyProfile
-});
-
-const criticToLocalReview = (
-    prompt: string,
-    critic: StructuredCriticReview,
-    fallbackActionType: string,
-    context?: ImageCriticContextInput
-): LocalReviewResult => {
-    const normalized = normalizeStructuredCriticReview(prompt, critic, {
-        consistencyProfile: context?.consistencyProfile,
-        hardConstraints: context?.hardConstraints,
-        preferredContinuity: context?.preferredContinuity
-    });
-
-    return {
-    decision: normalized.decision,
-    summary: normalized.summary,
-    warnings: normalized.warnings,
-    issues: normalized.issues,
-    quality: normalized.quality,
-    reviewTrace: normalized.reviewTrace,
-    revisedPrompt: normalized.revisedPrompt,
-    revisionReason: normalized.normalizedDecisionReason || normalized.reason || normalized.summary,
-    reviewPlan: normalized.reviewPlan,
-    requiresAction: normalized.decision === 'requires_action'
-        ? {
-            type: normalized.normalizedActionType || fallbackActionType,
-            message: normalized.userFacing?.zh?.message || normalized.userFacing?.en?.message || normalized.normalizedDecisionReason || normalized.summary,
-            payload: buildRequiresActionPayload(prompt, {
-                summary: normalized.summary,
-                warnings: normalized.issues.map(issue => issue.detail),
-                quality: normalized.quality,
-                revisedPrompt: normalized.revisedPrompt,
-                reviewPlan: normalized.reviewPlan,
-                reviewTrace: normalized.reviewTrace,
-                issues: normalized.issues
-            } as LocalReviewResult, normalized.normalizedActionType || fallbackActionType, {
-                title: {
-                    zh: normalized.userFacing?.zh?.title || '我建议先确认下一步方向',
-                    en: normalized.userFacing?.en?.title || 'I Recommend Confirming the Next Step'
-                },
-                message: {
-                    zh: normalized.userFacing?.zh?.message || normalized.normalizedDecisionReason || normalized.summary,
-                    en: normalized.userFacing?.en?.message || normalized.normalizedDecisionReason || normalized.summary
-                }
-            })
-        }
-        : undefined
-    };
-};
-
-const reviewGeneratedAssetLocally = (asset: AssetItem, prompt: string): LocalReviewResult => {
-    const warnings: string[] = [];
-
-    if (!asset.url) {
-        const issues: CriticIssue[] = [{
-            type: 'render_incomplete',
-            severity: 'high',
-            confidence: asset.type === 'IMAGE' ? 'medium' : 'low',
-            autoFixable: asset.type === 'IMAGE',
-            title: 'Generated asset is incomplete',
-            detail: 'The generated result is missing a renderable URL.',
-            relatedConstraint: 'render_output'
-        }];
-        const reviewPlan = buildOptimizationPlan({
-            summary: 'The render payload is incomplete. I can retry generation while preserving the current creative direction.',
-            preserve: ['creative direction', 'composition intent'],
-            adjust: ['render output validity'],
-            confidence: asset.type === 'IMAGE' ? 'medium' : 'low',
-            executionMode: asset.type === 'IMAGE' ? 'auto' : 'guided',
-            issueTypes: ['render_incomplete'],
-            hardConstraints: ['return a renderable asset'],
-            preferredContinuity: ['creative direction', 'composition intent'],
-            localized: {
-                zh: {
-                    summary: '当前渲染结果不完整。我可以保留现有创意方向并重试生成。',
-                    preserve: ['创意方向', '构图意图'],
-                    adjust: ['渲染输出完整性']
-                },
-                en: {
-                    summary: 'The render payload is incomplete. I can retry generation while preserving the current creative direction.',
-                    preserve: ['creative direction', 'composition intent'],
-                    adjust: ['render output validity']
-                }
-            }
-        });
-        return {
-            decision: asset.type === 'IMAGE' ? 'auto_revise' : 'requires_action',
-            summary: 'Generated asset is missing a URL and cannot be finalized.',
-        warnings,
-        issues,
-        quality: undefined,
-        reviewTrace: {
-            rawDecision: asset.type === 'IMAGE' ? 'auto_revise' : 'requires_action',
-            finalDecision: asset.type === 'IMAGE' ? 'auto_revise' : 'requires_action',
-            summary: 'Generated asset is missing a URL and cannot be finalized.',
-            reason: 'The generated image payload did not contain a renderable URL.',
-            primaryIssue: {
-                type: 'render_incomplete',
-                severity: 'high',
-                confidence: asset.type === 'IMAGE' ? 'medium' : 'low',
-                title: 'Generated asset is incomplete'
-            },
-            actionType: asset.type === 'IMAGE' ? 'continue_optimization' : 'inspect_generation_payload',
-            preserve: reviewPlan.preserve,
-            adjust: reviewPlan.adjust,
-            hardConstraints: reviewPlan.hardConstraints,
-            preferredContinuity: reviewPlan.preferredContinuity,
-            issueTypes: issues.map(issue => issue.type)
-        },
-        revisionReason: 'The generated image payload did not contain a renderable URL.',
-        revisedPrompt: `${prompt.trim()}\n\nRevision note: regenerate the same scene and ensure a valid renderable image output is returned.`,
-        reviewPlan,
-            requiresAction: asset.type === 'IMAGE'
-                ? undefined
-                : {
-                    type: 'inspect_generation_payload',
-                    message: 'This result is incomplete. I have a recovery path, and you can decide whether I should continue.',
-                    payload: buildRequiresActionPayload(prompt, {
-                        summary: 'The result payload is incomplete. I can keep the intended direction, but this case needs a manual decision before I continue.',
-                        warnings,
-                        revisedPrompt: undefined,
-                        reviewPlan
-                    }, 'inspect_generation_payload', {
-                        message: {
-                            zh: '这次结果输出不完整。我已经想好恢复方案，你决定是否让我继续即可。',
-                            en: 'This result is incomplete. I have a recovery path, and you can decide whether I should continue.'
-                        }
-                    }, {
-                        assetType: asset.type
-                    })
-                }
-        };
-    }
-
-    if (asset.type === 'VIDEO' && !asset.videoUri) {
-        warnings.push('Generated video is missing a reusable videoUri for extension workflows.');
-    }
-
-    return {
-        decision: 'accept',
-        summary: warnings.length > 0
-            ? 'Generated asset passed runtime review with warnings.'
-            : 'Generated asset passed runtime review.',
-        warnings,
-        issues: warnings.length > 0 ? [{
-            type: 'other',
-            severity: 'low',
-            confidence: 'medium',
-            autoFixable: false,
-            title: 'Follow-up extension metadata is incomplete',
-            detail: warnings[0],
-            relatedConstraint: 'video_extension'
-        }] : [],
-        quality: undefined,
-        reviewTrace: {
-            rawDecision: 'accept',
-            finalDecision: 'accept',
-            summary: warnings.length > 0
-                ? 'Generated asset passed runtime review with warnings.'
-                : 'Generated asset passed runtime review.',
-            reason: warnings.length > 0 ? warnings[0] : 'No critical runtime issues detected.',
-            actionType: warnings.length > 0 ? 'continue_optimization' : undefined,
-            preserve: ['overall scene', 'visual direction'],
-            adjust: warnings.length > 0 ? ['minor technical cleanup'] : ['none'],
-            preferredContinuity: ['overall scene', 'visual direction'],
-            issueTypes: warnings.length > 0 ? ['other'] : []
-        },
-        reviewPlan: buildOptimizationPlan({
-            summary: warnings.length > 0
-                ? 'The result is usable. I would preserve the overall scene and only make minor technical cleanups if you ask.'
-                : 'The result is complete and does not need manual intervention.',
-            adjust: warnings.length > 0 ? ['minor technical cleanup'] : ['none'],
-            confidence: warnings.length > 0 ? 'medium' : 'high',
-            executionMode: warnings.length > 0 ? 'guided' : 'auto',
-            issueTypes: warnings.length > 0 ? ['other'] : [],
-            preferredContinuity: ['overall scene', 'visual direction'],
-            localized: {
-                zh: {
-                    summary: warnings.length > 0
-                        ? '当前结果可以使用。如果你需要，我会保持整体场景不变，只做轻微技术优化。'
-                        : '当前结果已经完整，不需要额外人工介入。',
-                    preserve: ['整体场景', '视觉方向'],
-                    adjust: warnings.length > 0 ? ['轻微技术优化'] : ['无需额外调整']
-                },
-                en: {
-                    summary: warnings.length > 0
-                        ? 'The result is usable. I would preserve the overall scene and only make minor technical cleanups if you ask.'
-                        : 'The result is complete and does not need manual intervention.',
-                    preserve: ['overall scene', 'visual direction'],
-                    adjust: warnings.length > 0 ? ['minor technical cleanup'] : ['none']
-                }
-            }
-        })
-    };
-};
-
-const reviewGeneratedAsset = async (
-    asset: AssetItem,
-    prompt: string,
-    context?: ImageCriticContextInput
-): Promise<LocalReviewResult> => {
-    if (asset.type !== 'IMAGE' || !asset.url) {
-        return reviewGeneratedAssetLocally(asset, prompt);
-    }
-
-    try {
-        const normalizedUrl = await normalizeImageUrlForChat(asset.url);
-        const inlineImage = dataUrlToInlineImage(normalizedUrl);
-        if (!inlineImage) {
-            return reviewGeneratedAssetLocally(asset, prompt);
-        }
-
-        const critic = await reviewGeneratedImageWithAI(prompt, inlineImage.data, inlineImage.mimeType, context);
-        return criticToLocalReview(prompt, critic, 'review_output', context);
-    } catch (error) {
-        console.warn('[App] AI critic review failed, falling back to local review.', error);
-        return reviewGeneratedAssetLocally(asset, prompt);
-    }
 };
 
 const findLastModelMessageIndex = (messages: ChatMessage[]): number => {
@@ -756,6 +344,7 @@ export function App() {
     const [isLoaded, setIsLoaded] = useState(false);
 
     const activeProjectIdRef = useRef(activeProjectId);
+    const tasksRef = useRef<BackgroundTask[]>([]);
     const taskControllers = useRef<Record<string, AbortController>>({});
     // Ref to prevent updatedAt update during project initialization
     const isInitializingRef = useRef(false);
@@ -765,6 +354,16 @@ export function App() {
     const assetLoadAbortRef = useRef<AbortController | null>(null);
 
     // Initialization
+    useEffect(() => {
+        tasksRef.current = tasks;
+    }, [tasks]);
+
+    const taskViewDismissal = createTaskViewDismissalController({
+        taskViewsRef: tasksRef,
+        setTaskViews: setTasks,
+        deleteTaskView: deleteTask
+    });
+
     useEffect(() => {
         let isMounted = true;
 
@@ -794,15 +393,6 @@ export function App() {
 
                 // Load persisted tasks and recover any that were interrupted
                 const persistedTasks = await loadTasks();
-                const recoveredTasks = persistedTasks.map(task => {
-                    // Mark interrupted tasks as FAILED (they can't be resumed after refresh)
-                    if (task.status === 'GENERATING' || task.status === 'QUEUED' || task.status === 'REVIEWING') {
-                        const failedTask = { ...task, status: 'FAILED' as const, error: 'Task interrupted by page refresh' };
-                        saveTask(failedTask); // Persist the updated status
-                        return failedTask;
-                    }
-                    return task;
-                });
 
                 const persistedAgentJobs = await loadAgentJobs();
                 const recoveredAgentJobs = persistedAgentJobs.map(job => {
@@ -831,11 +421,30 @@ export function App() {
                         updatedAt: interruptedAt,
                         steps: interruptedSteps
                     };
-                    saveAgentJob(interruptedJob).catch(console.error);
+                    persistAgentJobSnapshot(interruptedJob, {
+                        jobRef: { current: job },
+                        saveAgentJobSnapshot: saveAgentJob
+                    }).catch(console.error);
                     return interruptedJob;
                 });
 
                 if (isMounted) {
+                    const projectNamesById = Object.fromEntries(loadedProjects.map(project => [project.id, project.name]));
+                    const recoveredTasks = deriveBackgroundTaskViews({
+                        jobs: recoveredAgentJobs,
+                        persistedTaskViews: persistedTasks,
+                        projectNamesById
+                    });
+                    const { taskViewsToSave, taskViewIdsToDelete } = buildTaskViewPersistencePlan(persistedTasks, recoveredTasks);
+                    persistTaskViewPersistencePlan({
+                        taskViewsToSave,
+                        taskViewIdsToDelete
+                    }, {
+                        saveTaskView: saveTask,
+                        deleteTaskView: deleteTask
+                    }).catch(error => {
+                        console.error('[App] Failed to sync recovered task views cache:', error);
+                    });
                     setTasks(recoveredTasks);
                     if (recoveredAgentJobs.length > 0) {
                         console.log(`[App] Recovered ${recoveredAgentJobs.length} persisted agent jobs`);
@@ -1057,18 +666,23 @@ export function App() {
             prompt: typeof toolCall.args?.prompt === 'string' ? toolCall.args.prompt : undefined
         });
 
-        await saveAgentJob(resolvedJob);
+        await persistAgentJobSnapshot(resolvedJob, {
+            jobRef: { current: job },
+            saveAgentJobSnapshot: saveAgentJob
+        });
 
-        const relatedTasks = tasks.filter(task => task.jobId === jobId);
+        const relatedTasks = tasksRef.current.filter(task => task.jobId === jobId);
         if (relatedTasks.length > 0) {
-            setTasks(prev => prev.map(task => task.jobId === jobId
-                ? { ...task, status: 'COMPLETED', error: undefined }
-                : task));
-            await Promise.all(relatedTasks.map(task => saveTask({
-                ...task,
-                status: 'COMPLETED',
-                error: undefined
-            })));
+            const projectName = projects.find(project => project.id === resolvedJob.projectId)?.name || 'Project';
+            await applyTaskViewProjectionResult(
+                planTaskViewSyncForJob(tasksRef.current, resolvedJob, { projectName }),
+                {
+                    taskViewsRef: tasksRef,
+                    setTaskViews: setTasks,
+                    saveTaskView: saveTask,
+                    deleteTaskView: deleteTask
+                }
+            );
         }
     };
 
@@ -1511,32 +1125,6 @@ export function App() {
         if (e.includes('storage_quota_exceeded')) return t('err.storage');
         return t('err.unknown');
     };
-
-    const buildEditPrompt = (basePrompt: string, regions?: EditRegion[]) => {
-        const normalizedBase = basePrompt?.trim() || '';
-        const regionLines = (regions || [])
-            .filter(r => r.instruction?.trim())
-            .map(r => `- Region ${r.id}: ${r.instruction!.trim()}`);
-
-        return `
-[EDIT_SPEC]
-Image 1 = Base image
-Image 2 = Mask (WHITE = edit, BLACK = keep)
-
-Rules:
-1) Only edit WHITE areas; keep BLACK areas unchanged.
-2) Preserve overall composition, identity, lighting, and style.
-3) If instructions conflict with mask, mask wins.
-4) Ensure seamless blending at mask edges.
-
-Edits:
-${normalizedBase || 'Apply edits only within white areas.'}
-${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
-[/EDIT_SPEC]
-`.trim();
-    };
-
-
     const handleGenerate = async (
         fullParams: GenerationParams,
         options?: {
@@ -1607,774 +1195,299 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
             });
         }
 
-        const launchTask = async (_index: number): Promise<AgentToolResult> => {
-            const taskId = crypto.randomUUID();
-            const jobId = resumeJobId || taskId;
-            const stepId = crypto.randomUUID();
-            const resumeStepId = resumeJobId ? crypto.randomUUID() : undefined;
-            const controller = new AbortController();
-            taskControllers.current[taskId] = controller;
-            const existingJob = resumeJobId
-                ? (await loadAgentJobsByProject(currentProjectId)).find(job => job.id === resumeJobId)
-                : undefined;
-            const previousTaskIds = resumeJobId
-                ? tasks.filter(task => task.jobId === jobId).map(task => task.id)
-                : [];
-            const referenceArtifacts = buildReferenceArtifacts(selectedReferenceRecords);
-            const searchArtifacts = buildSearchArtifacts(searchContextOverride);
-            const initialRuntimeArtifacts = [...referenceArtifacts, ...searchArtifacts];
-            const assistantMode = normalizeAssistantMode((activeParams as any).assistant_mode || toolCall?.args?.assistant_mode);
-            const consistencyProfile = buildConsistencyProfile(
-                assistantMode,
-                selectedReferenceRecords,
-                searchContextOverride,
-                existingJob?.consistencyProfile
-            );
-            const newTask: BackgroundTask = {
-                id: taskId, projectId: currentProjectId, projectName: projects.find(p => p.id === currentProjectId)?.name || 'Project',
-                type: currentMode === AppMode.IMAGE ? 'IMAGE' : 'VIDEO', status: 'QUEUED', startTime: Date.now(), prompt: activeParams.prompt,
-                jobId
-            };
-            let agentJob: AgentJob = existingJob
-                ? {
-                    ...existingJob,
-                    updatedAt: Date.now(),
-                    status: 'queued',
-                    source: existingJob.source,
-                    triggerMessageTimestamp: triggerMessageTimestamp ?? existingJob.triggerMessageTimestamp,
-                    currentStepId: undefined,
-                    lastError: undefined,
-                    requiresAction: undefined,
-                    consistencyProfile,
-                    searchContext: searchContextOverride || existingJob.searchContext,
-                    steps: [
-                        ...existingJob.steps,
-                        ...(resumeStepId ? [createResumeActionStep(resumeStepId, jobId, activeParams.prompt, resumeActionType)] : []),
-                        createGenerationStep(stepId, currentMode, activeParams, toolCall)
-                    ],
-                    artifacts: mergeRuntimeArtifacts(existingJob.artifacts, initialRuntimeArtifacts)
+        const launchPreparedTask = createGenerationTaskLaunchController({
+            persistenceDeps: {
+                taskViewsRef: tasksRef,
+                setTaskViews: setTasks,
+                saveTaskView: saveTask,
+                deleteTaskView: deleteTask,
+                activeProjectIdRef,
+                setAssets,
+                saveAsset,
+                updateAsset,
+                deleteAssetPermanently: permanentlyDeleteAssetFromDB,
+                saveAgentJobSnapshot: saveAgentJob,
+                onPreview,
+                onSuccess
+            },
+            launcherDeps: {
+                loadExistingJob: async (projectId, maybeResumeJobId) => maybeResumeJobId
+                    ? (await loadAgentJobsByProject(projectId)).find(job => job.id === maybeResumeJobId)
+                    : undefined,
+                getPreviousTaskIds: jobId => tasks.filter(task => task.jobId === jobId).map(task => task.id),
+                createAbortController: () => new AbortController(),
+                registerController: (taskId, controller) => {
+                    taskControllers.current[taskId] = controller;
+                },
+                unregisterController: taskId => {
+                    delete taskControllers.current[taskId];
                 }
-                : {
-                    id: jobId,
-                    projectId: currentProjectId,
-                    type: currentMode === AppMode.IMAGE ? 'IMAGE_GENERATION' : 'VIDEO_GENERATION',
-                    status: 'queued',
-                    createdAt: Date.now(),
-                    updatedAt: Date.now(),
-                    source: resolvedJobSource,
-                    triggerMessageTimestamp,
-                    currentStepId: undefined,
-                    consistencyProfile,
-                    searchContext: searchContextOverride,
-                    steps: [createGenerationStep(stepId, currentMode, activeParams, toolCall)],
-                    artifacts: initialRuntimeArtifacts
-                };
-            let latestVisibleAsset: AssetItem | null = null;
-            let taskMarkedVisibleComplete = false;
+            },
+            runtimeDeps: {
+                now: () => Date.now(),
+                createId: () => crypto.randomUUID()
+            }
+        });
+
+        const launchTask = async (_index: number): Promise<AgentToolResult> => {
+            const projectName = projects.find(p => p.id === currentProjectId)?.name || 'Project';
+            const latestVisibleAssetRef = { current: null as AssetItem | null };
+            const taskMarkedVisibleCompleteRef = { current: false };
             let successSoundPlayed = false;
-            const persistJob = async (updates: Partial<AgentJob>) => {
-                agentJob = {
-                    ...agentJob,
-                    ...updates,
-                    updatedAt: updates.updatedAt ?? Date.now()
-                };
-                await saveAgentJob(agentJob);
-            };
-            const markTaskVisibleComplete = async () => {
-                if (taskMarkedVisibleComplete) return;
-                taskMarkedVisibleComplete = true;
-                const completedTask = { ...newTask, status: 'COMPLETED' as const };
-                setTasks(prev => prev.map(t => t.id === taskId ? completedTask : t));
-                await saveTask(completedTask);
-            };
             const playVisibleSuccess = () => {
                 if (successSoundPlayed) return;
                 successSoundPlayed = true;
                 playSuccessSound();
             };
-            setTasks(prev => [...prev.filter(task => task.jobId !== jobId), newTask]);
-            previousTaskIds.forEach(previousTaskId => {
-                deleteTask(previousTaskId).catch(console.error);
-            });
-            saveTask(newTask); // Persist to IndexedDB
-            saveAgentJob(agentJob).catch(console.error);
+            const isEditMode = currentMode === AppMode.IMAGE && !!activeParams.editBaseImage && !!activeParams.editMask;
+            const historyForGeneration = !isEditMode && currentMode === AppMode.IMAGE ? historyOverride : undefined;
 
-            try {
-                const onStart = () => {
-                    updateAsset(taskId, { status: 'GENERATING' }).catch(console.error);
-                    const updatedTask = { ...newTask, status: 'GENERATING' as const, executionStartTime: Date.now() };
-                    setTasks(prev => prev.map(t => t.id === taskId ? updatedTask : t));
-                    saveTask(updatedTask); // Persist status change
-                    const runningAt = Date.now();
-                    const runningSteps = agentJob.steps.map(step => step.id === stepId
-                        ? { ...step, status: 'running' as const, startTime: step.startTime ?? runningAt }
-                        : step
-                    );
-                    persistJob({
-                        status: 'executing',
-                        currentStepId: stepId,
-                        steps: runningSteps
-                    }).catch(console.error);
-                    if (activeProjectIdRef.current === currentProjectId) {
-                        setAssets(prev => prev.map(a => a.id === taskId ? { ...a, status: 'GENERATING' } : a));
-                    }
-                };
-                const tempAsset: AssetItem = {
-                    id: taskId, projectId: currentProjectId, type: currentMode === AppMode.IMAGE ? 'IMAGE' : 'VIDEO',
-                    url: '', prompt: activeParams.prompt, createdAt: Date.now(), status: 'PENDING', isNew: true,
+            return launchPreparedTask({
+                currentProjectId,
+                currentMode,
+                activeParams,
+                resolvedJobSource,
+                triggerMessageTimestamp,
+                searchContextOverride,
+                selectedReferenceRecords,
+                resumeJobId,
+                resumeActionType,
+                toolCall,
+                historyForGeneration,
+                createSessionInput: {
+                    projectName,
+                    createResumeActionStep,
+                    buildConsistencyProfile,
+                    normalizeAssistantMode,
+                    prepareGenerationLaunch
+                },
+                buildTaskRuntimeDeps: ({
+                    taskRuntime,
+                    getAgentJob,
+                    stepId,
+                    taskId,
                     jobId,
-                    metadata: {
-                        aspectRatio: activeParams.aspectRatio,
-                        model: currentMode === AppMode.IMAGE ? activeParams.imageModel : activeParams.videoModel,
-                        style: currentMode === AppMode.IMAGE ? activeParams.imageStyle : activeParams.videoStyle,
-                        resolution: currentMode === AppMode.IMAGE ? activeParams.imageResolution : activeParams.videoResolution,
-                        duration: currentMode === AppMode.VIDEO ? activeParams.videoDuration : undefined,
-                        usedGrounding: activeParams.useGrounding
-                    }
-                };
-                if (activeProjectIdRef.current === currentProjectId) setAssets(prev => [tempAsset, ...prev]);
-                await saveAsset(tempAsset);
-
-                let asset: AssetItem;
-                const genParams = { ...activeParams };
-
-                // Concatenate selected Prompt Builder tags to the prompt (mode-specific)
-                const selectedTags = currentMode === AppMode.IMAGE
-                    ? (activeParams.selectedImageTags || [])
-                    : (activeParams.selectedVideoTags || []);
-                if (selectedTags.length > 0) {
-                    const tagTexts = selectedTags.map(tagKey => t(tagKey as any) || tagKey).join(', ');
-                    genParams.prompt = genParams.prompt.trim()
-                        ? `${tagTexts}, ${genParams.prompt.trim()}`
-                        : tagTexts;
-                }
-
-                const isEditMode = currentMode === AppMode.IMAGE && !!activeParams.editBaseImage && !!activeParams.editMask;
-                if (isEditMode) {
-                    // FIX: Don't put edit images in smartAssets - they're handled via dedicated fields
-                    // genParams.smartAssets is cleared to avoid duplicate image injection
-                    genParams.smartAssets = [];
-                    genParams.prompt = buildEditPrompt(activeParams.prompt, activeParams.editRegions);
-                }
-                const historyForGeneration = !isEditMode && currentMode === AppMode.IMAGE ? historyOverride : undefined;
-                let toolResult: AgentToolResult;
-                if (currentMode === AppMode.IMAGE) {
-                    asset = await generateImage(genParams, currentProjectId, onStart, controller.signal, taskId, historyForGeneration,
-                        // onThoughtImage callback to capture draft images (构思图)
-                        (imageData) => {
-                            setThoughtImages(prev => [...prev, {
-                                id: crypto.randomUUID(),
-                                ...imageData,
-                                timestamp: Date.now()
-                            }]);
-                        }
-                    );
-                    if (controller.signal.aborted) throw new Error("Cancelled");
-                    asset.isNew = true;
-                    asset.jobId = jobId;
-                    latestVisibleAsset = asset;
-                    await saveAsset(asset);
-                    if (controller.signal.aborted) throw new Error("Cancelled");
-                    if (activeProjectIdRef.current === currentProjectId) setAssets(prev => prev.map(a => a.id === taskId ? asset : a));
-                    if (onPreview) onPreview(asset);
-                    if (onSuccess) {
-                        void onSuccess(asset);
-                    }
-                    playVisibleSuccess();
-                    await markTaskVisibleComplete();
-                    const completedAt = Date.now();
-                    const completedSteps = agentJob.steps.map(step => step.id === stepId
-                        ? {
-                            ...step,
-                            status: 'success' as const,
-                            endTime: completedAt,
-                            output: { assetId: asset.id, assetType: asset.type }
-                        }
-                        : step
-                    );
-                    persistJob({ steps: completedSteps }).catch(console.error);
-                    toolResult = {
-                        jobId,
-                        stepId,
-                        toolName: 'generate_image',
-                        status: 'success',
-                        artifactIds: [asset.id],
-                        message: 'Image generation completed',
-                        metadata: {
-                            assetId: asset.id,
-                            taskId,
-                            model: asset.metadata?.model,
-                            aspectRatio: asset.metadata?.aspectRatio
-                        }
-                    };
-                } else {
-                    const videoResult = await generateVideo(genParams, async (operationName) => {
-                        if (controller.signal.aborted) throw new Error("Cancelled");
-                        await updateAsset(taskId, { operationName });
-                        const stepsWithOperation = agentJob.steps.map(step => step.id === stepId
-                            ? {
-                                ...step,
-                                output: { ...(step.output || {}), operationName }
-                            }
-                            : step
-                        );
-                        persistJob({ steps: stepsWithOperation }).catch(console.error);
-                    }, onStart, controller.signal);
-                    if (controller.signal.aborted) throw new Error("Cancelled");
-                    // FIX: Store videoUri for video extension support
-                    const updates = { status: 'COMPLETED' as const, url: videoResult.blobUrl, videoUri: videoResult.videoUri, isNew: true };
-                    await updateAsset(taskId, updates);
-                    if (activeProjectIdRef.current === currentProjectId) setAssets(prev => prev.map(a => a.id === taskId ? { ...a, ...updates } : a));
-                    asset = { ...tempAsset, ...updates, jobId };
-                    const completedAt = Date.now();
-                    const completedSteps = agentJob.steps.map(step => step.id === stepId
-                        ? {
-                            ...step,
-                            status: 'success' as const,
-                            endTime: completedAt,
-                            output: { ...(step.output || {}), assetId: asset.id, assetType: asset.type, videoUri: videoResult.videoUri }
-                        }
-                        : step
-                    );
-                    persistJob({ steps: completedSteps }).catch(console.error);
-                    toolResult = {
-                        jobId,
-                        stepId,
-                        toolName: 'generate_video',
-                        status: 'success',
-                        artifactIds: [asset.id],
-                        message: 'Video generation completed',
-                        metadata: {
-                            assetId: asset.id,
-                            taskId,
-                            videoUri: videoResult.videoUri
-                        }
-                    };
-                }
-                const generatedArtifact = buildGeneratedArtifact(asset, stepId);
-                const reviewStepId = crypto.randomUUID();
-                const reviewStartedAt = Date.now();
-                const reviewStep = {
-                    ...createReviewStep(reviewStepId, toolResult),
-                    status: 'running' as const,
-                    startTime: reviewStartedAt
-                };
-                if (currentMode !== AppMode.IMAGE) {
-                    const reviewingTask = { ...newTask, status: 'REVIEWING' as const };
-                    setTasks(prev => prev.map(t => t.id === taskId ? reviewingTask : t));
-                    saveTask(reviewingTask).catch(console.error);
-                }
-                persistJob({
-                    status: 'reviewing',
-                    currentStepId: reviewStepId,
-                    lastError: undefined,
-                    steps: [...agentJob.steps, reviewStep],
-                    artifacts: [...agentJob.artifacts, generatedArtifact]
-                }).catch(console.error);
-
-                const criticContext = buildCriticContext(
-                    genParams.prompt,
-                    genParams,
+                    currentProjectId,
+                    activeParams,
+                    initialPendingAsset,
+                    signal,
                     selectedReferenceRecords,
-                    agentJob.consistencyProfile,
-                    agentJob.searchContext
-                );
-                const review = await reviewGeneratedAsset(asset, genParams.prompt, criticContext);
-                const reviewEndedAt = Date.now();
-                const reviewArtifactId = crypto.randomUUID();
-                const reviewArtifact = buildReviewArtifact(reviewArtifactId, reviewStepId, review);
-                const finalizedReviewStep = {
-                    ...reviewStep,
-                    status: (review.decision === 'accept' ? 'success' : 'failed') as 'success' | 'failed',
-                    endTime: reviewEndedAt,
-                    output: {
-                            decision: review.decision,
-                            summary: review.summary,
-                            warnings: review.warnings,
-                            issues: review.issues,
-                            quality: review.quality,
-                            trace: review.reviewTrace
-                        },
-                    error: review.decision === 'accept' ? undefined : review.summary
-                };
-                const reviewedToolResult: AgentToolResult = {
-                    ...toolResult,
-                    status: review.decision === 'accept'
-                        ? toolResult.status
-                        : (review.decision === 'requires_action' ? 'requires_action' : 'error'),
-                    error: review.decision === 'accept' ? toolResult.error : review.summary,
-                    requiresAction: review.requiresAction,
-                    metadata: {
-                        ...(toolResult.metadata || {}),
-                        review: {
-                                decision: review.decision,
-                                summary: review.summary,
-                                warnings: review.warnings,
-                                issues: review.issues,
-                                quality: review.quality,
-                                trace: review.reviewTrace,
-                                stepId: reviewStepId
-                            }
-                        }
-                };
-
-                if (review.decision === 'auto_revise' && currentMode === AppMode.IMAGE) {
-                    const revisionStepId = crypto.randomUUID();
-                    const revisionStartedAt = Date.now();
-                    const revisionStep = {
-                        ...createRevisionStep(revisionStepId, review, genParams.prompt),
-                        status: 'running' as const,
-                        startTime: revisionStartedAt
-                    };
-                    const revisionArtifactId = crypto.randomUUID();
-                    const revisionArtifact = buildRevisionArtifact(revisionArtifactId, revisionStepId, review, genParams.prompt);
-                    const stepsAfterRevision = [
-                        ...agentJob.steps.filter(step => step.id !== reviewStepId && step.id !== revisionStepId),
-                        finalizedReviewStep,
-                        {
-                            ...revisionStep,
-                            status: 'success' as const,
-                            endTime: Date.now(),
-                            output: {
-                                revisedPrompt: review.revisedPrompt || genParams.prompt,
-                                revisionReason: review.revisionReason || review.summary
-                            }
-                        }
-                    ];
-                    persistJob({
-                        status: 'revising',
-                        currentStepId: revisionStepId,
-                        lastError: undefined,
-                        steps: stepsAfterRevision,
-                        artifacts: [...agentJob.artifacts, generatedArtifact, reviewArtifact, revisionArtifact]
-                    }).catch(console.error);
-
-                    const revisedPrompt = review.revisedPrompt || genParams.prompt;
-                    const revisedParams: GenerationParams = {
-                        ...genParams,
-                        prompt: revisedPrompt
-                    };
-                    const revisedGenerationStepId = crypto.randomUUID();
-                    const revisedGenerationStep = {
-                        ...createGenerationStep(revisedGenerationStepId, currentMode, revisedParams, toolCall),
-                        status: 'running' as const,
-                        startTime: Date.now()
-                    };
-                    persistJob({
-                        status: 'executing',
-                        currentStepId: revisedGenerationStepId,
-                        steps: [...stepsAfterRevision, revisedGenerationStep],
-                        artifacts: [...agentJob.artifacts, generatedArtifact, reviewArtifact, revisionArtifact]
-                    }).catch(console.error);
-
-                    const revisedAsset = await generateImage(
-                        revisedParams,
-                        currentProjectId,
-                        () => {},
-                        controller.signal,
+                    historyForGeneration
+                }: any) => ({
+                    stagePendingAsset: (asset: AssetItem) => taskRuntime.stagePendingAsset(asset),
+                    normalizeGenerationParams: () => normalizeGenerationParamsForExecution(
+                        { ...activeParams },
+                        currentMode,
+                        tagKey => t(tagKey as any) || tagKey
+                    ),
+                    executeGenerationAttempt: ({ genParams, historyForGeneration }: any) => executeGenerationAttempt({
+                        mode: currentMode,
+                        agentJob: getAgentJob(),
+                        stepId,
                         taskId,
+                        jobId,
+                        currentProjectId,
+                        genParams,
+                        initialPendingAsset,
+                        signal,
+                        taskRuntime: {
+                            stageRunningJob: (runtimeInput: any) => taskRuntime.stageRunningJob(runtimeInput),
+                            completeVisibleImage: (runtimeInput: any) => taskRuntime.completeVisibleImage(runtimeInput),
+                            updateOperation: (runtimeInput: any) => taskRuntime.updateOperation(runtimeInput),
+                            completeVideo: (runtimeInput: any) => taskRuntime.completeVideo(runtimeInput)
+                        },
+                        generateImageImpl: (params, projectId, onStartCb, signal, taskIdArg, historyArg, onThoughtImage) => generateImage(
+                            params,
+                            projectId,
+                            onStartCb,
+                            signal,
+                            taskIdArg,
+                            historyArg,
+                            (imageData) => {
+                                setThoughtImages(prev => [...prev, {
+                                    id: crypto.randomUUID(),
+                                    ...imageData,
+                                    timestamp: Date.now()
+                                }]);
+                                onThoughtImage?.(imageData);
+                            }
+                        ),
+                        generateVideoImpl: (params, onUpdate, onStartCb, signal) => generateVideo(params, onUpdate, onStartCb, signal),
+                        historyForGeneration
+                    }),
+                    afterVisibleImage: async ({ asset }: any) => {
+                        latestVisibleAssetRef.current = asset;
+                        if (signal.aborted) throw new Error('Cancelled');
+                        playVisibleSuccess();
+                        if (!taskMarkedVisibleCompleteRef.current) {
+                            taskMarkedVisibleCompleteRef.current = true;
+                            await taskRuntime.markTaskVisibleComplete(getAgentJob());
+                        }
+                    },
+                    executePrimaryReview: ({ asset, genParams, toolResult }: any) => executePrimaryReview({
+                        job: getAgentJob(),
+                        asset,
+                        generationStepId: stepId,
+                        toolResult,
+                        prompt: genParams.prompt,
+                        genParams,
+                        selectedReferences: selectedReferenceRecords,
+                        assistantMode: normalizeAssistantMode((genParams as any).assistant_mode),
+                        taskRuntime: {
+                            startReview: (job: AgentJob, shouldSyncTaskView: boolean) => taskRuntime.startReview(job, shouldSyncTaskView)
+                        },
+                        buildCriticContext: ({
+                            assistantMode,
+                            negativePrompt,
+                            selectedReferences,
+                            consistencyProfile,
+                            searchContext
+                        }) => buildImageCriticContext({
+                            assistantMode: normalizeAssistantMode(assistantMode),
+                            negativePrompt,
+                            selectedReferences: selectedReferences as SelectedReferenceRecord[],
+                            consistencyProfile,
+                            searchContext
+                        }),
+                        reviewAsset: (reviewAssetTarget: AssetItem, reviewPrompt: string, criticContext: string) => reviewGeneratedAsset(reviewAssetTarget, reviewPrompt, criticContext)
+                    }),
+                    executeAutoRevisionFlow: ({ review, genParams, toolResult, generatedArtifact, reviewArtifact, finalizedReviewStep, selectedReferenceRecords }: any) => executeAutoRevisionFlow({
+                        job: getAgentJob(),
+                        review,
+                        currentMode,
+                        originalPrompt: genParams.prompt,
+                        genParams,
+                        toolCall,
+                        finalizedReviewStep,
+                        reviewArtifact,
+                        currentProjectId,
+                        signal,
+                        taskId,
+                        jobId,
+                        toolResult,
+                        selectedReferences: selectedReferenceRecords,
                         historyForGeneration,
-                        (imageData) => {
-                            setThoughtImages(prev => [...prev, {
-                                id: crypto.randomUUID(),
-                                ...imageData,
-                                timestamp: Date.now()
-                            }]);
-                        }
-                    );
-                    if (controller.signal.aborted) throw new Error("Cancelled");
-                    revisedAsset.isNew = true;
-                    revisedAsset.jobId = jobId;
-                    latestVisibleAsset = revisedAsset;
-                    await saveAsset(revisedAsset);
-                    if (controller.signal.aborted) throw new Error("Cancelled");
-                    if (activeProjectIdRef.current === currentProjectId) {
-                        setAssets(prev => prev.map(a => a.id === taskId ? revisedAsset : a));
-                    }
-                    if (onPreview) onPreview(revisedAsset);
-                    if (onSuccess) {
-                        void onSuccess(revisedAsset);
-                    }
-                    playVisibleSuccess();
-
-                    const revisedGenerationEndedAt = Date.now();
-                    const finalizedRevisedGenerationStep = {
-                        ...revisedGenerationStep,
-                        status: 'success' as const,
-                        endTime: revisedGenerationEndedAt,
-                        output: { assetId: revisedAsset.id, assetType: revisedAsset.type }
-                    };
-                    const revisedGeneratedArtifact = buildGeneratedArtifact(revisedAsset, revisedGenerationStepId, {
-                        parentArtifactId: generatedArtifact.id,
-                        metadata: {
-                            ...(revisedAsset.metadata || {}),
-                            runtimeKey: `generated:${revisedAsset.id}`,
-                            derivedFrom: generatedArtifact.id
-                        }
-                    });
-                    const secondReviewStepId = crypto.randomUUID();
-                    const secondReviewStep = {
-                        ...createReviewStep(secondReviewStepId, {
-                            ...toolResult,
-                            artifactIds: [revisedAsset.id]
-                        },),
-                        status: 'running' as const,
-                        startTime: Date.now()
-                    };
-                    persistJob({
-                        status: 'reviewing',
-                        currentStepId: secondReviewStepId,
-                        steps: [...stepsAfterRevision, finalizedRevisedGenerationStep, secondReviewStep],
-                        artifacts: [...agentJob.artifacts, generatedArtifact, reviewArtifact, revisionArtifact, revisedGeneratedArtifact]
-                    }).catch(console.error);
-
-                    const secondReview = await reviewGeneratedAsset(
-                        revisedAsset,
-                        revisedPrompt,
-                        buildCriticContext(
-                            revisedPrompt,
-                            revisedParams,
-                            selectedReferenceRecords,
-                            agentJob.consistencyProfile,
-                            agentJob.searchContext
-                        )
-                    );
-                    const secondReviewArtifactId = crypto.randomUUID();
-                    const secondReviewArtifact = buildReviewArtifact(secondReviewArtifactId, secondReviewStepId, secondReview);
-                    const finalizedSecondReviewStep = {
-                        ...secondReviewStep,
-                        status: (secondReview.decision === 'accept' ? 'success' : 'failed') as 'success' | 'failed',
-                        endTime: Date.now(),
-                        output: {
-                            decision: secondReview.decision,
-                            summary: secondReview.summary,
-                            warnings: secondReview.warnings,
-                            issues: secondReview.issues,
-                            quality: secondReview.quality,
-                            trace: secondReview.reviewTrace
+                        continuousMode: activeParams.continuousMode,
+                        taskRuntime: {
+                            startAutoRevision: (jobs: AgentJob[]) => taskRuntime.startAutoRevision(jobs)
                         },
-                        error: secondReview.decision === 'accept' ? undefined : secondReview.summary
-                    };
-                    const revisedToolResult: AgentToolResult = {
-                        ...toolResult,
-                        artifactIds: [revisedAsset.id],
-                        status: secondReview.decision === 'accept' ? 'success' : 'requires_action',
-                        error: secondReview.decision === 'accept' ? undefined : secondReview.summary,
-                        requiresAction: secondReview.decision === 'requires_action'
-                            ? (secondReview.requiresAction || {
-                                type: 'refine_prompt',
-                                message: 'I already know how I would improve this version next. If you want, I can continue from here.',
-                                payload: buildRequiresActionPayload(revisedPrompt, {
-                                    summary: secondReview.summary,
-                                    warnings: secondReview.warnings,
-                                    revisedPrompt,
-                                    reviewPlan: secondReview.reviewPlan || buildOptimizationPlan({
-                                        summary: 'I can keep the current composition and continue improving the subject result.',
-                                        adjust: ['subject fidelity'],
-                                        confidence: 'medium',
-                                        localized: {
-                                            zh: {
-                                                summary: '我可以保留当前构图，继续优化主体结果。',
-                                                preserve: ['当前构图', '现有光影'],
-                                                adjust: ['主体还原度']
-                                            },
-                                            en: {
-                                                summary: 'I can keep the current composition and continue improving the subject result.',
-                                                preserve: ['current composition', 'existing lighting'],
-                                                adjust: ['subject fidelity']
-                                            }
-                                        }
+                        generatedArtifact,
+                        deps: {
+                            executeAttempt: (runtimeInput: any) => executeAutoRevisionAttempt({
+                                ...runtimeInput,
+                                taskRuntime: {
+                                    publishAssetAndPersistJob: (nestedInput: any) => taskRuntime.publishAssetAndPersistJob(nestedInput)
+                                },
+                                generateImageImpl: (params, projectId, onStartCb, signal, taskIdArg, historyArg, onThoughtImage) => generateImage(
+                                    params,
+                                    projectId,
+                                    onStartCb,
+                                    signal,
+                                    taskIdArg,
+                                    historyArg,
+                                    (imageData) => {
+                                        setThoughtImages(prev => [...prev, {
+                                            id: crypto.randomUUID(),
+                                            ...imageData,
+                                            timestamp: Date.now()
+                                        }]);
+                                        onThoughtImage?.(imageData);
+                                    }
+                                )
+                            }),
+                            executeReview: (runtimeInput: any) => executeAutoRevisionReview({
+                                ...runtimeInput,
+                                taskRuntime: {
+                                    buildCriticContext: ({
+                                        assistantMode,
+                                        negativePrompt,
+                                        selectedReferences,
+                                        consistencyProfile,
+                                        searchContext
+                                    }) => buildImageCriticContext({
+                                        assistantMode: normalizeAssistantMode(assistantMode),
+                                        negativePrompt,
+                                        selectedReferences: selectedReferences as SelectedReferenceRecord[],
+                                        consistencyProfile,
+                                        searchContext
+                                    }),
+                                    reviewAsset: (reviewAssetTarget: AssetItem, reviewPrompt: string, criticContext: string) => reviewGeneratedAsset(reviewAssetTarget, reviewPrompt, criticContext),
+                                    buildDefaultRequiresAction: ({ prompt, latestAssetId, review }: any) => buildDefaultRefinePromptRequiresAction({
+                                        prompt,
+                                        latestAssetId,
+                                        review
                                     })
-                                }, 'refine_prompt', {
-                                    message: {
-                                        zh: '我已经想好这一版接下来怎么优化了。如果你愿意，我可以继续。',
-                                        en: 'I already know how I would improve this version next. If you want, I can continue from here.'
-                                    }
-                                }, {
-                                    latestAssetId: revisedAsset.id
-                                })
-                            })
-                            : undefined,
-                        metadata: {
-                            ...(toolResult.metadata || {}),
-                            revisedPrompt,
-                            revision: {
-                                stepId: revisionStepId,
-                                reason: review.revisionReason || review.summary
-                            },
-                            review: {
-                                decision: secondReview.decision,
-                                summary: secondReview.summary,
-                                warnings: secondReview.warnings,
-                                issues: secondReview.issues,
-                                quality: secondReview.quality,
-                                trace: secondReview.reviewTrace,
-                                stepId: secondReviewStepId
-                            }
-                        }
-                    };
-
-                    if (secondReview.decision !== 'accept') {
-                        const blockedTask = { ...newTask, status: 'ACTION_REQUIRED' as const, error: secondReview.summary };
-                        persistJob({
-                            status: 'requires_action',
-                            currentStepId: undefined,
-                            lastError: secondReview.summary,
-                            requiresAction: revisedToolResult.requiresAction || {
-                                type: 'refine_prompt',
-                                message: 'I already know how I would improve this version next. If you want, I can continue from here.',
-                                payload: buildRequiresActionPayload(revisedPrompt, {
-                                    summary: secondReview.summary,
-                                    warnings: secondReview.warnings,
-                                    revisedPrompt,
-                                    reviewPlan: secondReview.reviewPlan || buildOptimizationPlan({
-                                        summary: 'I can keep the current composition and continue improving the subject result.',
-                                        adjust: ['subject fidelity'],
-                                        confidence: 'medium',
-                                        localized: {
-                                            zh: {
-                                                summary: '我可以保留当前构图，继续优化主体结果。',
-                                                preserve: ['当前构图', '现有光影'],
-                                                adjust: ['主体还原度']
-                                            },
-                                            en: {
-                                                summary: 'I can keep the current composition and continue improving the subject result.',
-                                                preserve: ['current composition', 'existing lighting'],
-                                                adjust: ['subject fidelity']
-                                            }
-                                        }
-                                    })
-                                }, 'refine_prompt', {
-                                    message: {
-                                        zh: '我已经想好这一版接下来怎么优化了。如果你愿意，我可以继续。',
-                                        en: 'I already know how I would improve this version next. If you want, I can continue from here.'
-                                    }
-                                }, {
-                                    latestAssetId: revisedAsset.id
-                                })
-                            },
-                            steps: [...stepsAfterRevision, finalizedRevisedGenerationStep, finalizedSecondReviewStep],
-                            artifacts: [...agentJob.artifacts, generatedArtifact, reviewArtifact, revisionArtifact, revisedGeneratedArtifact, secondReviewArtifact]
-                        }).catch(console.error);
-                        if (currentMode !== AppMode.IMAGE) {
-                            setTasks(prev => prev.map(t => t.id === taskId ? blockedTask : t));
-                            saveTask(blockedTask).catch(console.error);
-                        }
-                        addToast('info', language === 'zh' ? '我建议继续优化这一版' : 'Refinement Suggestion', secondReview.summary);
-                        return revisedToolResult;
-                    }
-
-                    persistJob({
-                        status: 'completed',
-                        currentStepId: undefined,
-                        lastError: undefined,
-                        requiresAction: undefined,
-                        steps: [...stepsAfterRevision, finalizedRevisedGenerationStep, finalizedSecondReviewStep],
-                        artifacts: [...agentJob.artifacts, generatedArtifact, reviewArtifact, revisionArtifact, revisedGeneratedArtifact, secondReviewArtifact]
-                    }).catch(console.error);
-                    if (currentMode !== AppMode.IMAGE) {
-                        setTasks(prev => prev.map(t => t.id === taskId ? { ...t, status: 'COMPLETED' } : t));
-                        saveTask({ ...newTask, status: 'COMPLETED' }).catch(console.error);
-                    }
-                    runMemoryExtractionTask(currentProjectId, historyOverride || chatHistory, userKey).catch(err => {
-                        console.error('[App] Background memory extraction failed:', err);
-                    });
-                    if (currentMode !== AppMode.IMAGE) {
-                        playSuccessSound();
-                    }
-                    if (activeParams.continuousMode) handleUseAsReference(revisedAsset, false);
-                    return revisedToolResult;
-                }
-
-                if (review.decision === 'requires_action') {
-                    const blockedTask = { ...newTask, status: 'ACTION_REQUIRED' as const, error: review.summary };
-                    persistJob({
-                        status: 'requires_action',
-                        currentStepId: undefined,
-                        lastError: review.summary,
-                        requiresAction: review.requiresAction || {
-                            type: 'review_output',
-                            message: 'I already know the next refinement I would make. If you want, I can continue from here.',
-                            payload: buildRequiresActionPayload(genParams.prompt, {
-                                summary: review.summary,
-                                warnings: review.warnings,
-                                revisedPrompt: review.revisedPrompt,
-                                reviewPlan: review.reviewPlan || buildOptimizationPlan({
-                                    summary: 'I can preserve the current result and continue with a focused refinement pass.',
-                                    confidence: 'medium',
-                                    localized: {
-                                        zh: {
-                                            summary: '我可以保留当前结果，并继续执行一轮更聚焦的优化。',
-                                            preserve: ['当前结果方向'],
-                                            adjust: ['局部优化重点']
-                                        },
-                                        en: {
-                                            summary: 'I can preserve the current result and continue with a focused refinement pass.',
-                                            preserve: ['current result direction'],
-                                            adjust: ['targeted refinements']
-                                        }
-                                    }
-                                })
-                            }, 'review_output', {
-                                message: {
-                                    zh: '我已经整理好下一步优化方向了。如果你愿意，我可以继续。',
-                                    en: 'I already know the next refinement I would make. If you want, I can continue from here.'
                                 }
-                            })
+                            }),
+                            resolveAutoRevision: (runtimeInput: any) => resolveAutoRevision({
+                                ...runtimeInput,
+                                deps: {
+                                    resolveAutoRevision: (job: AgentJob, shouldSyncTaskView: boolean) => taskRuntime.resolveAutoRevision(job, shouldSyncTaskView),
+                                    addToast,
+                                    runMemoryExtraction: () => runMemoryExtractionTask(currentProjectId, historyOverride || chatHistory, userKey).catch(err => {
+                                        console.error('[App] Background memory extraction failed:', err);
+                                    }),
+                                    playSuccessSound,
+                                    useAsReference: handleUseAsReference
+                                },
+                                now: () => Date.now()
+                            }),
+                            playVisibleSuccess: () => {
+                                playVisibleSuccess();
+                            },
+                            onVisibleAsset: (asset: AssetItem) => {
+                                latestVisibleAssetRef.current = asset;
+                            },
+                            normalizeAssistantMode,
+                            now: () => Date.now()
                         },
-                        steps: [...agentJob.steps.filter(step => step.id !== reviewStepId), finalizedReviewStep],
-                        artifacts: [...agentJob.artifacts, generatedArtifact, reviewArtifact]
-                    }).catch(console.error);
-                    if (currentMode !== AppMode.IMAGE) {
-                        setTasks(prev => prev.map(t => t.id === taskId ? blockedTask : t));
-                        saveTask(blockedTask).catch(console.error);
-                    }
-                    addToast('info', language === 'zh' ? '我建议继续优化这一版' : 'Refinement Suggestion', review.summary);
-                    return reviewedToolResult;
-                }
-
-                persistJob({
-                    status: 'completed',
-                    currentStepId: undefined,
-                    lastError: undefined,
-                    requiresAction: undefined,
-                    steps: [...agentJob.steps.filter(step => step.id !== reviewStepId), finalizedReviewStep],
-                    artifacts: [...agentJob.artifacts, generatedArtifact, reviewArtifact]
-                }).catch(console.error);
-                if (currentMode !== AppMode.IMAGE) {
-                    setTasks(prev => prev.map(t => t.id === taskId ? { ...t, status: 'COMPLETED' } : t));
-                    saveTask({ ...newTask, status: 'COMPLETED' }).catch(console.error);
-                }
-                if (currentMode === AppMode.IMAGE) {
-                    // Background Memory Extraction Task (writes to Daily Logs only)
-                    // Consolidation is now decoupled - runs at most once per day at app startup
-                    runMemoryExtractionTask(currentProjectId, historyOverride || chatHistory, userKey).catch(err => {
-                        console.error('[App] Background memory extraction failed:', err);
-                    });
-                }
-                if (currentMode !== AppMode.IMAGE) {
-                    playSuccessSound();
-                }
-                if (activeParams.continuousMode && asset.type === 'IMAGE') handleUseAsReference(asset, false);
-                return reviewedToolResult;
-            } catch (error: any) {
-                if (error.message === 'Cancelled' || error.name === 'AbortError') {
-                    const cancelledAt = Date.now();
-                    const cancelledSteps = agentJob.steps.map(step => step.id === stepId
-                        ? {
-                            ...step,
-                            status: 'cancelled' as const,
-                            endTime: cancelledAt,
-                            error: 'Cancelled by user'
-                        }
-                        : step
-                    );
-                    persistJob({
-                        status: 'cancelled',
-                        currentStepId: undefined,
-                        lastError: 'Cancelled by user',
-                        steps: cancelledSteps
-                    }).catch(console.error);
-                    setTasks(prev => prev.filter(t => t.id !== taskId));
-                    deleteTask(taskId).catch(e => console.debug('[App] deleteTask failed:', e)); // Remove from DB
-                    try {
-                        await permanentlyDeleteAssetFromDB(taskId);
-                    } catch (cleanupErr) {
-                        console.debug('[App] Cleanup after cancel failed:', cleanupErr);
-                    } finally {
-                        if (activeProjectIdRef.current === currentProjectId) {
-                            setAssets(prev => prev.filter(a => a.id !== taskId));
-                        }
-                    }
-                    return {
-                        jobId,
+                    }),
+                    resolvePrimaryReview: ({ review, genParams, reviewedToolResult, generatedArtifact, reviewArtifact, finalizedReviewStep, asset }: any) => resolvePrimaryReview({
+                        mode: currentMode,
+                        job: getAgentJob(),
+                        finalizedReviewStep,
+                        generatedArtifact,
+                        reviewArtifact,
+                        review,
+                        prompt: genParams.prompt,
+                        reviewedToolResult,
+                        continuousMode: activeParams.continuousMode,
+                        asset,
+                        deps: {
+                            resolvePrimaryReview: (job: AgentJob, shouldSyncTaskView: boolean) => taskRuntime.resolvePrimaryReview(job, shouldSyncTaskView),
+                            addToast,
+                            runMemoryExtraction: () => runMemoryExtractionTask(currentProjectId, historyOverride || chatHistory, userKey).catch(err => {
+                                console.error('[App] Background memory extraction failed:', err);
+                            }),
+                            playSuccessSound,
+                            useAsReference: handleUseAsReference
+                        },
+                        now: () => Date.now()
+                    }),
+                    resolveGenerationFailure: ({ error, latestVisibleAsset, taskMarkedVisibleComplete }: any) => resolveGenerationFailure({
+                        mode: currentMode,
+                        agentJob: getAgentJob(),
                         stepId,
-                        toolName: currentMode === AppMode.IMAGE ? 'generate_image' : 'generate_video',
-                        status: 'error',
-                        error: 'Cancelled by user',
-                        retryable: false,
-                        metadata: {
-                            taskId,
-                            lifecycleStatus: 'cancelled'
+                        taskId,
+                        latestVisibleAsset,
+                        taskMarkedVisibleComplete,
+                        error,
+                        deps: {
+                            taskRuntime: {
+                                cancel: (job: AgentJob, id: string) => taskRuntime.cancel(job, id),
+                                recoverVisibleAsset: (runtimeInput: any) => taskRuntime.recoverVisibleAsset(runtimeInput),
+                                fail: (job: AgentJob) => taskRuntime.fail(job)
+                            },
+                            addToast,
+                            playErrorSound,
+                            setCooldown: setVideoCooldownEndTime,
+                            getFriendlyError,
+                            language,
+                            now: () => Date.now()
                         }
-                    };
-                } else {
-                    const errorText = error.message || "";
-                    if (currentMode === AppMode.IMAGE && latestVisibleAsset) {
-                        persistJob({
-                            status: 'completed',
-                            currentStepId: undefined,
-                            lastError: errorText
-                        }).catch(console.error);
-                        if (!taskMarkedVisibleComplete) {
-                            markTaskVisibleComplete().catch(console.error);
-                        }
-                        console.warn('[App] Review/post-processing failed after image was already shown:', errorText);
-                        addToast('info', language === 'zh' ? '图片已生成，后续评审未完成' : 'Image ready; post-review did not finish', errorText);
-                        return {
-                            jobId,
-                            stepId,
-                            toolName: currentMode === AppMode.IMAGE ? 'generate_image' : 'generate_video',
-                            status: 'success',
-                            artifactIds: [latestVisibleAsset.id],
-                            message: 'Image generation completed',
-                            metadata: {
-                                taskId,
-                                assetId: latestVisibleAsset.id,
-                                lifecycleStatus: 'completed',
-                                reviewError: errorText
-                            }
-                        };
-                    }
-                    const friendlyError = getFriendlyError(errorText);
-                    const failedTask = { ...newTask, status: 'FAILED' as const, error: errorText };
-                    const failedAt = Date.now();
-                    const failedSteps = agentJob.steps.map(step => step.id === stepId
-                        ? {
-                            ...step,
-                            status: 'failed' as const,
-                            endTime: failedAt,
-                            error: errorText
-                        }
-                        : step
-                    );
-                    persistJob({
-                        status: 'failed',
-                        currentStepId: undefined,
-                        lastError: errorText,
-                        steps: failedSteps
-                    }).catch(console.error);
-                    setTasks(prev => prev.map(t => t.id === taskId ? failedTask : t));
-                    saveTask(failedTask).catch(e => console.debug('[App] saveTask failed:', e)); // Persist failure (catch unhandled rejections)
-                    try {
-                        await permanentlyDeleteAssetFromDB(taskId);
-                    } catch (cleanupErr) {
-                        console.debug('[App] Cleanup after error failed:', cleanupErr);
-                    } finally {
-                        // Guarantee UI cleanup regardless of IndexedDB failures
-                        if (activeProjectIdRef.current === currentProjectId) {
-                            setAssets(prev => prev.filter(a => a.id !== taskId));
-                        }
-                    }
-                    playErrorSound();
-                    addToast('error', t('task.failed'), friendlyError);
-                    if (errorText.includes('429') || errorText.includes('Quota') || errorText.includes('RESOURCE_EXHAUSTED')) {
-                        setVideoCooldownEndTime(Date.now() + 60000);
-                    }
-                    return {
-                        jobId,
-                        stepId,
-                        toolName: currentMode === AppMode.IMAGE ? 'generate_image' : 'generate_video',
-                        status: 'error',
-                        error: errorText,
-                        retryable: errorText.includes('429') || errorText.includes('Quota') || errorText.includes('RESOURCE_EXHAUSTED'),
-                        metadata: {
-                            taskId,
-                            lifecycleStatus: 'failed'
-                        }
-                    };
-                }
-            } finally { delete taskControllers.current[taskId]; }
+                    })
+                })
+            });
         };
         const count = activeParams.numberOfImages || 1;
         const tasksToLaunch = [];
@@ -2392,8 +1505,7 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
     };
 
     const handleCancelTask = (taskId: string) => {
-        setTasks(prev => prev.filter(t => t.id !== taskId));
-        deleteTask(taskId); // Remove from DB
+        taskViewDismissal.dismissById(taskId).catch(console.error);
         if (taskControllers.current[taskId]) {
             taskControllers.current[taskId].abort();
             permanentlyDeleteAssetFromDB(taskId).catch(console.error);
@@ -2401,11 +1513,21 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
         }
     };
 
+    const handleDismissTaskView = (taskId: string) => {
+        taskViewDismissal.dismissById(taskId).catch(console.error);
+    };
+
+    const handleTaskViewIntent = (intent: TaskViewIntent) => {
+        if (intent.type === 'cancel_job') {
+            handleCancelTask(intent.taskId);
+            return;
+        }
+
+        handleDismissTaskView(intent.taskId);
+    };
+
     const handleClearCompletedTasks = () => {
-        setTasks(prev => {
-            prev.filter(t => t.status === 'COMPLETED' || t.status === 'FAILED' || t.status === 'ACTION_REQUIRED').forEach(t => deleteTask(t.id));
-            return prev.filter(t => t.status === 'GENERATING' || t.status === 'QUEUED' || t.status === 'REVIEWING');
-        });
+        taskViewDismissal.clearDismissable().catch(console.error);
     };
     const openConfirmDeleteProject = (projectId: string) => {
         const project = projects.find(p => p.id === projectId);
@@ -2787,7 +1909,7 @@ ${regionLines.length ? '\nSpecific regions:\n' + regionLines.join('\n') : ''}
                 </div>
             </div>
 
-            <TaskCenter tasks={tasks} onRemoveTask={handleCancelTask} onClearCompleted={handleClearCompletedTasks} />
+            <TaskCenter tasks={tasks} onTaskIntent={handleTaskViewIntent} onClearCompleted={handleClearCompletedTasks} />
             <SettingsDialog isOpen={showSettings} onClose={() => setShowSettings(false)} onApiKeyChange={() => setVeoVerified(!!getUserApiKey())} projectId={activeProjectId} />
             <ConfirmDialog isOpen={confirmDialog.isOpen} title={confirmDialog.title} message={confirmDialog.message} onConfirm={confirmDialog.action} onCancel={() => setConfirmDialog(prev => ({ ...prev, isOpen: false }))} confirmLabel={confirmDialog.confirmLabel} cancelLabel={confirmDialog.cancelLabel} isDestructive={confirmDialog.isDestructive} />
             {comparisonAssets && <ComparisonView assetA={comparisonAssets[0]} assetB={comparisonAssets[1]} onClose={() => setComparisonAssets(null)} />}

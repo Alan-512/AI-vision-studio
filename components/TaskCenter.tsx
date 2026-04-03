@@ -1,16 +1,17 @@
 
 import React, { useState, useEffect } from 'react';
-import { BackgroundTask } from '../types';
+import { BackgroundTaskView, TaskViewIntent } from '../types';
 import { Loader2, CheckCircle, AlertCircle, Image, Video, Clock, X, ChevronUp, ChevronDown, List } from 'lucide-react';
 import { useLanguage } from '../contexts/LanguageContext';
+import { createTaskViewIntent, isActiveTaskView } from '../services/taskReadModel';
 
 interface TaskCenterProps {
-  tasks: BackgroundTask[];
+  tasks: BackgroundTaskView[];
   onClearCompleted: () => void;
-  onRemoveTask: (taskId: string) => void;
+  onTaskIntent: (intent: TaskViewIntent) => void;
 }
 
-export const TaskCenter: React.FC<TaskCenterProps> = ({ tasks, onClearCompleted, onRemoveTask }) => {
+export const TaskCenter: React.FC<TaskCenterProps> = ({ tasks, onClearCompleted, onTaskIntent }) => {
   const { t, language } = useLanguage();
   const reviewLabel = language === 'zh' ? '评审中' : 'Reviewing';
   const actionRequiredLabel = language === 'zh' ? '待你处理' : 'Needs attention';
@@ -121,7 +122,8 @@ export const TaskCenter: React.FC<TaskCenterProps> = ({ tasks, onClearCompleted,
           {/* List */}
           <div className="overflow-y-auto p-2 space-y-2 custom-scrollbar">
             {sortedTasks.map(task => {
-              const isActive = task.status === 'QUEUED' || task.status === 'GENERATING' || task.status === 'REVIEWING';
+              const closeIntent = createTaskViewIntent(task);
+              const isActive = isActiveTaskView(task);
               return (
                 <div key={task.id} className="bg-black/20 rounded-lg p-3 border border-dark-border/50 relative group">
                   <div className="flex items-start justify-between gap-3">
@@ -172,9 +174,9 @@ export const TaskCenter: React.FC<TaskCenterProps> = ({ tasks, onClearCompleted,
 
                     {/* Remove/Cancel Button */}
                     <button
-                      onClick={() => onRemoveTask(task.id)}
+                      onClick={() => onTaskIntent(closeIntent)}
                       className={`absolute top-2 right-2 p-1 rounded transition-all ${isActive ? 'text-gray-400 hover:text-red-400 bg-white/5 hover:bg-red-500/10' : 'text-gray-600 hover:text-white hover:bg-white/10 opacity-0 group-hover:opacity-100'}`}
-                      title={isActive ? "Cancel Task" : "Remove"}
+                      title={closeIntent.type === 'cancel_job' ? "Cancel Task" : "Remove"}
                     >
                       <X size={14} />
                     </button>
