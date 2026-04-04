@@ -24,6 +24,7 @@ describe('appGenerationRequestRuntime', () => {
       });
       expect(deps.taskId).toBe('task-1');
       expect(typeof deps.playVisibleSuccess).toBe('function');
+      expect(input.activeParams.numberOfImages).toBe(1);
       return { status: 'success', summary: input.currentProjectId } as AgentToolResult;
     });
 

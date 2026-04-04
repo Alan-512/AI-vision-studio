@@ -54,6 +54,10 @@ export const executeAppGenerationRequest = async ({
   count,
   createLaunchInput: index => index,
   launchPreparedTask: async (_index: number) => {
+    const taskParams: GenerationParams = {
+      ...activeParams,
+      numberOfImages: 1
+    };
     const latestVisibleAssetRef = { current: null as any };
     const taskMarkedVisibleCompleteRef = { current: false };
     let successSoundPlayed = false;
@@ -68,7 +72,7 @@ export const executeAppGenerationRequest = async ({
     return launchPreparedTask({
       currentProjectId,
       currentMode,
-      activeParams,
+      activeParams: taskParams,
       resolvedJobSource,
       triggerMessageTimestamp,
       searchContextOverride,
@@ -88,7 +92,7 @@ export const executeAppGenerationRequest = async ({
         taskId,
         jobId,
         currentProjectId,
-        activeParams,
+        activeParams: taskParams,
         initialPendingAsset,
         signal,
         selectedReferenceRecords,

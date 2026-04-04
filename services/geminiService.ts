@@ -6,7 +6,7 @@ import { getAlwaysOnMemorySnippet } from "./memoryService";
 import { compactConversationContext, serializeMessagesForSummary } from "./contextRuntime";
 import { buildImageCriticContextText, type ImageCriticContextInput } from "./imageCriticService";
 import { executeInternalToolCall, normalizeSupportedToolName, runInternalToolResultLoop, stripVisibleToolPlanningText } from "./internalToolRuntime";
-import { buildGoogleSearchTools, convertHistoryToNativeFormat } from "./chatContentRuntime";
+import { buildGoogleSearchTools, convertHistoryToNativeFormat, getRoleInstruction, resolveSmartAssetRole } from "./chatContentRuntime";
 import { generateImageTool, memorySearchTool, updateMemoryTool } from "./geminiToolDeclarationRuntime";
 import { buildSearchPhaseInstruction, executeSearchPhase, finalizeSearchPhaseResult } from "./searchPhaseRuntime";
 import { executeChatStreamLoop } from "./chatStreamLoopRuntime";

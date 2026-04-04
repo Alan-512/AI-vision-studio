@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Unified Agent Kernel Architecture</title>
+  <style>
+    :root {
+      --bg: #f7f5f0;
+      --panel: #fffdfa;
+      --ink: #1f2937;
+      --muted: #5b6472;
+      --line: #d8dde6;
+      --surface: #dff2ec;
+      --kernel: #e7ecff;
+      --toolbox: #fff0d8;
+      --provider: #ffe3e3;
+      --storage: #ece7ff;
+      --projection: #e9f4ff;
+      --shadow: rgba(34, 42, 53, 0.08);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: "PingFang SC", "Noto Sans SC", "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--ink);
+    }
+
+    .page {
+      max-width: 1440px;
+      margin: 0 auto;
+      padding: 40px 32px 64px;
+    }
+
+    .header {
+      margin-bottom: 28px;
+    }
+
+    .eyebrow {
+      color: #0f766e;
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      margin-bottom: 10px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 34px;
+      line-height: 1.15;
+      letter-spacing: -0.02em;
+    }
+
+    .subtitle {
+      margin-top: 10px;
+      max-width: 960px;
+      color: var(--muted);
+      font-size: 16px;
+      line-height: 1.6;
+    }
+
+    .meta {
+      margin-top: 12px;
+      color: #748094;
+      font-size: 13px;
+    }
+
+    .diagram-card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      padding: 22px 22px 18px;
+      box-shadow: 0 12px 30px var(--shadow);
+      margin-top: 24px;
+    }
+
+    .diagram-title {
+      font-size: 20px;
+      font-weight: 700;
+      margin: 0 0 4px;
+    }
+
+    .diagram-note {
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.6;
+      margin: 0 0 18px;
+    }
+
+    svg {
+      width: 100%;
+      height: auto;
+      display: block;
+      overflow: visible;
+    }
+
+    .legend {
+      margin-top: 14px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px 16px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .legend span {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .swatch {
+      width: 14px;
+      height: 14px;
+      border-radius: 4px;
+      border: 1px solid rgba(31, 41, 55, 0.1);
+    }
+
+    .footnote {
+      margin-top: 28px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.7;
+    }
+
+    .box {
+      stroke: #b8c1cf;
+      stroke-width: 1.5;
+      rx: 22;
+      ry: 22;
+    }
+
+    .node {
+      stroke: #b8c1cf;
+      stroke-width: 1.3;
+      rx: 16;
+      ry: 16;
+    }
+
+    .small {
+      font-size: 13px;
+      fill: #5b6472;
+    }
+
+    .label {
+      font-size: 17px;
+      font-weight: 700;
+      fill: #18212f;
+    }
+
+    .sub {
+      font-size: 13px;
+      fill: #4b5563;
+    }
+
+    .quiet {
+      font-size: 12px;
+      fill: #6b7280;
+    }
+
+    .arrow {
+      stroke: #4b5563;
+      stroke-width: 2.2;
+      fill: none;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+
+    .dashed {
+      stroke-dasharray: 7 7;
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header class="header">
+      <div class="eyebrow">Unified Agent Kernel</div>
+      <h1>AI 对话生图页面统一内核架构图</h1>
+      <p class="subtitle">
+        这版图对应新的 unified-agent-kernel 方案：把聊天 loop、图像生成任务系统、review、requires-action、
+        resume 与 cancel 收到同一个 AgentKernel 下，Surface 只做输入与投影订阅，Toolbox 负责统一调度和语义校验。
+      </p>
+      <div class="meta">Diagram type: overview + runtime flow · Format: HTML+SVG · Style: reference-style</div>
+    </header>
+
+    <section class="diagram-card">
+      <h2 class="diagram-title">1. 总览图</h2>
+      <p class="diagram-note">
+        左边是页面与用户交互层，中间是唯一执行真相所在的 Kernel，右边是 Toolbox 与 Provider。底部 persistence strip
+        持有写模型和投影缓存，任务卡、资产可见态、transcript 都从写模型派生。
+      </p>
+      <svg viewBox="0 0 1320 760" role="img" aria-label="Unified agent kernel overview diagram">
+        <defs>
+          <marker id="arrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#4b5563"></path>
+          </marker>
+        </defs>
+
+        <rect x="28" y="52" width="350" height="500" class="box" fill="var(--surface)"></rect>
+        <text x="58" y="92" class="label">Surface Adapters</text>
+        <text x="58" y="115" class="small">ChatInterface / App / TaskCenter</text>
+
+        <rect x="66" y="150" width="274" height="86" class="node" fill="#ffffff"></rect>
+        <text x="92" y="185" class="label">ChatInterface</text>
+        <text x="92" y="208" class="sub">collect prompt · subscribe transcript</text>
+
+        <rect x="66" y="262" width="274" height="86" class="node" fill="#ffffff"></rect>
+        <text x="92" y="297" class="label">App Composition Root</text>
+        <text x="92" y="320" class="sub">submit commands · wire controllers</text>
+
+        <rect x="66" y="374" width="274" height="86" class="node" fill="#ffffff"></rect>
+        <text x="92" y="409" class="label">TaskCenter</text>
+        <text x="92" y="432" class="sub">projection intents only</text>
+
+        <rect x="424" y="52" width="430" height="500" class="box" fill="var(--kernel)"></rect>
+        <text x="454" y="92" class="label">AgentKernel</text>
+        <text x="454" y="115" class="small">唯一执行 owner</text>
+
+        <rect x="462" y="144" width="160" height="94" class="node" fill="#ffffff"></rect>
+        <text x="488" y="180" class="label">Command</text>
+        <text x="488" y="203" class="sub">SubmitUserTurn</text>
+        <text x="488" y="221" class="sub">Cancel / Resume / Resolve</text>
+
+        <rect x="656" y="144" width="160" height="94" class="node" fill="#ffffff"></rect>
+        <text x="682" y="180" class="label">TurnRuntimeState</text>
+        <text x="682" y="203" class="sub">ephemeral turn truth</text>
+        <text x="682" y="221" class="sub">stream / planned tools</text>
+
+        <rect x="462" y="282" width="354" height="120" class="node" fill="#ffffff"></rect>
+        <text x="488" y="320" class="label">AgentJob</text>
+        <text x="488" y="343" class="sub">persisted execution truth for recoverable work</text>
+        <text x="488" y="366" class="sub">generation / review / requires-action / retry / resume</text>
+
+        <rect x="462" y="432" width="354" height="88" class="node" fill="#ffffff"></rect>
+        <text x="488" y="468" class="label">Transition Events</text>
+        <text x="488" y="491" class="sub">kernel decisions drive projection rebuilds</text>
+
+        <rect x="900" y="52" width="392" height="500" class="box" fill="var(--toolbox)"></rect>
+        <text x="930" y="92" class="label">Toolbox + Provider Band</text>
+        <text x="930" y="115" class="small">统一 registry / validation / execution policy</text>
+
+        <rect x="938" y="140" width="316" height="84" class="node" fill="#ffffff"></rect>
+        <text x="964" y="175" class="label">Tool Registry + Validation</text>
+        <text x="964" y="198" class="sub">sequence semantics · policy · classification</text>
+
+        <rect x="938" y="250" width="316" height="82" class="node" fill="#ffffff"></rect>
+        <text x="964" y="285" class="label">interactive_tool</text>
+        <text x="964" y="308" class="sub">memory_search / update_memory</text>
+
+        <rect x="938" y="352" width="316" height="82" class="node" fill="#ffffff"></rect>
+        <text x="964" y="387" class="label">job_tool</text>
+        <text x="964" y="410" class="sub">generate_image / generate_video</text>
+
+        <rect x="938" y="454" width="316" height="82" class="node" fill="#ffffff"></rect>
+        <text x="964" y="489" class="label">kernel_step</text>
+        <text x="964" y="512" class="sub">review_asset / resolve_requires_action</text>
+
+        <rect x="28" y="598" width="1264" height="116" class="box" fill="var(--storage)"></rect>
+        <text x="58" y="638" class="label">Persistence + Derived Projections</text>
+        <text x="58" y="661" class="small">write models are authoritative; task/transcript/asset views are rebuilt from them</text>
+
+        <rect x="360" y="626" width="178" height="60" class="node" fill="#ffffff"></rect>
+        <text x="388" y="662" class="label">AgentJob Store</text>
+
+        <rect x="562" y="626" width="178" height="60" class="node" fill="#ffffff"></rect>
+        <text x="604" y="662" class="label">Asset Store</text>
+
+        <rect x="764" y="626" width="178" height="60" class="node" fill="#ffffff"></rect>
+        <text x="783" y="662" class="label">Transcript Store</text>
+
+        <rect x="966" y="626" width="258" height="60" class="node" fill="#ffffff"></rect>
+        <text x="994" y="654" class="label">Derived Views</text>
+        <text x="994" y="674" class="sub">task card / visible asset / transcript projection</text>
+
+        <path d="M 340 193 C 390 193, 412 180, 462 180" class="arrow" marker-end="url(#arrow)"></path>
+        <path d="M 340 305 C 390 305, 412 305, 462 305" class="arrow" marker-end="url(#arrow)"></path>
+        <path d="M 340 417 C 390 417, 412 478, 462 478" class="arrow dashed" marker-end="url(#arrow)"></path>
+
+        <path d="M 622 191 C 638 191, 640 191, 656 191" class="arrow" marker-end="url(#arrow)"></path>
+        <path d="M 816 191 C 860 191, 880 182, 938 182" class="arrow" marker-end="url(#arrow)"></path>
+        <path d="M 1096 224 C 1096 235, 1096 237, 1096 250" class="arrow" marker-end="url(#arrow)"></path>
+        <path d="M 1096 332 C 1096 341, 1096 343, 1096 352" class="arrow" marker-end="url(#arrow)"></path>
+        <path d="M 1096 434 C 1096 443, 1096 445, 1096 454" class="arrow" marker-end="url(#arrow)"></path>
+
+        <path d="M 639 402 C 639 470, 470 520, 470 626" class="arrow" marker-end="url(#arrow)"></path>
+        <path d="M 639 402 C 639 500, 650 560, 650 626" class="arrow" marker-end="url(#arrow)"></path>
+        <path d="M 736 191 C 736 470, 853 560, 853 626" class="arrow" marker-end="url(#arrow)"></path>
+        <path d="M 470 686 C 470 706, 1100 706, 1100 686" class="arrow dashed" marker-end="url(#arrow)"></path>
+
+        <path d="M 1096 536 C 1096 584, 1096 588, 1096 626" class="arrow" marker-end="url(#arrow)"></path>
+        <path d="M 1096 686 C 1096 724, 215 724, 215 460" class="arrow dashed" marker-end="url(#arrow)"></path>
+      </svg>
+
+      <div class="legend">
+        <span><i class="swatch" style="background: var(--surface)"></i> Surface adapters</span>
+        <span><i class="swatch" style="background: var(--kernel)"></i> Kernel ownership</span>
+        <span><i class="swatch" style="background: var(--toolbox)"></i> Toolbox / provider band</span>
+        <span><i class="swatch" style="background: var(--storage)"></i> Persistence + derived views</span>
+      </div>
+    </section>
+
+    <section class="diagram-card">
+      <h2 class="diagram-title">2. 核心运行时循环</h2>
+      <p class="diagram-note">
+        这张图只画最关键的 loop：用户 turn 进入 Kernel，LLM 负责 planning，Toolbox 负责分类和执行，Kernel 决定是 reinject、
+        持久化 `AgentJob`，还是结束 turn。`interactive_tool`、`job_tool`、`kernel_step` 的处理语义明确分开。
+      </p>
+      <svg viewBox="0 0 1320 560" role="img" aria-label="Unified agent kernel runtime loop">
+        <defs>
+          <marker id="arrow2" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#4b5563"></path>
+          </marker>
+        </defs>
+
+        <rect x="70" y="92" width="140" height="70" class="node" fill="var(--surface)"></rect>
+        <text x="114" y="132" class="label">User</text>
+
+        <rect x="250" y="92" width="170" height="70" class="node" fill="var(--surface)"></rect>
+        <text x="287" y="132" class="label">Surface</text>
+
+        <rect x="470" y="72" width="210" height="110" class="node" fill="var(--kernel)"></rect>
+        <text x="510" y="118" class="label">AgentKernel</text>
+        <text x="510" y="141" class="sub">turn + job mutation owner</text>
+
+        <rect x="730" y="72" width="200" height="110" class="node" fill="var(--provider)"></rect>
+        <text x="786" y="118" class="label">LLM Planner</text>
+        <text x="786" y="141" class="sub">plan tools or final response</text>
+
+        <rect x="980" y="72" width="220" height="110" class="node" fill="var(--toolbox)"></rect>
+        <text x="1032" y="112" class="label">Toolbox</text>
+        <text x="1032" y="135" class="sub">classify + validate + dispatch</text>
+        <text x="1032" y="158" class="sub">interactive / job / kernel_step</text>
+
+        <rect x="980" y="258" width="220" height="88" class="node" fill="#ffffff"></rect>
+        <text x="1032" y="296" class="label">Providers / Executors</text>
+        <text x="1032" y="319" class="sub">Gemini / Veo / Search / Memory</text>
+
+        <rect x="460" y="408" width="230" height="86" class="node" fill="var(--storage)"></rect>
+        <text x="522" y="445" class="label">AgentJob Store</text>
+        <text x="522" y="468" class="sub">persist recoverable transitions</text>
+
+        <rect x="760" y="408" width="300" height="86" class="node" fill="var(--projection)"></rect>
+        <text x="812" y="445" class="label">Derived Projections</text>
+        <text x="812" y="468" class="sub">task view / transcript / visible assets</text>
+
+        <path d="M 210 127 C 224 127, 232 127, 250 127" class="arrow" marker-end="url(#arrow2)"></path>
+        <path d="M 420 127 C 438 127, 448 127, 470 127" class="arrow" marker-end="url(#arrow2)"></path>
+        <path d="M 680 127 C 700 127, 708 127, 730 127" class="arrow" marker-end="url(#arrow2)"></path>
+        <path d="M 830 182 C 830 218, 904 218, 980 218" class="arrow" marker-end="url(#arrow2)"></path>
+        <path d="M 1090 182 C 1090 216, 1090 228, 1090 258" class="arrow" marker-end="url(#arrow2)"></path>
+        <path d="M 980 302 C 900 302, 796 302, 680 302" class="arrow" marker-end="url(#arrow2)"></path>
+        <path d="M 680 302 C 616 302, 575 248, 575 182" class="arrow" marker-end="url(#arrow2)"></path>
+
+        <path d="M 575 182 C 575 250, 575 310, 575 408" class="arrow" marker-end="url(#arrow2)"></path>
+        <path d="M 690 451 C 720 451, 730 451, 760 451" class="arrow" marker-end="url(#arrow2)"></path>
+        <path d="M 1060 451 C 1135 451, 1135 127, 420 127" class="arrow dashed" marker-end="url(#arrow2)"></path>
+
+        <text x="588" y="275" class="quiet">job_tool or kernel_step -> persist transition</text>
+        <text x="760" y="240" class="quiet">interactive_tool -> reinject same turn</text>
+        <text x="870" y="378" class="quiet">rebuild projections after durable transition</text>
+      </svg>
+    </section>
+
+    <p class="footnote">
+      这版图对应的关键设计点是：`TurnRuntimeState` 管当前 turn 的短生命周期执行态，`AgentJob` 管可恢复、可取消、
+      可继续的持久执行真相；`BackgroundTaskView`、可见资产、聊天 transcript 都是 projection，不再反向决定生命周期。
+    </p>
+  </div>
+</body>
+</html>
