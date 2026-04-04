@@ -36,6 +36,7 @@ import { createAppHandleGenerate } from './services/appHandleGenerateRuntime';
 import { createAppHandleGenerateContextBuilder } from './services/appHandleGenerateContextRuntime';
 import { createAppAgentToolExecutor } from './services/appAgentToolRuntime';
 import { createAppAgentToolCallHandler } from './services/appAgentToolCallRuntime';
+import { createAppGenerationFormSurfaceProps } from './services/appGenerationFormSurfaceRuntime';
 import { executeAppCancelJob } from './services/appCancelJobRuntime';
 import { executeAppResolveRequiresAction } from './services/appResolveRequiresActionRuntime';
 import { executeAppResumeJob } from './services/appResumeJobRuntime';
@@ -957,6 +958,18 @@ export function App() {
             useParamsAsBase: true
         });
     };
+    const generationFormSurfaceProps = createAppGenerationFormSurfaceProps({
+        contextSummary,
+        summaryCursor,
+        setContextSummary,
+        setSummaryCursor,
+        onToolCall: handleAgentToolCall,
+        dispatchKernelCommand: (command: any) => appAgentKernel.dispatchCommand(command),
+        onKeepCurrentAction: handleKeepCurrentAction,
+        mode,
+        agentContextAssets,
+        setAgentContextAssets
+    });
 
     const appTaskViewController = createAppTaskViewController({
         taskViewDismissal,
@@ -1270,7 +1283,7 @@ export function App() {
             <ProjectSidebar isOpen={showProjects} onClose={() => setShowProjects(false)} projects={projects} activeProjectId={activeProjectId} generatingStates={generatingStates} onSelectProject={(id) => switchProject(id)} onCreateProject={() => createNewProject()} onRenameProject={(id, name) => { const p = projects.find(p => p.id === id); if (p) { const updated = { ...p, name }; setProjects(prev => prev.map(prj => prj.id === id ? updated : prj)); updateProject(id, { name }); } }} onDeleteProject={openConfirmDeleteProject} />
 
             <div className="flex-1 flex overflow-hidden relative">
-                <GenerationForm mode={mode} params={params} setParams={setParams} chatParams={chatParams} setChatParams={setChatParams} isGenerating={tasks.some(t => t.projectId === activeProjectId && (t.status === 'GENERATING' || t.status === 'QUEUED' || t.status === 'REVIEWING'))} startTime={generatingStates[activeProjectId]} onGenerate={handleParamsGenerate} onVerifyVeo={handleAuthVerify} veoVerified={veoVerified} chatHistory={chatHistory} setChatHistory={setChatHistory} activeTab={activeTab} onTabChange={setActiveTab} chatSelectedImages={chatSelectedImages} setChatSelectedImages={setChatSelectedImages} projectId={activeProjectId} cooldownEndTime={videoCooldownEndTime} thoughtImages={thoughtImages} setThoughtImages={setThoughtImages} {...({ projectContextSummary: contextSummary, projectSummaryCursor: summaryCursor, onUpdateProjectContext: (s: string, c: number) => { setContextSummary(s); setSummaryCursor(c); }, onToolCall: handleAgentToolCall, dispatchKernelCommand: (command: any) => appAgentKernel.dispatchCommand(command), onKeepCurrentAction: handleKeepCurrentAction, agentContextAssets: mode === AppMode.IMAGE ? agentContextAssets : [], onRemoveContextAsset: (assetId: string) => setAgentContextAssets(prev => prev.filter(a => a.id !== assetId)), onClearContextAssets: () => setAgentContextAssets([]) } as any)} />
+                <GenerationForm mode={mode} params={params} setParams={setParams} chatParams={chatParams} setChatParams={setChatParams} isGenerating={tasks.some(t => t.projectId === activeProjectId && (t.status === 'GENERATING' || t.status === 'QUEUED' || t.status === 'REVIEWING'))} startTime={generatingStates[activeProjectId]} onGenerate={handleParamsGenerate} onVerifyVeo={handleAuthVerify} veoVerified={veoVerified} chatHistory={chatHistory} setChatHistory={setChatHistory} activeTab={activeTab} onTabChange={setActiveTab} chatSelectedImages={chatSelectedImages} setChatSelectedImages={setChatSelectedImages} projectId={activeProjectId} cooldownEndTime={videoCooldownEndTime} thoughtImages={thoughtImages} setThoughtImages={setThoughtImages} {...(generationFormSurfaceProps as any)} />
 
                 <div className="flex-1 bg-dark-bg flex flex-col min-w-0 relative">
                     {rightPanelMode === 'CANVAS' && activeCanvasAsset ? (
