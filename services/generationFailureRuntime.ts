@@ -3,7 +3,7 @@ import {
   prepareCancelledGeneration,
   prepareFailedGeneration,
   prepareVisibleAssetRecovery
-} from './generationOrchestrator';
+} from './agentRuntime';
 
 export const resolveGenerationFailure = async ({
   mode,

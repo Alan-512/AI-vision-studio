@@ -342,7 +342,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   const [applyingActionCardId, setApplyingActionCardId] = useState<string | null>(null);
 
   // NEW: Agent state machine for workflow management and retry
-  const { agentState, handleToolCallWithRetry } = useChatAgentRuntimeController({
+  const { agentSurfaceStatus, handleToolCallWithRetry } = useChatAgentRuntimeController({
     projectId,
     params,
     historyRef,
@@ -560,26 +560,26 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         )}
 
         {/* Agent Status Indicator - 重试/错误状态 */}
-        {(agentState.phase === 'RETRYING' || agentState.phase === 'ERROR') && (
-          <div className={`mt-4 p-3 rounded-lg border animate-in fade-in ${agentState.phase === 'ERROR'
+        {agentSurfaceStatus.kind !== 'idle' && (
+          <div className={`mt-4 p-3 rounded-lg border animate-in fade-in ${agentSurfaceStatus.kind === 'error'
             ? 'bg-red-500/10 border-red-500/30'
             : 'bg-amber-500/10 border-amber-500/30'
             }`}>
             <div className="flex items-center gap-2">
-              {agentState.phase === 'RETRYING' ? (
+              {agentSurfaceStatus.kind === 'retrying' ? (
                 <>
                   <RefreshCw size={14} className="text-amber-400 animate-spin" />
                   <span className="text-xs text-amber-300">
                     {language === 'zh'
-                      ? `重试中 (${agentState.retryCount}/${agentState.maxRetries})...`
-                      : `Retrying (${agentState.retryCount}/${agentState.maxRetries})...`}
+                      ? `重试中 (${agentSurfaceStatus.retryCount}/${agentSurfaceStatus.maxRetries})...`
+                      : `Retrying (${agentSurfaceStatus.retryCount}/${agentSurfaceStatus.maxRetries})...`}
                   </span>
                 </>
               ) : (
                 <>
                   <AlertCircle size={14} className="text-red-400" />
                   <span className="text-xs text-red-300">
-                    {agentState.error || (language === 'zh' ? '操作失败' : 'Action failed')}
+                    {agentSurfaceStatus.message || (language === 'zh' ? '操作失败' : 'Action failed')}
                   </span>
                 </>
               )}

@@ -1,4 +1,4 @@
-import { AgentAction, AgentJob, AgentToolResult, AppMode, AssetItem, ChatMessage, CriticDecision, CriticIssue, GenerationParams, JobArtifact, ReviewTrace, SearchProgress, SmartAsset, StructuredCriticReview, RevisionPlan } from '../types';
+import { AgentAction, AgentJob, AgentToolResult, AppMode, AssetItem, ChatMessage, CriticDecision, CriticIssue, GenerationParams, JobArtifact, JobStep, ReviewTrace, SearchProgress, SmartAsset, StructuredCriticReview, RevisionPlan } from '../types';
 
 export type SelectedReferenceRecord = {
   asset: SmartAsset;
@@ -220,6 +220,127 @@ export const startAgentJobReview = (
   artifacts: [...job.artifacts, options.generatedArtifact]
 });
 
+export const buildGenerationExecutionSnapshot = (
+  job: AgentJob,
+  {
+    stepId,
+    now
+  }: {
+    stepId: string;
+    now: number;
+  }
+): AgentJob => startAgentJobExecution(job, {
+  stepId,
+  now
+});
+
+export const buildGenerationOperationSnapshot = (
+  job: AgentJob,
+  {
+    stepId,
+    operationName,
+    now
+  }: {
+    stepId: string;
+    operationName: string;
+    now: number;
+  }
+): AgentJob => mergeAgentJobStepOutput(job, {
+  stepId,
+  output: {
+    operationName
+  },
+  now
+});
+
+export const buildGenerationCompletionSnapshot = (
+  job: AgentJob,
+  {
+    stepId,
+    asset,
+    now,
+    extraOutput
+  }: {
+    stepId: string;
+    asset: AssetItem;
+    now: number;
+    extraOutput?: Record<string, unknown>;
+  }
+): AgentJob => completeAgentJob(succeedAgentJobStep(job, {
+  stepId,
+  output: {
+    assetId: asset.id,
+    assetType: asset.type,
+    ...(extraOutput || {})
+  },
+  now
+}), {
+  now
+});
+
+export const prepareGenerationExecution = ({
+  job,
+  stepId,
+  taskId,
+  now
+}: {
+  job: AgentJob;
+  stepId: string;
+  taskId: string;
+  now: number;
+}) => ({
+  runningJob: buildGenerationExecutionSnapshot(job, {
+    stepId,
+    now
+  }),
+  assetPatch: { status: 'GENERATING' as const },
+  assetViewPatch: { status: 'GENERATING' as const },
+  metadata: {
+    taskId
+  }
+});
+
+export const prepareGenerationOperationUpdate = ({
+  job,
+  stepId,
+  taskId,
+  operationName,
+  now
+}: {
+  job: AgentJob;
+  stepId: string;
+  taskId: string;
+  operationName: string;
+  now: number;
+}) => ({
+  jobWithOperation: buildGenerationOperationSnapshot(job, {
+    stepId,
+    operationName,
+    now
+  }),
+  assetPatch: { operationName },
+  metadata: {
+    taskId
+  }
+});
+
+export const buildPrimaryReviewStartSnapshot = (
+  job: AgentJob,
+  {
+    reviewStep,
+    generatedArtifact,
+    now
+  }: {
+    reviewStep: JobStep;
+    generatedArtifact: JobArtifact;
+    now: number;
+  }
+): AgentJob => startAgentJobReview(job, {
+  reviewStep,
+  generatedArtifact,
+  now
+});
+
 export const completeAgentJob = (
   job: AgentJob,
   options: {
@@ -257,6 +378,490 @@ export const requireAgentJobAction = (
   updatedAt: options.now,
   steps: options.steps ?? job.steps,
   artifacts: options.artifacts ?? job.artifacts
+});
+
+export const buildPrimaryReviewRequiresActionSnapshot = (
+  job: AgentJob,
+  {
+    finalizedReviewStep,
+    generatedArtifact,
+    reviewArtifact,
+    lastError,
+    requiresAction,
+    now
+  }: {
+    finalizedReviewStep: JobStep;
+    generatedArtifact: JobArtifact;
+    reviewArtifact: JobArtifact;
+    lastError: string;
+    requiresAction: NonNullable<AgentJob['requiresAction']>;
+    now: number;
+  }
+): AgentJob => requireAgentJobAction(job, {
+  now,
+  lastError,
+  requiresAction,
+  steps: [...job.steps.filter(step => step.id !== finalizedReviewStep.id), finalizedReviewStep],
+  artifacts: [...job.artifacts, generatedArtifact, reviewArtifact]
+});
+
+export const buildPrimaryReviewCompletedSnapshot = (
+  job: AgentJob,
+  {
+    finalizedReviewStep,
+    generatedArtifact,
+    reviewArtifact,
+    now
+  }: {
+    finalizedReviewStep: JobStep;
+    generatedArtifact: JobArtifact;
+    reviewArtifact: JobArtifact;
+    now: number;
+  }
+): AgentJob => completeAgentJob(job, {
+  now,
+  steps: [...job.steps.filter(step => step.id !== finalizedReviewStep.id), finalizedReviewStep],
+  artifacts: [...job.artifacts, generatedArtifact, reviewArtifact]
+});
+
+export const preparePrimaryReviewResolution = ({
+  job,
+  finalizedReviewStep,
+  generatedArtifact,
+  reviewArtifact,
+  review,
+  defaultRequiresAction,
+  now
+}: {
+  job: AgentJob;
+  finalizedReviewStep: JobStep;
+  generatedArtifact: JobArtifact;
+  reviewArtifact: JobArtifact;
+  review: RuntimeReviewPayload;
+  defaultRequiresAction: NonNullable<AgentJob['requiresAction']>;
+  now: number;
+}) => {
+  if (review.decision === 'requires_action') {
+    return {
+      resolution: 'requires_action' as const,
+      resolvedJob: buildPrimaryReviewRequiresActionSnapshot(job, {
+        finalizedReviewStep,
+        generatedArtifact,
+        reviewArtifact,
+        lastError: review.summary,
+        requiresAction: review.requiresAction || defaultRequiresAction,
+        now
+      })
+    };
+  }
+
+  return {
+    resolution: 'completed' as const,
+    resolvedJob: buildPrimaryReviewCompletedSnapshot(job, {
+      finalizedReviewStep,
+      generatedArtifact,
+      reviewArtifact,
+      now
+    })
+  };
+};
+
+export const buildAutoRevisionRequiresActionSnapshot = (
+  job: AgentJob,
+  {
+    stepsAfterRevision,
+    finalizedRevisedGenerationStep,
+    finalizedSecondReviewStep,
+    generatedArtifact,
+    reviewArtifact,
+    revisionArtifact,
+    revisedGeneratedArtifact,
+    secondReviewArtifact,
+    lastError,
+    requiresAction,
+    now
+  }: {
+    stepsAfterRevision: JobStep[];
+    finalizedRevisedGenerationStep: JobStep;
+    finalizedSecondReviewStep: JobStep;
+    generatedArtifact: JobArtifact;
+    reviewArtifact: JobArtifact;
+    revisionArtifact: JobArtifact;
+    revisedGeneratedArtifact: JobArtifact;
+    secondReviewArtifact: JobArtifact;
+    lastError: string;
+    requiresAction: NonNullable<AgentJob['requiresAction']>;
+    now: number;
+  }
+): AgentJob => requireAgentJobAction(job, {
+  now,
+  lastError,
+  requiresAction,
+  steps: [...stepsAfterRevision, finalizedRevisedGenerationStep, finalizedSecondReviewStep],
+  artifacts: [...job.artifacts, generatedArtifact, reviewArtifact, revisionArtifact, revisedGeneratedArtifact, secondReviewArtifact]
+});
+
+export const buildAutoRevisionSnapshot = (
+  job: AgentJob,
+  {
+    revisionStep,
+    finalizedReviewStep,
+    reviewArtifact,
+    revisionArtifact,
+    now
+  }: {
+    revisionStep: JobStep;
+    finalizedReviewStep: JobStep;
+    reviewArtifact: JobArtifact;
+    revisionArtifact: JobArtifact;
+    now: number;
+  }
+): AgentJob => ({
+  ...job,
+  status: 'revising',
+  currentStepId: revisionStep.id,
+  lastError: undefined,
+  updatedAt: now,
+  steps: [
+    ...job.steps.filter(step => step.id !== finalizedReviewStep.id && step.id !== revisionStep.id),
+    finalizedReviewStep,
+    revisionStep
+  ],
+  artifacts: [...job.artifacts, reviewArtifact, revisionArtifact]
+});
+
+export const buildAutoRevisionExecutionSnapshot = (
+  job: AgentJob,
+  {
+    stepsAfterRevision,
+    revisedGenerationStep,
+    artifacts,
+    now
+  }: {
+    stepsAfterRevision: JobStep[];
+    revisedGenerationStep: JobStep;
+    artifacts: JobArtifact[];
+    now: number;
+  }
+): AgentJob => ({
+  ...job,
+  status: 'executing',
+  currentStepId: revisedGenerationStep.id,
+  updatedAt: now,
+  steps: [...stepsAfterRevision, revisedGenerationStep],
+  artifacts
+});
+
+export const buildAutoRevisionReviewSnapshot = (
+  job: AgentJob,
+  {
+    stepsAfterRevision,
+    finalizedRevisedGenerationStep,
+    secondReviewStep,
+    artifacts,
+    now
+  }: {
+    stepsAfterRevision: JobStep[];
+    finalizedRevisedGenerationStep: JobStep;
+    secondReviewStep: JobStep;
+    artifacts: JobArtifact[];
+    now: number;
+  }
+): AgentJob => ({
+  ...job,
+  status: 'reviewing',
+  currentStepId: secondReviewStep.id,
+  updatedAt: now,
+  steps: [...stepsAfterRevision, finalizedRevisedGenerationStep, secondReviewStep],
+  artifacts
+});
+
+export const buildAutoRevisionCompletedSnapshot = (
+  job: AgentJob,
+  {
+    stepsAfterRevision,
+    finalizedRevisedGenerationStep,
+    finalizedSecondReviewStep,
+    generatedArtifact,
+    reviewArtifact,
+    revisionArtifact,
+    revisedGeneratedArtifact,
+    secondReviewArtifact,
+    now
+  }: {
+    stepsAfterRevision: JobStep[];
+    finalizedRevisedGenerationStep: JobStep;
+    finalizedSecondReviewStep: JobStep;
+    generatedArtifact: JobArtifact;
+    reviewArtifact: JobArtifact;
+    revisionArtifact: JobArtifact;
+    revisedGeneratedArtifact: JobArtifact;
+    secondReviewArtifact: JobArtifact;
+    now: number;
+  }
+): AgentJob => completeAgentJob(job, {
+  now,
+  steps: [...stepsAfterRevision, finalizedRevisedGenerationStep, finalizedSecondReviewStep],
+  artifacts: [...job.artifacts, generatedArtifact, reviewArtifact, revisionArtifact, revisedGeneratedArtifact, secondReviewArtifact]
+});
+
+export const prepareAutoRevisionResolution = ({
+  job,
+  stepsAfterRevision,
+  finalizedRevisedGenerationStep,
+  finalizedSecondReviewStep,
+  generatedArtifact,
+  reviewArtifact,
+  revisionArtifact,
+  revisedGeneratedArtifact,
+  secondReviewArtifact,
+  secondReview,
+  defaultRequiresAction,
+  now
+}: {
+  job: AgentJob;
+  stepsAfterRevision: JobStep[];
+  finalizedRevisedGenerationStep: JobStep;
+  finalizedSecondReviewStep: JobStep;
+  generatedArtifact: JobArtifact;
+  reviewArtifact: JobArtifact;
+  revisionArtifact: JobArtifact;
+  revisedGeneratedArtifact: JobArtifact;
+  secondReviewArtifact: JobArtifact;
+  secondReview: RuntimeReviewPayload;
+  defaultRequiresAction: NonNullable<AgentJob['requiresAction']>;
+  now: number;
+}) => {
+  if (secondReview.decision !== 'accept') {
+    return {
+      resolution: 'requires_action' as const,
+      resolvedJob: buildAutoRevisionRequiresActionSnapshot(job, {
+        stepsAfterRevision,
+        finalizedRevisedGenerationStep,
+        finalizedSecondReviewStep,
+        generatedArtifact,
+        reviewArtifact,
+        revisionArtifact,
+        revisedGeneratedArtifact,
+        secondReviewArtifact,
+        lastError: secondReview.summary,
+        requiresAction: secondReview.requiresAction || defaultRequiresAction,
+        now
+      })
+    };
+  }
+
+  return {
+    resolution: 'completed' as const,
+    resolvedJob: buildAutoRevisionCompletedSnapshot(job, {
+      stepsAfterRevision,
+      finalizedRevisedGenerationStep,
+      finalizedSecondReviewStep,
+      generatedArtifact,
+      reviewArtifact,
+      revisionArtifact,
+      revisedGeneratedArtifact,
+      secondReviewArtifact,
+      now
+    })
+  };
+};
+
+export const buildCancelledGenerationSnapshot = (
+  job: AgentJob,
+  {
+    stepId,
+    now,
+    reason
+  }: {
+    stepId: string;
+    now: number;
+    reason: string;
+  }
+): AgentJob => cancelAgentJob(job, {
+  stepId,
+  reason,
+  now
+});
+
+export const buildVisibleAssetRecoverySnapshot = (
+  job: AgentJob,
+  {
+    now,
+    lastError
+  }: {
+    now: number;
+    lastError: string;
+  }
+): AgentJob => completeAgentJob(job, {
+  now,
+  lastError
+});
+
+export const buildFailedGenerationSnapshot = (
+  job: AgentJob,
+  {
+    stepId,
+    error,
+    now
+  }: {
+    stepId: string;
+    error: string;
+    now: number;
+  }
+): AgentJob => failAgentJob(job, {
+  stepId,
+  error,
+  now
+});
+
+export const prepareCompletedGeneration = ({
+  job,
+  stepId,
+  taskId,
+  toolName,
+  asset,
+  now,
+  extraOutput,
+  extraMetadata,
+  message
+}: {
+  job: AgentJob;
+  stepId: string;
+  taskId: string;
+  toolName: AgentToolResult['toolName'];
+  asset: AssetItem;
+  now: number;
+  extraOutput?: Record<string, unknown>;
+  extraMetadata?: Record<string, unknown>;
+  message?: string;
+}) => ({
+  completedJob: buildGenerationCompletionSnapshot(job, {
+    stepId,
+    asset,
+    now,
+    extraOutput
+  }),
+  toolResult: {
+    jobId: job.id,
+    stepId,
+    toolName,
+    status: 'success' as const,
+    artifactIds: [asset.id],
+    message: message || `${toolName} completed`,
+    metadata: {
+      assetId: asset.id,
+      taskId,
+      ...(extraMetadata || {})
+    }
+  }
+});
+
+export const prepareCancelledGeneration = ({
+  job,
+  stepId,
+  taskId,
+  toolName,
+  reason,
+  now
+}: {
+  job: AgentJob;
+  stepId: string;
+  taskId: string;
+  toolName: AgentToolResult['toolName'];
+  reason: string;
+  now: number;
+}) => ({
+  cancelledJob: buildCancelledGenerationSnapshot(job, {
+    stepId,
+    reason,
+    now
+  }),
+  toolResult: {
+    jobId: job.id,
+    stepId,
+    toolName,
+    status: 'error' as const,
+    error: reason,
+    retryable: false,
+    metadata: {
+      taskId,
+      lifecycleStatus: 'cancelled'
+    }
+  }
+});
+
+export const prepareVisibleAssetRecovery = ({
+  job,
+  stepId,
+  taskId,
+  toolName,
+  assetId,
+  error,
+  now
+}: {
+  job: AgentJob;
+  stepId: string;
+  taskId: string;
+  toolName: AgentToolResult['toolName'];
+  assetId: string;
+  error: string;
+  now: number;
+}) => ({
+  recoveredJob: buildVisibleAssetRecoverySnapshot(job, {
+    now,
+    lastError: error
+  }),
+  toolResult: {
+    jobId: job.id,
+    stepId,
+    toolName,
+    status: 'success' as const,
+    artifactIds: [assetId],
+    message: 'Image generation completed',
+    metadata: {
+      taskId,
+      assetId,
+      lifecycleStatus: 'completed',
+      reviewError: error
+    }
+  }
+});
+
+export const prepareFailedGeneration = ({
+  job,
+  stepId,
+  taskId,
+  toolName,
+  error,
+  retryable,
+  now
+}: {
+  job: AgentJob;
+  stepId: string;
+  taskId: string;
+  toolName: AgentToolResult['toolName'];
+  error: string;
+  retryable: boolean;
+  now: number;
+}) => ({
+  failedJob: buildFailedGenerationSnapshot(job, {
+    stepId,
+    error,
+    now
+  }),
+  toolResult: {
+    jobId: job.id,
+    stepId,
+    toolName,
+    status: 'error' as const,
+    error,
+    retryable,
+    metadata: {
+      taskId,
+      lifecycleStatus: 'failed'
+    }
+  }
 });
 
 export const failAgentJob = (
@@ -356,6 +961,121 @@ export const mergeRuntimeArtifacts = (existing: JobArtifact[], additions: JobArt
   });
 
   return [...existing, ...uniqueAdditions];
+};
+
+export const createQueuedGenerationJob = ({
+  jobId,
+  projectId,
+  mode,
+  now,
+  source,
+  triggerMessageTimestamp,
+  consistencyProfile,
+  searchContext,
+  generationStep,
+  initialArtifacts,
+  existingJob,
+  resumeActionStep
+}: {
+  jobId: string;
+  projectId: string;
+  mode: AppMode;
+  now: number;
+  source: AgentJob['source'];
+  triggerMessageTimestamp?: number;
+  consistencyProfile?: ConsistencyProfile;
+  searchContext?: AgentJob['searchContext'];
+  generationStep: JobStep;
+  initialArtifacts: JobArtifact[];
+  existingJob?: AgentJob;
+  resumeActionStep?: JobStep;
+}): AgentJob => (
+  existingJob
+    ? {
+      ...existingJob,
+      updatedAt: now,
+      status: 'queued',
+      source: existingJob.source,
+      triggerMessageTimestamp: triggerMessageTimestamp ?? existingJob.triggerMessageTimestamp,
+      currentStepId: undefined,
+      lastError: undefined,
+      requiresAction: undefined,
+      consistencyProfile,
+      searchContext: searchContext || existingJob.searchContext,
+      steps: [
+        ...existingJob.steps,
+        ...(resumeActionStep ? [resumeActionStep] : []),
+        generationStep
+      ],
+      artifacts: mergeRuntimeArtifacts(existingJob.artifacts, initialArtifacts)
+    }
+    : {
+      id: jobId,
+      projectId,
+      type: mode === AppMode.IMAGE ? 'IMAGE_GENERATION' : 'VIDEO_GENERATION',
+      status: 'queued',
+      createdAt: now,
+      updatedAt: now,
+      source,
+      triggerMessageTimestamp,
+      currentStepId: undefined,
+      consistencyProfile,
+      searchContext,
+      steps: [generationStep],
+      artifacts: initialArtifacts
+    }
+);
+
+export const buildQueuedGenerationJobSnapshot = ({
+  jobId,
+  projectId,
+  stepId,
+  mode,
+  now,
+  source,
+  triggerMessageTimestamp,
+  consistencyProfile,
+  searchContext,
+  params,
+  toolCall,
+  selectedReferenceRecords,
+  existingJob,
+  resumeActionStep
+}: {
+  jobId: string;
+  projectId: string;
+  stepId: string;
+  mode: AppMode;
+  now: number;
+  source: AgentJob['source'];
+  triggerMessageTimestamp?: number;
+  consistencyProfile?: ConsistencyProfile;
+  searchContext?: AgentJob['searchContext'];
+  params: GenerationParams;
+  toolCall?: AgentAction;
+  selectedReferenceRecords: SelectedReferenceRecord[];
+  existingJob?: AgentJob;
+  resumeActionStep?: JobStep;
+}): AgentJob => {
+  const initialArtifacts = [
+    ...buildReferenceArtifacts(selectedReferenceRecords),
+    ...buildSearchArtifacts(searchContext)
+  ];
+
+  return createQueuedGenerationJob({
+    jobId,
+    projectId,
+    mode,
+    now,
+    source,
+    triggerMessageTimestamp,
+    consistencyProfile,
+    searchContext,
+    generationStep: createGenerationStep(stepId, mode, params, toolCall),
+    initialArtifacts,
+    existingJob,
+    resumeActionStep
+  });
 };
 
 export const artifactToSmartAsset = (artifact: JobArtifact): SmartAsset | null => {

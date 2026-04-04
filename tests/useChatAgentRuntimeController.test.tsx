@@ -24,7 +24,7 @@ const createParams = (): GenerationParams => ({
 });
 
 describe('useChatAgentRuntimeController', () => {
-  it('exposes agent state and resets runtime when project changes', async () => {
+  it('exposes agent surface status and resets runtime when project changes', async () => {
     (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
     const host = document.createElement('div');
     const root = createRoot(host);
@@ -35,7 +35,7 @@ describe('useChatAgentRuntimeController', () => {
     const states: string[] = [];
 
     const Harness = ({ projectId }: { projectId: string }) => {
-      const { agentState, handleToolCallWithRetry } = useChatAgentRuntimeController({
+      const { agentSurfaceStatus, handleToolCallWithRetry } = useChatAgentRuntimeController({
         projectId,
         params: createParams(),
         historyRef,
@@ -44,7 +44,7 @@ describe('useChatAgentRuntimeController', () => {
         setToolCallExpanded
       });
 
-      states.push(agentState.phase);
+      states.push(agentSurfaceStatus.kind);
       (globalThis as any).__fire = handleToolCallWithRetry;
       return null;
     };
@@ -64,8 +64,57 @@ describe('useChatAgentRuntimeController', () => {
       root.render(<Harness projectId="project-b" />);
     });
 
-    expect(states).toContain('COMPLETED');
-    expect(states[states.length - 1]).toBe('IDLE');
+    expect(states).toContain('idle');
+    expect(states[states.length - 1]).toBe('idle');
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it('rethrows generate failures so chat surface callers can roll back optimistic UI', async () => {
+    (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+    const host = document.createElement('div');
+    const root = createRoot(host);
+    const historyRef = { current: [] as ChatMessage[] };
+    const onToolCall = vi.fn().mockResolvedValue({
+      status: 'error',
+      error: 'Tool execution failed',
+      retryable: false
+    });
+
+    const Harness = () => {
+      const { handleToolCallWithRetry } = useChatAgentRuntimeController({
+        projectId: 'project-a',
+        params: createParams(),
+        historyRef,
+        onToolCall,
+        setToolCallStatus: vi.fn(),
+        setToolCallExpanded: vi.fn()
+      });
+
+      (globalThis as any).__fireFailure = handleToolCallWithRetry;
+      return null;
+    };
+
+    await act(async () => {
+      root.render(<Harness />);
+    });
+
+    let thrownError: unknown;
+    await act(async () => {
+      try {
+        await (globalThis as any).__fireFailure({
+          toolName: 'generate_image',
+          args: { prompt: 'poster', model: ImageModel.FLASH_3_1 }
+        } satisfies AgentAction);
+      } catch (error) {
+        thrownError = error;
+      }
+    });
+    expect(thrownError).toMatchObject({
+      message: 'Tool execution failed'
+    });
 
     await act(async () => {
       root.unmount();

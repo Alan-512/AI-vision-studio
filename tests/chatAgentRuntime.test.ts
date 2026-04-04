@@ -163,6 +163,31 @@ describe('chatAgentRuntime', () => {
     expect(machine.getState().context.generatedAssets).toContain('asset-1');
   });
 
+  it('rethrows failed generate actions after updating error state', async () => {
+    const onStateChange = vi.fn();
+    const machine = createChatAgentMachine({
+      onStateChange,
+      onToolCallRef: {
+        current: vi.fn().mockResolvedValue({
+          status: 'error',
+          error: 'Tool execution failed',
+          retryable: false
+        })
+      }
+    });
+
+    await expect(machine.setPendingAction({
+      type: 'GENERATE_IMAGE',
+      params: { prompt: 'poster' },
+      description: 'Generate poster',
+      requiresConfirmation: false
+    })).rejects.toMatchObject({
+      message: 'Tool execution failed'
+    });
+    expect(machine.getState().phase).toBe('ERROR');
+    expect(machine.getState().error).toContain('Tool execution failed');
+  });
+
   it('creates a runtime controller that can execute and reset the agent machine', async () => {
     const setToolCallStatus = vi.fn();
     const setToolCallExpanded = vi.fn();

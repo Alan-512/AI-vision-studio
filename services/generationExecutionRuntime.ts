@@ -1,5 +1,6 @@
 import { AppMode, type AgentJob, type AgentToolResult, type AssetItem, type GenerationParams, type JobStep } from '../types';
-import { buildAutoRevisionReviewHandoff, prepareCompletedGeneration, prepareGenerationExecution, prepareGenerationOperationUpdate } from './generationOrchestrator';
+import { buildAutoRevisionReviewHandoff } from './generationOrchestrator';
+import { prepareCompletedGeneration, buildGenerationExecutionSnapshot, buildGenerationOperationSnapshot } from './agentRuntime';
 
 export const executeGenerationAttempt = async ({
   mode,
@@ -67,12 +68,12 @@ export const executeGenerationAttempt = async ({
 }): Promise<{ asset: AssetItem; toolResult: AgentToolResult }> => {
   const onStart = () => {
     const runningAt = now();
-    const { runningJob, assetPatch, assetViewPatch } = prepareGenerationExecution({
-      job: agentJob,
+    const runningJob = buildGenerationExecutionSnapshot(agentJob, {
       stepId,
-      taskId,
       now: runningAt
     });
+    const assetPatch = { status: 'GENERATING' as const };
+    const assetViewPatch = { status: 'GENERATING' as const };
     taskRuntime.stageRunningJob({
       runningJob,
       assetPatch,
@@ -118,13 +119,12 @@ export const executeGenerationAttempt = async ({
     genParams,
     async operationName => {
       if (signal.aborted) throw new Error('Cancelled');
-      const { jobWithOperation, assetPatch } = prepareGenerationOperationUpdate({
-        job: agentJob,
+      const jobWithOperation = buildGenerationOperationSnapshot(agentJob, {
         stepId,
-        taskId,
         operationName,
         now: now()
       });
+      const assetPatch = { operationName };
       await taskRuntime.updateOperation({
         operationJob: jobWithOperation,
         assetPatch

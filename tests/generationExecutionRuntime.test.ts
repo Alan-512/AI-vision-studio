@@ -111,7 +111,7 @@ describe('generationExecutionRuntime', () => {
     expect(completeVisibleImage).toHaveBeenCalledWith({
       asset: expect.objectContaining({ id: 'asset-1', jobId: 'job-1' }),
       completedJob: expect.objectContaining({
-        status: 'executing',
+        status: 'completed',
         steps: [
           expect.objectContaining({
             id: 'step-1',
@@ -175,7 +175,7 @@ describe('generationExecutionRuntime', () => {
     expect(completeVideo).toHaveBeenCalledWith({
       assetUpdates: expect.objectContaining({ url: 'blob://video', videoUri: 'gs://video' }),
       completedJob: expect.objectContaining({
-        status: 'executing',
+        status: 'completed',
         steps: [
           expect.objectContaining({
             id: 'step-1',

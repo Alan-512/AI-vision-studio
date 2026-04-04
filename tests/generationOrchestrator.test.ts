@@ -21,21 +21,10 @@ import {
 import {
   applyPromptTagSelection,
   buildAutoRevisionExecutionHandoff,
-  buildAutoRevisionExecutionSnapshot,
   buildAutoRevisionReviewHandoff,
-  buildCancelledGenerationSnapshot,
   buildGeneratedAssetArtifact,
-  buildGenerationCompletionSnapshot,
-  buildGenerationExecutionSnapshot,
-  buildGenerationOperationSnapshot,
-  buildAutoRevisionRequiresActionSnapshot,
-  buildAutoRevisionReviewSnapshot,
-  buildAutoRevisionSnapshot,
-  buildAutoRevisionCompletedSnapshot,
-  buildQueuedGenerationJobSnapshot,
   buildDerivedGeneratedArtifact,
   buildEditPrompt,
-  buildFailedGenerationSnapshot,
   buildOptimizationPlan,
   buildReviewNoteArtifact,
   buildRequiresActionPayload,
@@ -43,19 +32,7 @@ import {
   buildDefaultRefinePromptRequiresAction,
   buildRevisedToolResult,
   prepareGenerationLaunch,
-  buildPrimaryReviewStartSnapshot,
-  buildPrimaryReviewCompletedSnapshot,
-  buildPrimaryReviewRequiresActionSnapshot,
-  prepareAutoRevisionResolution,
-  preparePrimaryReviewResolution,
-  prepareCancelledGeneration,
-  prepareCompletedGeneration,
-  prepareFailedGeneration,
-  prepareGenerationExecution,
-  prepareGenerationOperationUpdate,
   preparePrimaryReview,
-  prepareVisibleAssetRecovery,
-  buildVisibleAssetRecoverySnapshot,
   createRunningGenerationStep,
   createRunningReviewStep,
   createRunningRevisionStep,
@@ -63,12 +40,37 @@ import {
   buildRevisionArtifact,
   createReviewedToolResult,
   createPendingGenerationAsset,
-  createQueuedGenerationJob,
   finalizeReviewStep,
   finalizeStepSuccess,
   markStepRunning,
   normalizeGenerationParamsForExecution
 } from '../services/generationOrchestrator';
+import {
+  buildAutoRevisionExecutionSnapshot,
+  buildAutoRevisionCompletedSnapshot,
+  buildAutoRevisionRequiresActionSnapshot,
+  buildAutoRevisionReviewSnapshot,
+  buildAutoRevisionSnapshot,
+  buildQueuedGenerationJobSnapshot,
+  buildCancelledGenerationSnapshot,
+  buildFailedGenerationSnapshot,
+  buildGenerationCompletionSnapshot,
+  buildGenerationExecutionSnapshot,
+  buildGenerationOperationSnapshot,
+  buildPrimaryReviewStartSnapshot,
+  buildPrimaryReviewCompletedSnapshot,
+  buildPrimaryReviewRequiresActionSnapshot,
+  buildVisibleAssetRecoverySnapshot,
+  createQueuedGenerationJob,
+  prepareAutoRevisionResolution,
+  prepareCancelledGeneration,
+  prepareCompletedGeneration,
+  prepareFailedGeneration,
+  prepareGenerationExecution,
+  prepareGenerationOperationUpdate,
+  preparePrimaryReviewResolution,
+  prepareVisibleAssetRecovery
+} from '../services/agentRuntime';
 
 const createParams = (): GenerationParams => ({
   prompt: 'cinematic poster',
@@ -947,7 +949,11 @@ describe('generationOrchestrator helpers', () => {
         summary: 'needs more contrast',
         warnings: ['flat contrast']
       },
-      prompt: 'cinematic poster',
+      defaultRequiresAction: {
+        type: 'review_output',
+        message: 'continue',
+        payload: {}
+      },
       now: 260
     });
     expect(blocked.resolution).toBe('requires_action');
@@ -973,7 +979,11 @@ describe('generationOrchestrator helpers', () => {
         summary: 'looks good',
         warnings: []
       },
-      prompt: 'cinematic poster',
+      defaultRequiresAction: {
+        type: 'review_output',
+        message: 'continue',
+        payload: {}
+      },
       now: 261
     });
     expect(completed.resolution).toBe('completed');
@@ -1063,9 +1073,11 @@ describe('generationOrchestrator helpers', () => {
         summary: 'still needs work',
         warnings: ['subject mismatch']
       },
-      revisedPrompt: 'improve subject',
-      revisedAssetId: 'asset-2',
-      revisedToolResultRequiresAction: undefined,
+      defaultRequiresAction: {
+        type: 'refine_prompt',
+        message: 'continue',
+        payload: {}
+      },
       now: 260
     });
     expect(blocked.resolution).toBe('requires_action');
@@ -1093,9 +1105,11 @@ describe('generationOrchestrator helpers', () => {
         summary: 'looks good',
         warnings: []
       },
-      revisedPrompt: 'improve subject',
-      revisedAssetId: 'asset-2',
-      revisedToolResultRequiresAction: undefined,
+      defaultRequiresAction: {
+        type: 'refine_prompt',
+        message: 'continue',
+        payload: {}
+      },
       now: 261
     });
     expect(completed.resolution).toBe('completed');

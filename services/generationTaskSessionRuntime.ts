@@ -102,9 +102,9 @@ export const createGenerationTaskSession = async ({
   });
 
   if (previousTaskIds.length > 0) {
-    Promise.all(previousTaskIds.map(previousTaskId => taskRuntime.dismissTaskView(previousTaskId))).catch(console.error);
+    await Promise.all(previousTaskIds.map(previousTaskId => taskRuntime.dismissTaskView(previousTaskId)));
   }
-  taskRuntime.initializeQueuedJob(agentJob).catch(console.error);
+  await taskRuntime.initializeQueuedJob(agentJob);
 
   return {
     taskId,

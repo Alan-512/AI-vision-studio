@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { Image as ImageIcon, Video, LayoutGrid, Folder, Sparkles, Settings, Star, CheckSquare, MoveHorizontal, Languages, Trash2, Recycle, Download, RotateCcw, ArrowRight, Key, X } from 'lucide-react';
-import { AppMode, AspectRatio, GenerationParams, AssetItem, ImageResolution, VideoResolution, ImageModel, VideoModel, ImageStyle, Project, ChatMessage, BackgroundTask, SmartAsset, VideoDuration, VideoStyle, AgentAction, EditRegion, SearchPolicy, AssistantMode, SmartAssetRole, ThinkingLevel, AgentJob, AgentJobStatus, JobStep, JobArtifact, AgentToolResult, ToolCallRecord, ConsistencyProfile } from './types';
+import { AppMode, AspectRatio, GenerationParams, AssetItem, ImageResolution, VideoResolution, ImageModel, VideoModel, ImageStyle, Project, ChatMessage, BackgroundTask, SmartAsset, VideoDuration, VideoStyle, AgentAction, EditRegion, SearchPolicy, AssistantMode, SmartAssetRole, ThinkingLevel, AgentJob, JobStep, JobArtifact, AgentToolResult, ToolCallRecord, ConsistencyProfile } from './types';
 import { GenerationForm } from './components/GenerationForm';
 import { AssetCard } from './components/AssetCard';
 import { ProjectSidebar } from './components/ProjectSidebar';
@@ -19,11 +19,9 @@ import {
     extractSearchContextFromProgress,
     selectReferenceRecords,
 } from './services/agentRuntime';
-import { buildTaskViewPersistencePlan, deriveBackgroundTaskView, deriveBackgroundTaskViews, dismissTaskViewsByIds, planTaskViewSyncForJob } from './services/taskReadModel';
-import { applyTaskViewProjectionResult, createTaskViewDismissalController, createTaskViewProjectionController, persistTaskViewPersistencePlan } from './services/taskProjectionPersistence';
-import { createAssetProjectionController } from './services/assetProjectionPersistence';
+import { deriveBackgroundTaskView, dismissTaskViewsByIds, planTaskViewSyncForJob } from './services/taskReadModel';
+import { applyTaskViewProjectionResult, createTaskViewDismissalController, createTaskViewProjectionController } from './services/taskProjectionPersistence';
 import { reviewGeneratedAsset } from './services/assetReviewRuntime';
-import { createAgentJobSnapshotPersister } from './services/agentJobPersistence';
 import { createGenerationTaskLaunchController } from './services/generationTaskLaunchController';
 import { executeAutoRevisionAttempt, executeGenerationAttempt } from './services/generationExecutionRuntime';
 import { executeAutoRevisionFlow } from './services/generationAutoRevisionRuntime';
@@ -35,8 +33,10 @@ import { prepareAppGenerationRequest } from './services/appGenerationPreflightRu
 import { executeAppGenerationRequest } from './services/appGenerationRequestRuntime';
 import { executeAppGenerationFlow } from './services/appGenerationRuntime';
 import { createAppTaskViewController } from './services/appTaskViewRuntime';
+import { recoverPersistedTaskViews } from './services/appInitializationRuntime';
+import { resolveKeepCurrentAction } from './services/appRequiresActionRuntime';
 import { buildDefaultRefinePromptRequiresAction, buildEditPrompt, normalizeGenerationParamsForExecution, prepareGenerationLaunch } from './services/generationOrchestrator';
-import { resolveAgentJobKeepCurrent, resolveToolCallRecordStatus } from './services/requiresActionRuntime';
+import { resolveToolCallRecordStatus } from './services/requiresActionRuntime';
 import {
     initDB, loadProjects, saveProject, saveAsset, loadAssets, updateAsset, updateProject,
     deleteProjectFromDB, softDeleteAssetInDB, restoreAssetInDB,
@@ -133,8 +133,6 @@ const getPlaybookDefaults = (assistantMode: AssistantMode | undefined): Playbook
     }
     return defaults;
 };
-
-const INTERRUPTIBLE_AGENT_JOB_STATUSES: AgentJobStatus[] = ['queued', 'planning', 'executing', 'reviewing', 'revising'];
 
 const createResumeActionStep = (stepId: string, jobId: string, prompt: string, actionType?: string): JobStep => ({
     id: stepId,
@@ -400,57 +398,17 @@ export function App() {
                 const persistedTasks = await loadTasks();
 
                 const persistedAgentJobs = await loadAgentJobs();
-                const recoveredAgentJobs = persistedAgentJobs.map(job => {
-                    if (!INTERRUPTIBLE_AGENT_JOB_STATUSES.includes(job.status)) {
-                        return job;
-                    }
-
-                    const interruptedAt = Date.now();
-                    const interruptedSteps = job.steps.map(step => {
-                        if (step.status === 'running') {
-                            return {
-                                ...step,
-                                status: 'failed' as const,
-                                error: 'Job interrupted by page refresh',
-                                endTime: interruptedAt
-                            };
-                        }
-                        return step;
-                    });
-
-                    const interruptedJob: AgentJob = {
-                        ...job,
-                        status: 'interrupted',
-                        currentStepId: undefined,
-                        lastError: 'Job interrupted by page refresh',
-                        updatedAt: interruptedAt,
-                        steps: interruptedSteps
-                    };
-                    persistAgentJobSnapshot(interruptedJob, {
-                        jobRef: { current: job },
-                        saveAgentJobSnapshot: saveAgentJob
-                    }).catch(console.error);
-                    return interruptedJob;
-                });
 
                 if (isMounted) {
-                    const projectNamesById = Object.fromEntries(loadedProjects.map(project => [project.id, project.name]));
-                    const recoveredTasks = deriveBackgroundTaskViews({
-                        jobs: recoveredAgentJobs,
+                    const { recoveredAgentJobs, recoveredTaskViews } = await recoverPersistedTaskViews({
                         persistedTaskViews: persistedTasks,
-                        projectNamesById
-                    });
-                    const { taskViewsToSave, taskViewIdsToDelete } = buildTaskViewPersistencePlan(persistedTasks, recoveredTasks);
-                    persistTaskViewPersistencePlan({
-                        taskViewsToSave,
-                        taskViewIdsToDelete
-                    }, {
+                        persistedAgentJobs,
+                        projects: loadedProjects,
+                        saveAgentJobSnapshot: saveAgentJob,
                         saveTaskView: saveTask,
                         deleteTaskView: deleteTask
-                    }).catch(error => {
-                        console.error('[App] Failed to sync recovered task views cache:', error);
                     });
-                    setTasks(recoveredTasks);
+                    setTasks(recoveredTaskViews);
                     if (recoveredAgentJobs.length > 0) {
                         console.log(`[App] Recovered ${recoveredAgentJobs.length} persisted agent jobs`);
                     }
@@ -656,39 +614,17 @@ export function App() {
     };
 
     const handleKeepCurrentAction = async (toolCall: ToolCallRecord): Promise<void> => {
-        const jobId = toolCall.result?.jobId || toolCall.jobId;
-        if (!jobId) return;
-
-        const existingJobs = await loadAgentJobsByProject(activeProjectIdRef.current);
-        const job = existingJobs.find(entry => entry.id === jobId);
-        if (!job) return;
-
-        const now = Date.now();
-        const resolvedJob = resolveAgentJobKeepCurrent(job, {
-            now,
-            stepId: crypto.randomUUID(),
-            actionType: toolCall.result?.requiresAction?.type,
-            prompt: typeof toolCall.args?.prompt === 'string' ? toolCall.args.prompt : undefined
+        await resolveKeepCurrentAction({
+            toolCall,
+            activeProjectId: activeProjectIdRef.current,
+            loadAgentJobsByProject,
+            saveAgentJobSnapshot: saveAgentJob,
+            tasksRef,
+            setTaskViews: setTasks,
+            saveTaskView: saveTask,
+            deleteTaskView: deleteTask,
+            projects
         });
-
-        await persistAgentJobSnapshot(resolvedJob, {
-            jobRef: { current: job },
-            saveAgentJobSnapshot: saveAgentJob
-        });
-
-        const relatedTasks = tasksRef.current.filter(task => task.jobId === jobId);
-        if (relatedTasks.length > 0) {
-            const projectName = projects.find(project => project.id === resolvedJob.projectId)?.name || 'Project';
-            await applyTaskViewProjectionResult(
-                planTaskViewSyncForJob(tasksRef.current, resolvedJob, { projectName }),
-                {
-                    taskViewsRef: tasksRef,
-                    setTaskViews: setTasks,
-                    saveTaskView: saveTask,
-                    deleteTaskView: deleteTask
-                }
-            );
-        }
     };
 
     const handleAuthVerify = async () => {

@@ -39,9 +39,14 @@ const createTaskView = (overrides: Partial<BackgroundTaskView> = {}): Background
 });
 
 describe('generationTaskSessionRuntime', () => {
-  it('creates a task session and kicks queued/dismiss side effects', async () => {
-    const dismissTaskView = vi.fn().mockResolvedValue(undefined);
-    const initializeQueuedJob = vi.fn().mockResolvedValue(undefined);
+  it('creates a task session and awaits dismiss before queued sync', async () => {
+    const callOrder: string[] = [];
+    const dismissTaskView = vi.fn().mockImplementation(async (taskId: string) => {
+      callOrder.push(`dismiss:${taskId}`);
+    });
+    const initializeQueuedJob = vi.fn().mockImplementation(async (job: AgentJob) => {
+      callOrder.push(`initialize:${job.id}`);
+    });
     const createTaskRuntime = vi.fn().mockReturnValue({
       dismissTaskView,
       initializeQueuedJob
@@ -84,5 +89,10 @@ describe('generationTaskSessionRuntime', () => {
     expect(createTaskRuntime).toHaveBeenCalledWith(expect.objectContaining({ projectName: 'Project One' }));
     expect(dismissTaskView).toHaveBeenCalledTimes(2);
     expect(initializeQueuedJob).toHaveBeenCalledWith(expect.objectContaining({ id: 'job-1' }));
+    expect(callOrder).toEqual([
+      'dismiss:task-old-1',
+      'dismiss:task-old-2',
+      'initialize:job-1'
+    ]);
   });
 });

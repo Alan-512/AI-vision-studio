@@ -1,6 +1,7 @@
 import { AppMode, type AgentJob, type AgentToolResult, type AssetItem, type JobArtifact, type JobStep } from '../types';
 import type { GenerationReviewPayload } from './generationOrchestrator';
-import { prepareAutoRevisionResolution, preparePrimaryReviewResolution } from './generationOrchestrator';
+import { prepareAutoRevisionResolution, preparePrimaryReviewResolution } from './agentRuntime';
+import { buildDefaultPrimaryReviewRequiresAction, buildDefaultRefinePromptRequiresAction } from './generationOrchestrator';
 
 type ResolutionDeps = {
   addToast: (level: 'info' | 'error' | 'success', title: string, message: string) => void;
@@ -89,7 +90,10 @@ export const resolvePrimaryReview = async ({
     generatedArtifact,
     reviewArtifact,
     review,
-    prompt,
+    defaultRequiresAction: review.requiresAction || buildDefaultPrimaryReviewRequiresAction({
+      prompt,
+      review
+    }),
     now: now()
   });
 
@@ -205,9 +209,11 @@ export const resolveAutoRevision = async ({
     revisedGeneratedArtifact,
     secondReviewArtifact,
     secondReview,
-    revisedPrompt,
-    revisedAssetId,
-    revisedToolResultRequiresAction: revisedToolResult.requiresAction,
+    defaultRequiresAction: revisedToolResult.requiresAction || buildDefaultRefinePromptRequiresAction({
+      prompt: revisedPrompt,
+      latestAssetId: revisedAssetId,
+      review: secondReview
+    }),
     now: now()
   });
 

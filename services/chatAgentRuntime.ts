@@ -124,6 +124,7 @@ export const createChatAgentMachine = ({
           retryCount: 0,
           error: `Generation failed: ${error?.message || String(error)}`
         });
+        throw error;
       }
     },
     reset: () => {

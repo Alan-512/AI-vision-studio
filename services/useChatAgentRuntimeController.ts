@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import type { AgentAction, ChatMessage, GenerationParams } from '../types';
 import { createChatAgentRuntimeStore } from './chatAgentRuntime';
+import { deriveChatAgentSurfaceStatus } from './chatAgentSurfaceRuntime';
 import type { ActiveChatToolCallStatus } from './chatToolCallRuntime';
 
 export const useChatAgentRuntimeController = ({
@@ -52,13 +53,14 @@ export const useChatAgentRuntimeController = ({
   }, [projectId, agentRuntime]);
 
   return {
-    agentState,
+    agentSurfaceStatus: deriveChatAgentSurfaceStatus(agentState),
     handleToolCallWithRetry: async (action: AgentAction) => {
       try {
         await agentRuntime.executeGenerateAction(action);
         console.log('[Agent] Action execution completed');
       } catch (error) {
         console.error('[Agent] Action failed after retries:', error);
+        throw error;
       }
     }
   };
