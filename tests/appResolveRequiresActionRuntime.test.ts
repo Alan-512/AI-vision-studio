@@ -79,5 +79,6 @@ describe('appResolveRequiresActionRuntime', () => {
     expect(saveTaskView).toHaveBeenCalled();
     expect(deleteTaskView).not.toHaveBeenCalled();
     expect(setTaskViews).toHaveBeenCalledTimes(1);
+    expect(result.events.map(event => event.type)).toEqual(['RequiresActionResolved', 'JobCompleted']);
   });
 });

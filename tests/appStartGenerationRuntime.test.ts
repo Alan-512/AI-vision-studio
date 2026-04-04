@@ -8,13 +8,16 @@ describe('appStartGenerationRuntime', () => {
     const executeAppGenerationRequest = vi.fn().mockResolvedValue([{ status: 'success' }]);
 
     const result = await executeAppStartGeneration({
-      launchControllerInput: {
-        persistenceDeps: {},
-        launcherDeps: {},
-        runtimeDeps: {}
-      },
-      requestInput: {
-        currentProjectId: 'project-1'
+      kind: 'generation_request',
+      input: {
+        launchControllerInput: {
+          persistenceDeps: {},
+          launcherDeps: {},
+          runtimeDeps: {}
+        },
+        requestInput: {
+          currentProjectId: 'project-1'
+        }
       },
       createGenerationTaskLaunchController,
       executeAppGenerationRequest

@@ -1,6 +1,8 @@
 import type { Dispatch, SetStateAction } from 'react';
 import type { AgentAction, ChatMessage, GenerationParams, SearchProgress, SmartAsset, TextModel } from '../types';
 import type { KernelTransitionResult, SubmitUserTurnCommand } from './agentKernelTypes';
+import { buildSubmitUserTurnCommand } from './chatSubmitTurnRuntime';
+import { createChatStreamingSurfaceCallbacks } from './chatStreamingSurfaceRuntime';
 import { buildOutgoingChatMessage, executeChatStreamingTurn } from './chatStreamingRuntime';
 import { finalizeChatStreamingTurn } from './chatSurfaceRuntime';
 
@@ -99,6 +101,19 @@ export const executeChatSendFlow = async ({
   const abortController = new AbortController();
   abortControllerRef.current = abortController;
   let collectedSignatures: Array<{ partIndex: number; signature: string }> = [];
+  const streamingCallbacks = createChatStreamingSurfaceCallbacks({
+    sendingProjectId,
+    projectIdRef,
+    setHistory,
+    setThinkingText,
+    thinkingTextRef,
+    setSearchProgress,
+    searchProgressRef,
+    setSearchIsCollapsed,
+    onCollectedSignatures: finalSignatures => {
+      collectedSignatures = finalSignatures;
+    }
+  });
 
   try {
     setThinkingText('');
@@ -108,88 +123,28 @@ export const executeChatSendFlow = async ({
     setSearchIsCollapsed(false);
 
     if (dispatchKernelCommand) {
-      const result = await dispatchKernelCommand({
-        type: 'SubmitUserTurn',
-        turn: {
-          id: createId(),
-          sessionId: sendingProjectId,
-          userMessage: userMessage.content,
-          status: 'ready',
-          createdAt: userMessage.timestamp || Date.now(),
-          updatedAt: userMessage.timestamp || Date.now(),
-          plannedToolCalls: [],
-          toolResults: []
-        },
-        payload: {
-          executeStreamingTurn,
-          sendingProjectId,
-          projectIdRef,
-          newHistory: nextHistory,
-          userMessage,
-          selectedModel,
-          mode,
-          projectContextSummary,
-          projectSummaryCursor,
-          onUpdateProjectContext,
-          handleToolCallWithRetry,
-          useSearch,
-          params,
-          agentContextAssets,
-          signal: abortController.signal,
-          appendModelPlaceholder: () => {
-            const tempAiMsg: ChatMessage = { role: 'model', content: '', timestamp: Date.now(), isThinking: true };
-            setHistory(prev => [...prev, tempAiMsg]);
-          },
-          onChunk: (chunkText: string) => {
-            setHistory(prev => {
-              const updated = [...prev];
-              updated[updated.length - 1] = { ...updated[updated.length - 1], content: chunkText };
-              return updated;
-            });
-          },
-          onThoughtImage: appendThoughtImage,
-          onThinkingText: (text: string) => {
-            thinkingTextRef.current += text;
-            setThinkingText(prev => prev + text);
-          },
-          onSearchProgress: (progress: SearchProgress) => {
-            setSearchProgress(progress);
-            searchProgressRef.current = progress;
-            if (progress.status === 'complete') {
-              setTimeout(() => {
-                setSearchIsCollapsed(true);
-              }, 2000);
-            }
-          },
-          onStreamError: (error: Error) => {
-            console.error('Chat Error:', error);
-            if (projectIdRef.current !== sendingProjectId) return;
-            setHistory(prev => {
-              const updated = [...prev];
-              const lastIdx = updated.length - 1;
-              if (lastIdx >= 0 && updated[lastIdx].role === 'model') {
-                const currentContent = updated[lastIdx].content;
-                const suppressInlineError = (updated[lastIdx].toolCalls || []).some(record =>
-                  record.toolName === 'generate_image' || record.toolName === 'generate_video'
-                );
-                updated[lastIdx] = {
-                  ...updated[lastIdx],
-                  content: suppressInlineError ? currentContent : (currentContent
-                    ? `${currentContent}\n\n*[System Error: ${error.message || 'Connection timed out'}]*`
-                    : `*[System Error: ${error.message || 'Connection timed out'}]*`),
-                  isThinking: false
-                };
-              }
-              return updated;
-            });
-          },
-          onFinish: ({ collectedSignatures: finalSignatures }: {
-            collectedSignatures: Array<{ partIndex: number; signature: string }>;
-          }) => {
-            collectedSignatures = finalSignatures;
-          }
+      const result = await dispatchKernelCommand(buildSubmitUserTurnCommand({
+        createId,
+        sendingProjectId,
+        projectIdRef,
+        nextHistory,
+        userMessage,
+        selectedModel,
+        mode,
+        projectContextSummary,
+        projectSummaryCursor,
+        onUpdateProjectContext,
+        handleToolCallWithRetry,
+        useSearch,
+        params,
+        agentContextAssets,
+        signal: abortController.signal,
+        onThoughtImage: appendThoughtImage,
+        streamingCallbacks,
+        onCollectedSignatures: finalSignatures => {
+          collectedSignatures = finalSignatures;
         }
-      });
+      }));
       return result.turnOutput;
     }
 
@@ -208,55 +163,14 @@ export const executeChatSendFlow = async ({
       params,
       agentContextAssets,
       signal: abortController.signal,
-      appendModelPlaceholder: () => {
-        const tempAiMsg: ChatMessage = { role: 'model', content: '', timestamp: Date.now(), isThinking: true };
-        setHistory(prev => [...prev, tempAiMsg]);
-      },
-      onChunk: chunkText => {
-        setHistory(prev => {
-          const updated = [...prev];
-          updated[updated.length - 1] = { ...updated[updated.length - 1], content: chunkText };
-          return updated;
-        });
-      },
+      appendModelPlaceholder: streamingCallbacks.appendModelPlaceholder,
+      onChunk: streamingCallbacks.onChunk,
       onThoughtImage: appendThoughtImage,
-      onThinkingText: text => {
-        thinkingTextRef.current += text;
-        setThinkingText(prev => prev + text);
-      },
-      onSearchProgress: progress => {
-        setSearchProgress(progress);
-        searchProgressRef.current = progress;
-        if (progress.status === 'complete') {
-          setTimeout(() => {
-            setSearchIsCollapsed(true);
-          }, 2000);
-        }
-      },
-      onStreamError: error => {
-        console.error('Chat Error:', error);
-        if (projectIdRef.current !== sendingProjectId) return;
-        setHistory(prev => {
-          const updated = [...prev];
-          const lastIdx = updated.length - 1;
-          if (lastIdx >= 0 && updated[lastIdx].role === 'model') {
-            const currentContent = updated[lastIdx].content;
-            const suppressInlineError = (updated[lastIdx].toolCalls || []).some(record =>
-              record.toolName === 'generate_image' || record.toolName === 'generate_video'
-            );
-            updated[lastIdx] = {
-              ...updated[lastIdx],
-              content: suppressInlineError ? currentContent : (currentContent
-                ? `${currentContent}\n\n*[System Error: ${error.message || 'Connection timed out'}]*`
-                : `*[System Error: ${error.message || 'Connection timed out'}]*`),
-              isThinking: false
-            };
-          }
-          return updated;
-        });
-      },
+      onThinkingText: streamingCallbacks.onThinkingText,
+      onSearchProgress: streamingCallbacks.onSearchProgress,
+      onStreamError: streamingCallbacks.onStreamError,
       onFinish: ({ collectedSignatures: finalSignatures }) => {
-        collectedSignatures = finalSignatures;
+        streamingCallbacks.onFinish({ collectedSignatures: finalSignatures });
       }
     });
   } finally {

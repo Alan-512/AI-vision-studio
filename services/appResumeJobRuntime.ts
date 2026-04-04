@@ -1,5 +1,6 @@
 import type { AgentJob, BackgroundTaskView, Project } from '../types';
 import { persistAgentJobSnapshot } from './agentJobPersistence';
+import { buildResumeJobEvents } from './jobCommandEventRuntime';
 import { applyTaskViewProjectionResult } from './taskProjectionPersistence';
 import { planTaskViewSyncForJob } from './taskReadModel';
 
@@ -65,7 +66,11 @@ export const executeAppResumeJob = async ({
 
   return {
     job: resumedJob,
-    events: [],
+    events: buildResumeJobEvents({
+      job: resumedJob,
+      timestamp: resumedJob.updatedAt,
+      actionType: command.actionType
+    }),
     toolResult: undefined
   };
 };

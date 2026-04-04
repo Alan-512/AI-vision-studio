@@ -1,5 +1,6 @@
 import type { AgentJob, BackgroundTaskView, Project } from '../types';
 import { persistAgentJobSnapshot } from './agentJobPersistence';
+import { buildResolveRequiresActionEvents } from './jobCommandEventRuntime';
 import { resolveAgentJobKeepCurrent } from './requiresActionRuntime';
 import { applyTaskViewProjectionResult } from './taskProjectionPersistence';
 import { planTaskViewSyncForJob } from './taskReadModel';
@@ -68,7 +69,11 @@ export const executeAppResolveRequiresAction = async ({
 
   return {
     job: resolvedJob,
-    events: [],
+    events: buildResolveRequiresActionEvents({
+      job: resolvedJob,
+      timestamp: resolvedJob.updatedAt,
+      resolutionType: command.resolutionType
+    }),
     toolResult: undefined
   };
 };

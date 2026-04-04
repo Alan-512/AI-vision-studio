@@ -19,6 +19,7 @@ import {
   failTurnRuntimeState,
   planTurnToolCalls
 } from './turnRuntimeState';
+import { buildQueuedJobEvents } from './jobCommandEventRuntime';
 
 type PlannerResponse =
   | {
@@ -64,6 +65,91 @@ const createEvent = (
   timestamp: Date.now(),
   payload
 });
+
+const buildQueuedJobTransition = ({
+  jobId,
+  projectId,
+  source
+}: {
+  jobId: string;
+  projectId?: string;
+  source?: 'chat' | 'studio' | 'resume';
+}) => {
+  const timestamp = Date.now();
+  const job = {
+    id: jobId,
+    projectId: projectId || '',
+    type: 'IMAGE_GENERATION' as const,
+    status: 'queued' as const,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    source: source || 'chat',
+    steps: [],
+    artifacts: []
+  };
+
+  return {
+    job,
+    events: buildQueuedJobEvents({
+      job,
+      timestamp,
+      source
+    }),
+    toolResult: undefined
+  };
+};
+
+const promoteResultsToWaitingJob = ({
+  turnId,
+  sessionId,
+  userMessage,
+  results,
+  projectId,
+  source
+}: {
+  turnId: string;
+  sessionId: string;
+  userMessage: string;
+  results: unknown[];
+  projectId?: string;
+  source?: 'chat' | 'studio' | 'resume';
+}) => {
+  const firstJobResult = results.find(result =>
+    typeof result === 'object' &&
+    result !== null &&
+    'jobId' in result &&
+    typeof (result as { jobId?: unknown }).jobId === 'string'
+  ) as { jobId?: string } | undefined;
+
+  if (!firstJobResult?.jobId) {
+    return null;
+  }
+
+  const turn = attachTurnActiveJob(
+    createTurnRuntimeState({
+      turnId,
+      sessionId,
+      userMessage
+    }),
+    { jobId: firstJobResult.jobId }
+  );
+
+  return {
+    turn,
+    events: [
+      createEvent('TurnStarted', turnId),
+      createEvent('JobTransitioned', turnId, {
+        jobId: firstJobResult.jobId
+      })
+    ],
+    toolResults: results,
+    jobTransition: buildQueuedJobTransition({
+      jobId: firstJobResult.jobId,
+      projectId,
+      source
+    })
+  };
+};
 
 export const createAgentKernel = ({
   planner,
@@ -161,6 +247,20 @@ export const createAgentKernel = ({
             throw new Error(`No kernel handler configured for command ${command.type}`);
           }
 
+          const startGenerationResults = await startGeneration(command);
+          const promotedStartGeneration = promoteResultsToWaitingJob({
+            turnId,
+            sessionId: 'kernel:StartGeneration',
+            userMessage: 'StartGeneration',
+            results: startGenerationResults,
+            projectId: command.payload.input.requestInput.currentProjectId as string | undefined,
+            source: command.payload.input.requestInput.resolvedJobSource as 'chat' | 'studio' | 'resume' | undefined
+          });
+
+          if (promotedStartGeneration) {
+            return promotedStartGeneration;
+          }
+
           return {
             turn: completeTurnRuntimeState(createTurnRuntimeState({
               turnId,
@@ -173,11 +273,25 @@ export const createAgentKernel = ({
               createEvent('TurnStarted', turnId),
               createEvent('TurnCompleted', turnId)
             ],
-            toolResults: await startGeneration(command)
+            toolResults: startGenerationResults
           };
         case 'ExecuteToolCalls':
           if (!executeToolCalls) {
             throw new Error(`No kernel handler configured for command ${command.type}`);
+          }
+
+          const executeToolCallResults = await executeToolCalls(command);
+          const promotedExecuteToolCalls = promoteResultsToWaitingJob({
+            turnId,
+            sessionId: 'kernel:ExecuteToolCalls',
+            userMessage: 'ExecuteToolCalls',
+            results: executeToolCallResults,
+            projectId: command.projectId || command.sessionId,
+            source: command.source
+          });
+
+          if (promotedExecuteToolCalls) {
+            return promotedExecuteToolCalls;
           }
 
           return {
@@ -192,7 +306,7 @@ export const createAgentKernel = ({
               createEvent('TurnStarted', turnId),
               createEvent('TurnCompleted', turnId)
             ],
-            toolResults: await executeToolCalls(command)
+            toolResults: executeToolCallResults
           };
         default:
           throw new Error(`dispatchCommand does not handle ${command.type}`);
@@ -251,21 +365,9 @@ export const createAgentKernel = ({
         return {
           turn,
           events,
-          jobTransition: {
-            job: {
-              id: jobResult.jobTransition.jobId,
-              projectId: '',
-              type: 'IMAGE_GENERATION',
-              status: 'queued',
-              createdAt: Date.now(),
-              updatedAt: Date.now(),
-              source: 'chat',
-              steps: [],
-              artifacts: []
-            },
-            events: [],
-            toolResult: undefined
-          }
+          jobTransition: buildQueuedJobTransition({
+            jobId: jobResult.jobTransition.jobId
+          })
         };
       }
 

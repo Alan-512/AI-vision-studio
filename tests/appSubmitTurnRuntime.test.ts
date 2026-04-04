@@ -6,27 +6,19 @@ describe('appSubmitTurnRuntime', () => {
     const executeStreamingTurn = vi.fn().mockResolvedValue(undefined);
 
     const result = await executeAppSubmitUserTurn({
-      type: 'SubmitUserTurn',
-      turn: {
-        id: 'turn-1',
-        sessionId: 'project-1',
-        userMessage: 'hello',
-        status: 'ready',
-        createdAt: 1,
-        updatedAt: 1,
-        plannedToolCalls: [],
-        toolResults: []
-      },
       payload: {
-        executeStreamingTurn,
-        sendingProjectId: 'project-1',
-        userMessage: {
-          role: 'user',
-          content: 'hello',
-          timestamp: 1
+        kind: 'streaming_turn',
+        input: {
+          sendingProjectId: 'project-1',
+          userMessage: {
+            role: 'user',
+            content: 'hello',
+            timestamp: 1
+          }
         }
-      }
-    } as any);
+      } as any,
+      executeStreamingTurn
+    });
 
     expect(executeStreamingTurn).toHaveBeenCalledWith({
       sendingProjectId: 'project-1',
@@ -37,5 +29,14 @@ describe('appSubmitTurnRuntime', () => {
       }
     });
     expect(result).toBeUndefined();
+  });
+
+  it('rejects submit-turn payloads with an unsupported compat kind', async () => {
+    await expect(executeAppSubmitUserTurn({
+      payload: {
+        kind: 'unknown'
+      } as any,
+      executeStreamingTurn: vi.fn()
+    })).rejects.toThrow('Unsupported submit-turn payload kind');
   });
 });

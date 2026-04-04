@@ -112,31 +112,50 @@ describe('appAgentKernelRuntime', () => {
     const result = await kernel.dispatchCommand({
       type: 'StartGeneration',
       payload: {
+        kind: 'generation_request',
+        input: {
+          launchControllerInput: {
+            persistenceDeps: {},
+            launcherDeps: {},
+            runtimeDeps: {}
+          },
+          requestInput: {
+            currentProjectId: 'project-1',
+            resolvedJobSource: 'studio'
+          }
+        }
+      }
+    });
+
+    expect(executeStartGeneration).toHaveBeenCalledWith({
+      kind: 'generation_request',
+      input: {
         launchControllerInput: {
           persistenceDeps: {},
           launcherDeps: {},
           runtimeDeps: {}
         },
         requestInput: {
-          currentProjectId: 'project-1'
+          currentProjectId: 'project-1',
+          resolvedJobSource: 'studio'
         }
-      }
-    });
-
-    expect(executeStartGeneration).toHaveBeenCalledWith({
-      launchControllerInput: {
-        persistenceDeps: {},
-        launcherDeps: {},
-        runtimeDeps: {}
-      },
-      requestInput: {
-        currentProjectId: 'project-1'
       }
     });
     expect(result.toolResults).toEqual([{
       status: 'success',
       toolName: 'generate_image',
       jobId: 'job-1'
+    }]);
+    expect(result.jobTransition?.job).toMatchObject({
+      projectId: 'project-1',
+      source: 'studio',
+      status: 'queued'
+    });
+    expect(result.jobTransition?.events).toMatchObject([{
+      type: 'JobQueued',
+      payload: {
+        source: 'studio'
+      }
     }]);
   });
 
@@ -153,6 +172,9 @@ describe('appAgentKernelRuntime', () => {
     const result = await kernel.dispatchCommand({
       type: 'ExecuteToolCalls',
       turnId: 'turn-tool-call',
+      sessionId: 'project-1',
+      projectId: 'project-1',
+      source: 'chat',
       toolCalls: [{
         toolName: 'generate_image',
         args: {
@@ -164,6 +186,9 @@ describe('appAgentKernelRuntime', () => {
     expect(executeToolCalls).toHaveBeenCalledWith({
       type: 'ExecuteToolCalls',
       turnId: 'turn-tool-call',
+      sessionId: 'project-1',
+      projectId: 'project-1',
+      source: 'chat',
       toolCalls: [{
         toolName: 'generate_image',
         args: {
@@ -171,11 +196,25 @@ describe('appAgentKernelRuntime', () => {
         }
       }]
     });
+    expect(result.turn.status).toBe('waiting_on_job');
+    expect(result.turn.activeJobId).toBe('job-tool-call');
     expect(result.toolResults).toEqual([{
       status: 'success',
       toolName: 'generate_image',
       jobId: 'job-tool-call'
     }]);
+    expect(result.jobTransition).toMatchObject({
+      job: {
+        id: 'job-tool-call',
+        status: 'queued'
+      },
+      events: [{
+        type: 'JobQueued',
+        payload: {
+          source: 'chat'
+        }
+      }]
+    });
   });
 
   it('bridges SubmitUserTurn through the composed app kernel', async () => {
@@ -199,13 +238,19 @@ describe('appAgentKernelRuntime', () => {
         updatedAt: 1,
         plannedToolCalls: [],
         toolResults: []
-      }
+      },
+      payload: {
+        kind: 'streaming_turn',
+        input: {
+          sendingProjectId: 'project-1',
+          userMessage: 'hello'
+        }
+      } as any
     });
 
     expect(executeSubmitUserTurn).toHaveBeenCalledWith({
-      type: 'SubmitUserTurn',
-      turn: expect.objectContaining({
-        id: 'turn-1',
+      kind: 'streaming_turn',
+      input: expect.objectContaining({
         userMessage: 'hello'
       })
     });

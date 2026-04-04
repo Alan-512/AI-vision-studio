@@ -1,4 +1,5 @@
 import type { AgentToolResult } from '../types';
+import type { StartGenerationCommand } from './agentKernelTypes';
 
 export const executeAppGenerationFlow = async ({
   launchControllerInput,
@@ -13,7 +14,7 @@ export const executeAppGenerationFlow = async ({
   executeAppGenerationRequest: (input: any) => Promise<any>;
   dispatchKernelCommand?: (command: {
     type: 'StartGeneration';
-    payload: Record<string, unknown>;
+    payload: StartGenerationCommand['payload'];
   }) => Promise<{ toolResults?: unknown[] }>;
 }) => {
   if (dispatchKernelCommand) {
@@ -28,8 +29,11 @@ export const executeAppGenerationFlow = async ({
     const result = await dispatchKernelCommand({
       type: 'StartGeneration',
       payload: {
-        launchControllerInput,
-        requestInput
+        kind: 'generation_request',
+        input: {
+          launchControllerInput,
+          requestInput
+        }
       }
     });
     return (result.toolResults || []) as AgentToolResult[];

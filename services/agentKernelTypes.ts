@@ -39,15 +39,57 @@ export interface TurnRuntimeState {
   error?: TurnRuntimeError;
 }
 
+export type StreamingTurnCompatInput = {
+  sendingProjectId: string;
+  projectIdRef: { current: string };
+  newHistory: unknown[];
+  userMessage: unknown;
+  selectedModel: unknown;
+  mode: unknown;
+  projectContextSummary?: string;
+  projectSummaryCursor?: number;
+  onUpdateProjectContext?: (summary: string, cursor: number) => void;
+  handleToolCallWithRetry: (action: AgentAction) => Promise<void>;
+  useSearch: boolean;
+  params: Record<string, unknown>;
+  agentContextAssets?: unknown[];
+  signal: AbortSignal;
+  appendModelPlaceholder: () => void;
+  onChunk: (chunkText: string) => void;
+  onThoughtImage?: (imageData: { data: string; mimeType: string; isFinal: boolean }) => void;
+  onThinkingText: (text: string) => void;
+  onSearchProgress: (progress: unknown) => void;
+  onStreamError: (error: Error) => void;
+  onFinish: (result: { collectedSignatures: Array<{ partIndex: number; signature: string }> }) => void;
+};
+
+export type StreamingTurnCompatPayload = {
+  kind: 'streaming_turn';
+  input: StreamingTurnCompatInput;
+};
+
+export type StartGenerationCompatInput = {
+  launchControllerInput: Record<string, unknown>;
+  requestInput: Record<string, unknown>;
+};
+
+export type StartGenerationCompatPayload = {
+  kind: 'generation_request';
+  input: StartGenerationCompatInput;
+};
+
 export type SubmitUserTurnCommand = {
   type: 'SubmitUserTurn';
   turn: TurnRuntimeState;
-  payload?: Record<string, unknown>;
+  payload?: StreamingTurnCompatPayload;
 };
 
 export type ExecuteToolCallsCommand = {
   type: 'ExecuteToolCalls';
   turnId: string;
+  sessionId?: string;
+  projectId?: string;
+  source?: 'chat' | 'studio' | 'resume';
   toolCalls: AgentAction[];
 };
 
@@ -72,7 +114,7 @@ export type ResumeJobCommand = {
 
 export type StartGenerationCommand = {
   type: 'StartGeneration';
-  payload: Record<string, unknown>;
+  payload: StartGenerationCompatPayload;
 };
 
 export type KernelCommand =

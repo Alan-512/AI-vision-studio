@@ -149,7 +149,9 @@ describe('chatAgentRuntime', () => {
     });
     const executeAction = createGenerateActionExecutor({
       onToolCallRef: { current: vi.fn() },
-      dispatchKernelCommand
+      dispatchKernelCommand,
+      getSessionId: () => 'project-7',
+      getProjectId: () => 'project-7'
     });
 
     const result = await executeAction({
@@ -162,6 +164,9 @@ describe('chatAgentRuntime', () => {
     expect(dispatchKernelCommand).toHaveBeenCalledWith({
       type: 'ExecuteToolCalls',
       turnId: 'chat-tool:generate_image',
+      sessionId: 'project-7',
+      projectId: 'project-7',
+      source: 'chat',
       toolCalls: [{
         toolName: 'generate_image',
         args: { prompt: 'poster' }
@@ -273,6 +278,7 @@ describe('chatAgentRuntime', () => {
     const store = createChatAgentRuntimeStore({
       getParams: () => createParams(),
       getHistory: () => [],
+      getProjectId: () => 'project-1',
       onToolCallRef: { current: undefined },
       setToolCallStatus: vi.fn(),
       setToolCallExpanded: vi.fn(),

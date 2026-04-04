@@ -10,15 +10,22 @@ type RetryControlError = Error & {
 
 export const createGenerateActionExecutor = ({
   onToolCallRef,
-  dispatchKernelCommand
+  dispatchKernelCommand,
+  getSessionId = () => 'chat-session',
+  getProjectId = () => 'chat-session'
 }: {
   onToolCallRef: { current?: ((action: AgentAction) => Promise<any> | any) | undefined };
   dispatchKernelCommand?: (command: ExecuteToolCallsCommand) => Promise<Pick<KernelTransitionResult, 'toolResults'>>;
+  getSessionId?: () => string;
+  getProjectId?: () => string;
 }) => async (action: PendingAction): Promise<any> => {
   if (dispatchKernelCommand && action.type === 'GENERATE_IMAGE') {
     const result = await dispatchKernelCommand({
       type: 'ExecuteToolCalls',
       turnId: 'chat-tool:generate_image',
+      sessionId: getSessionId(),
+      projectId: getProjectId(),
+      source: 'chat',
       toolCalls: [{
         toolName: 'generate_image',
         args: action.params
@@ -51,15 +58,19 @@ export const createGenerateActionExecutor = ({
 export const createChatAgentMachine = ({
   onStateChange,
   onToolCallRef,
-  dispatchKernelCommand
+  dispatchKernelCommand,
+  getSessionId,
+  getProjectId
 }: {
   onStateChange: (state: AgentState) => void;
   onToolCallRef: { current?: ((action: AgentAction) => Promise<any> | any) | undefined };
   dispatchKernelCommand?: (command: ExecuteToolCallsCommand) => Promise<Pick<KernelTransitionResult, 'toolResults'>>;
+  getSessionId?: () => string;
+  getProjectId?: () => string;
 }) => {
   let state = createInitialAgentState();
   const maxRetries = state.maxRetries;
-  const executeAction = createGenerateActionExecutor({ onToolCallRef, dispatchKernelCommand });
+  const executeAction = createGenerateActionExecutor({ onToolCallRef, dispatchKernelCommand, getSessionId, getProjectId });
 
   const updateState = (updates: Partial<AgentState>) => {
     state = {
@@ -258,6 +269,7 @@ export const createChatAgentRuntimeController = ({
 export const createChatAgentRuntimeStore = ({
   getParams,
   getHistory,
+  getProjectId,
   onToolCallRef,
   dispatchKernelCommand,
   setToolCallStatus,
@@ -266,6 +278,7 @@ export const createChatAgentRuntimeStore = ({
 }: {
   getParams: () => GenerationParams;
   getHistory: () => ChatMessage[];
+  getProjectId: () => string;
   onToolCallRef: { current?: ((action: AgentAction) => Promise<any> | any) | undefined };
   dispatchKernelCommand?: (command: ExecuteToolCallsCommand) => Promise<Pick<KernelTransitionResult, 'toolResults'>>;
   setToolCallStatus: (status: ActiveChatToolCallStatus | null) => void;
@@ -285,7 +298,9 @@ export const createChatAgentRuntimeStore = ({
       listeners.forEach(listener => listener());
     },
     onToolCallRef,
-    dispatchKernelCommand
+    dispatchKernelCommand,
+    getSessionId: getProjectId,
+    getProjectId
   });
 
   const controller = createChatAgentRuntimeController({

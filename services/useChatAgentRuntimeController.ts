@@ -24,18 +24,21 @@ export const useChatAgentRuntimeController = ({
 }) => {
   const paramsRef = useRef(params);
   const onToolCallRef = useRef(onToolCall);
+  const projectIdRef = useRef(projectId);
   const setToolCallStatusRef = useRef(setToolCallStatus);
   const setToolCallExpandedRef = useRef(setToolCallExpanded);
   const previousProjectIdRef = useRef(projectId);
 
   paramsRef.current = params;
   onToolCallRef.current = onToolCall;
+  projectIdRef.current = projectId;
   setToolCallStatusRef.current = setToolCallStatus;
   setToolCallExpandedRef.current = setToolCallExpanded;
 
   const agentRuntime = useMemo(() => createChatAgentRuntimeStore({
     getParams: () => paramsRef.current,
     getHistory: () => historyRef.current,
+    getProjectId: () => projectIdRef.current,
     onToolCallRef,
     dispatchKernelCommand,
     setToolCallStatus: status => setToolCallStatusRef.current(status),

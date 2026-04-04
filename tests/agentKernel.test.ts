@@ -200,7 +200,7 @@ describe('agentKernel', () => {
     expect(resumed.jobTransition?.job.status).toBe('queued');
   });
 
-  it('handles ExecuteToolCalls as a formal kernel command', async () => {
+  it('promotes ExecuteToolCalls job results into a waiting-on-job transition', async () => {
     const kernel = createAgentKernel({
       planner: async () => ({
         type: 'final_response',
@@ -216,6 +216,9 @@ describe('agentKernel', () => {
     const result = await kernel.dispatchCommand({
       type: 'ExecuteToolCalls',
       turnId: 'turn-tool-call',
+      sessionId: 'project-1',
+      projectId: 'project-1',
+      source: 'chat',
       toolCalls: [{
         toolName: 'generate_image',
         args: {
@@ -224,10 +227,72 @@ describe('agentKernel', () => {
       }]
     });
 
+    expect(result.turn.status).toBe('waiting_on_job');
+    expect(result.turn.activeJobId).toBe('job-tool-call');
     expect(result.toolResults).toEqual([{
       toolName: 'generate_image',
       status: 'success',
       jobId: 'job-tool-call'
     }]);
+    expect(result.jobTransition).toMatchObject({
+      job: {
+        id: 'job-tool-call',
+        projectId: 'project-1',
+        status: 'queued'
+      },
+      events: [{
+        type: 'JobQueued',
+        payload: {
+          source: 'chat'
+        }
+      }]
+    });
+  });
+
+  it('promotes StartGeneration tool results into a waiting-on-job transition when a job id is returned', async () => {
+    const kernel = createAgentKernel({
+      planner: async () => ({
+        type: 'final_response',
+        text: 'unused'
+      }),
+      startGeneration: async () => ([
+        {
+          status: 'success',
+          toolName: 'generate_image',
+          jobId: 'job-start-1'
+        }
+      ])
+    });
+
+    const result = await kernel.dispatchCommand({
+      type: 'StartGeneration',
+      payload: {
+        kind: 'generation_request',
+        input: {
+          launchControllerInput: {},
+          requestInput: {
+            currentProjectId: 'project-1',
+            resolvedJobSource: 'studio'
+          }
+        }
+      }
+    });
+
+    expect(result.turn.status).toBe('waiting_on_job');
+    expect(result.turn.activeJobId).toBe('job-start-1');
+    expect(result.jobTransition).toMatchObject({
+      job: {
+        id: 'job-start-1',
+        projectId: 'project-1',
+        source: 'studio',
+        status: 'queued'
+      },
+      events: [{
+        type: 'JobQueued',
+        payload: {
+          source: 'studio'
+        }
+      }]
+    });
   });
 });

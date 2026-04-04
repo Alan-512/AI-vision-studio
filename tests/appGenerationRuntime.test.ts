@@ -91,14 +91,17 @@ describe('appGenerationRuntime', () => {
     expect(dispatchKernelCommand).toHaveBeenCalledWith(expect.objectContaining({
       type: 'StartGeneration',
       payload: {
-        launchControllerInput: {
-          persistenceDeps: {},
-          launcherDeps: {},
-          runtimeDeps: {}
-        },
-        requestInput: expect.objectContaining({
-          currentProjectId: 'project-1'
-        })
+        kind: 'generation_request',
+        input: {
+          launchControllerInput: {
+            persistenceDeps: {},
+            launcherDeps: {},
+            runtimeDeps: {}
+          },
+          requestInput: expect.objectContaining({
+            currentProjectId: 'project-1'
+          })
+        }
       }
     }));
     expect(createGenerationTaskLaunchController).not.toHaveBeenCalled();

@@ -1,6 +1,7 @@
 import type { AgentJob, BackgroundTaskView, Project } from '../types';
 import { cancelAgentJob } from './agentRuntime';
 import { persistAgentJobSnapshot } from './agentJobPersistence';
+import { buildCancelJobEvents } from './jobCommandEventRuntime';
 import { applyTaskViewProjectionResult } from './taskProjectionPersistence';
 import { planTaskViewSyncForJob } from './taskReadModel';
 
@@ -69,7 +70,11 @@ export const executeAppCancelJob = async ({
 
   return {
     job: cancelledJob,
-    events: [],
+    events: buildCancelJobEvents({
+      job: cancelledJob,
+      timestamp: cancelledJob.updatedAt,
+      reason: command.reason
+    }),
     toolResult: undefined
   };
 };

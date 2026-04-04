@@ -1,11 +1,16 @@
 import type { AgentJob } from '../types';
 import { createAgentKernel } from './agentKernel';
-import type { ExecuteToolCallsCommand, SubmitUserTurnCommand } from './agentKernelTypes';
+import type {
+  ExecuteToolCallsCommand,
+  StartGenerationCommand,
+  StreamingTurnCompatPayload,
+  SubmitUserTurnCommand
+} from './agentKernelTypes';
 
 type AppAgentKernelDeps = {
-  executeStartGeneration?: (input: Record<string, unknown>) => Promise<unknown[]>;
+  executeStartGeneration?: (payload: StartGenerationCommand['payload']) => Promise<unknown[]>;
   executeToolCalls?: (command: ExecuteToolCallsCommand) => Promise<unknown[]>;
-  executeSubmitUserTurn?: (command: SubmitUserTurnCommand) => Promise<unknown>;
+  executeSubmitUserTurn?: (payload: StreamingTurnCompatPayload) => Promise<unknown>;
   executeResolveRequiresAction?: (command: {
     type: 'ResolveRequiresAction';
     jobId: string;
@@ -45,8 +50,13 @@ export const createAppAgentKernel = ({
     text: 'unused'
   }),
   submitUserTurnCommand: async command => {
+    const payload = command.payload;
     if (executeSubmitUserTurn) {
-      const result = await executeSubmitUserTurn(command) as { turnOutput?: unknown };
+      if (!payload) {
+        throw new Error('No app submit-turn handler configured');
+      }
+
+      const result = await executeSubmitUserTurn(payload) as { turnOutput?: unknown };
       return result?.turnOutput ?? result;
     }
 

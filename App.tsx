@@ -32,7 +32,10 @@ import { createAppGenerationTaskFlowDepsBuilder } from './services/appGeneration
 import { prepareAppGenerationRequest } from './services/appGenerationPreflightRuntime';
 import { executeAppGenerationRequest } from './services/appGenerationRequestRuntime';
 import { executeAppGenerationFlow } from './services/appGenerationRuntime';
+import { createAppHandleGenerate } from './services/appHandleGenerateRuntime';
+import { createAppHandleGenerateContextBuilder } from './services/appHandleGenerateContextRuntime';
 import { createAppAgentToolExecutor } from './services/appAgentToolRuntime';
+import { createAppAgentToolCallHandler } from './services/appAgentToolCallRuntime';
 import { executeAppCancelJob } from './services/appCancelJobRuntime';
 import { executeAppResolveRequiresAction } from './services/appResolveRequiresActionRuntime';
 import { executeAppResumeJob } from './services/appResumeJobRuntime';
@@ -42,6 +45,7 @@ import { createAppTaskViewController } from './services/appTaskViewRuntime';
 import { recoverPersistedTaskViews } from './services/appInitializationRuntime';
 import { resolveKeepCurrentAction } from './services/appRequiresActionRuntime';
 import { createAppAgentKernel } from './services/appAgentKernelRuntime';
+import { executeChatStreamingTurn } from './services/chatStreamingRuntime';
 import { buildDefaultRefinePromptRequiresAction, buildEditPrompt, normalizeGenerationParamsForExecution, prepareGenerationLaunch } from './services/generationOrchestrator';
 import { resolveToolCallRecordStatus } from './services/requiresActionRuntime';
 import {
@@ -597,55 +601,6 @@ export function App() {
         setToasts(prev => [...prev, { id: crypto.randomUUID(), type, title, message }]);
     };
     const removeToast = (id: string) => setToasts(prev => prev.filter(t => t.id !== id));
-    const executeToolCallsRef = useRef<((command: { toolCalls: AgentAction[] }) => Promise<AgentToolResult[]>) | null>(null);
-
-    const appAgentKernel = useMemo(() => createAppAgentKernel({
-        executeResolveRequiresAction: command => executeAppResolveRequiresAction({
-            command,
-            activeProjectId: activeProjectIdRef.current,
-            loadAgentJobsByProject,
-            saveAgentJobSnapshot: saveAgentJob,
-            tasksRef,
-            setTaskViews: setTasks,
-            saveTaskView: saveTask,
-            deleteTaskView: deleteTask,
-            projects
-        }),
-        executeCancelJob: command => executeAppCancelJob({
-            command,
-            activeProjectId: activeProjectIdRef.current,
-            loadAgentJobsByProject,
-            saveAgentJobSnapshot: saveAgentJob,
-            tasksRef,
-            setTaskViews: setTasks,
-            saveTaskView: saveTask,
-            deleteTaskView: deleteTask,
-            projects
-        }),
-        executeResumeJob: command => executeAppResumeJob({
-            command,
-            activeProjectId: activeProjectIdRef.current,
-            loadAgentJobsByProject,
-            saveAgentJobSnapshot: saveAgentJob,
-            tasksRef,
-            setTaskViews: setTasks,
-            saveTaskView: saveTask,
-            deleteTaskView: deleteTask,
-            projects
-        }),
-        executeStartGeneration: payload => executeAppStartGeneration({
-            ...(payload as any),
-            createGenerationTaskLaunchController,
-            executeAppGenerationRequest
-        }),
-        executeSubmitUserTurn: executeAppSubmitUserTurn,
-        executeToolCalls: command => {
-            if (!executeToolCallsRef.current) {
-                throw new Error('No app tool-call handler configured');
-            }
-            return executeToolCallsRef.current(command);
-        }
-    }), [projects]);
 
     const updateLastModelMessage = (updater: (message: ChatMessage) => ChatMessage) => {
         setChatHistory(prev => {
@@ -767,354 +722,37 @@ export function App() {
         })();
     };
 
-    const handleAgentToolCall = async (action: AgentAction): Promise<AgentToolResult> => {
-        const rawArgs = action.args && typeof action.args === 'object' && 'parameters' in action.args
-            ? (action.args as { parameters: any }).parameters
-            : action.args;
-        const toolCallId = crypto.randomUUID();
-        // FIX: Generate unique key for deduplication based on action content
-        const toolCallKey = `${action.toolName}-${JSON.stringify(rawArgs ?? {}).slice(0, 100)}`;
-        const createToolErrorResult = (error: string): AgentToolResult => ({
-            jobId: '',
-            toolName: action.toolName,
-            status: 'error',
-            error
-        });
+    const handleAgentToolCall = createAppAgentToolCallHandler({
+        mode,
+        processingToolCallKeys: processingToolCallRef.current,
+        upsertLastModelToolCall,
+        updateLastModelMessage,
+        setChatHistory,
+        handleModeSwitch,
+        addToast,
+        handleGenerate,
+        normalizeAssistantMode,
+        getPlaybookDefaults,
+        loadAgentJobsByProject,
+        activeProjectId,
+        chatParams,
+        chatHistory,
+        chatEditParams,
+        setRightPanelMode,
+        setThoughtImages,
+        setChatEditParams,
+        setAgentContextAssets,
+        extractSearchContextFromProgress,
+        selectReferenceRecords,
+        latestSearchProgress: [...chatHistory]
+            .reverse()
+            .find(m => m.role === 'model' && m.searchProgress?.status === 'complete')
+            ?.searchProgress,
+        compressImageForContext,
+        resolveToolCallRecordStatus
+    });
 
-        // Check if already processing this exact tool call
-        if (processingToolCallRef.current.has(toolCallKey)) {
-            console.warn('[Agent] Duplicate tool call detected, skipping:', toolCallKey.slice(0, 50));
-            return {
-                jobId: '',
-                toolName: action.toolName,
-                status: 'success',
-                message: 'Duplicate tool call ignored.',
-                metadata: { deduplicated: true }
-            };
-        }
-
-        processingToolCallRef.current.add(toolCallKey);
-
-        try {
-        if (action.toolName === 'generate_image') {
-            const toolArgs = rawArgs && typeof rawArgs === 'object' ? rawArgs : {};
-            const { prompt, aspectRatio, style, resolution, thinkingLevel, negativePrompt, save_as_reference, numberOfImages } = toolArgs;
-            upsertLastModelToolCall(toolCallId, () => ({
-                id: toolCallId,
-                toolName: action.toolName,
-                args: toolArgs,
-                status: 'running',
-                startedAt: Date.now()
-            }));
-            setRightPanelMode('GALLERY');
-            if (mode !== AppMode.IMAGE) handleModeSwitch(AppMode.IMAGE);
-
-
-            // Note: isGroundingRequested not used in Chat mode (LLM handles search)
-            const normalizedPrompt = typeof prompt === 'string' ? prompt.trim() : '';
-            if (!normalizedPrompt) {
-                const failedResult = createToolErrorResult('Prompt missing for generate_image tool call.');
-                upsertLastModelToolCall(toolCallId, existing => ({
-                    ...(existing || {
-                        id: toolCallId,
-                        toolName: action.toolName,
-                        args: toolArgs
-                    }),
-                    status: 'failed',
-                    completedAt: Date.now(),
-                    result: failedResult
-                }));
-                addToast('error', 'Prompt Missing', '对话生成未收到有效提示词，请重试或换句话描述。');
-                return failedResult;
-            }
-            const chatDefaults = {
-                aspectRatio: AspectRatio.LANDSCAPE,
-                imageStyle: ImageStyle.NONE,
-                imageResolution: ImageResolution.RES_1K,
-                thinkingLevel: ThinkingLevel.MINIMAL,
-                negativePrompt: ''
-            };
-            const assistantMode = normalizeAssistantMode(toolArgs.assistant_mode);
-            const isPlaybookOverridden = toolArgs.override_playbook === true;
-            const playbookDefaults = isPlaybookOverridden ? {} : getPlaybookDefaults(assistantMode);
-            const hasUserUploadedImages = chatHistory.some(m => m.role === 'user' && (m.image || (m.images && m.images.length > 0)));
-            if (assistantMode) {
-                console.log(`[Agent] assistant_mode: ${assistantMode}`);
-            }
-            if (isPlaybookOverridden) {
-                console.log('[Agent] Playbook override enabled');
-            }
-
-            // === NEW ARCHITECTURE: Model Selection with User Lock Priority ===
-            // Priority order (from high to low):
-            // 1. Non-auto mode: User's params.imageModel is locked
-            // 2. AI explicitly selected a valid model
-            // 3. searchPolicy=image_only/both + grounding requested → Pro
-            // 4. Default to Flash
-
-            // FIX: Chat tool calls use Chat-specific defaults, NOT Studio params
-            // Chat is always in AI autonomous mode with LLM handling search
-            // searchPolicy is always LLM_ONLY for Chat, so grounding is never forced on image model
-
-            let effectiveModel: ImageModel;
-            let effectiveGrounding: boolean;
-
-            // Chat auto mode: AI can suggest model, grounding is always false (LLM handles search)
-            const aiModel = toolArgs.model;
-
-            if (aiModel && Object.values(ImageModel).includes(aiModel as ImageModel)) {
-                // AI explicitly selected a valid model
-                effectiveModel = aiModel as ImageModel;
-            } else {
-                // Default to Flash 3.1
-                effectiveModel = ImageModel.FLASH_3_1;
-            }
-            // LLM_ONLY: LLM already handled search, so image model never uses grounding
-            effectiveGrounding = false;
-            console.log(`[Agent] Chat mode: model=${effectiveModel}, grounding=${effectiveGrounding}`);
-
-            // Clear previous thought images for new generation
-            setThoughtImages([]);
-            const resolvedAspectRatio = Object.values(AspectRatio).includes(aspectRatio as AspectRatio)
-                ? (aspectRatio as AspectRatio)
-                : (playbookDefaults.aspectRatio ?? chatDefaults.aspectRatio);
-            const resolvedStyle = Object.values(ImageStyle).includes(style as ImageStyle)
-                ? (style as ImageStyle)
-                : (playbookDefaults.imageStyle ?? chatDefaults.imageStyle);
-            const resolvedResolution = Object.values(ImageResolution).includes(resolution as ImageResolution)
-                ? (resolution as ImageResolution)
-                : (playbookDefaults.imageResolution ?? (effectiveModel === ImageModel.PRO ? ImageResolution.RES_2K : chatDefaults.imageResolution));
-            const resolvedThinkingLevel = typeof thinkingLevel === 'string'
-                ? (thinkingLevel.toLowerCase() as ThinkingLevel)
-                : (playbookDefaults.thinkingLevel ?? (effectiveModel === ImageModel.FLASH_3_1 ? chatDefaults.thinkingLevel : undefined));
-            const resolvedNegativePrompt = typeof negativePrompt === 'string'
-                ? negativePrompt
-                : (playbookDefaults.negativePrompt ?? chatDefaults.negativePrompt);
-            const parsedNumberOfImages = Number(numberOfImages);
-            const resolvedNumberOfImages = Number.isFinite(parsedNumberOfImages) ? parsedNumberOfImages : 1;
-
-            // DEBUG: Log agentContextAssets to trace the issue
-            console.log('[DEBUG] generate_image called with agentContextAssets:', agentContextAssets.length, 'items');
-            if (agentContextAssets.length > 0) {
-                console.log('[DEBUG] First asset mimeType:', agentContextAssets[0].mimeType, 'data length:', agentContextAssets[0].data.length);
-            }
-
-            const executionParams: Partial<GenerationParams> = {
-                prompt: normalizedPrompt,
-                aspectRatio: resolvedAspectRatio,
-                imageModel: effectiveModel,
-                imageStyle: resolvedStyle,
-                // Default resolution based on model: Pro=2K, Flash 3.1=1K by default but supports 4K natively
-                imageResolution: resolvedResolution,
-                thinkingLevel: resolvedThinkingLevel as ThinkingLevel,
-                negativePrompt: resolvedNegativePrompt,
-                numberOfImages: resolvedNumberOfImages,
-                useGrounding: effectiveGrounding,
-                // Required by GenerationParams type even for image generation
-                videoModel: chatParams.videoModel,
-                // Extract smartAssets from the LATEST user message in chatHistory
-                // (agentContextAssets may already be cleared from UI)
-                smartAssets: (() => {
-                    // FIX: Must ignore isSystem messages so we don't accidentally treat previous AI-generated output as user references
-                    const latestUserMsg = [...chatHistory].reverse().find(m => m.role === 'user' && !m.isSystem && (m.images?.length || m.image));
-                    const images: SmartAsset[] = [];
-                    if (latestUserMsg?.images) {
-                        latestUserMsg.images.forEach((img, idx) => {
-                            const match = img.match(/^data:(.+);base64,(.+)$/);
-                            if (match) images.push({ id: `latest-${idx}`, mimeType: match[1], data: match[2] });
-                        });
-                    } else if (latestUserMsg?.image) {
-                        const match = latestUserMsg.image.match(/^data:(.+);base64,(.+)$/);
-                        if (match) images.push({ id: 'latest-0', mimeType: match[1], data: match[2] });
-                    }
-                    // DEBUG: Log which user message and images are being used
-                    console.log('[DEBUG] smartAssets extraction:', {
-                        latestUserMsgContent: latestUserMsg?.content?.slice(0, 50),
-                        latestUserMsgTimestamp: latestUserMsg?.timestamp,
-                        imagesCount: images.length,
-                        totalUserMsgsWithImages: chatHistory.filter(m => m.role === 'user' && !m.isSystem && (m.images?.length || m.image)).length
-                    });
-                    return images;
-                })(),
-                // Use AI assistant's ISOLATED edit params (from chatEditParams)
-                editBaseImage: chatEditParams.editBaseImage,
-                editMask: chatEditParams.editMask,
-                editRegions: chatEditParams.editRegions,
-                // With useParamsAsBase: false, no need to override legacy fields - they won't be merged
-                continuousMode: false
-            };
-
-            // === DYNAMIC REFERENCE IMAGE ID TARGETING ===
-            // AI explicitly chooses via toolArgs.reference_image_ids based on available [Attached Image ID: <id>] markers
-            const playbookReferenceMode = playbookDefaults.referenceMode; // Fallback rule from playbook
-            const requestedIds = Array.isArray(toolArgs.reference_image_ids) ? toolArgs.reference_image_ids : [];
-
-            const projectAgentJobs = await loadAgentJobsByProject(activeProjectId);
-            const latestSearchProgress = [...chatHistory]
-                .reverse()
-                .find(m => m.role === 'model' && m.searchProgress?.status === 'complete')
-                ?.searchProgress;
-
-            const selectedReferences: SelectedReferenceRecord[] = selectReferenceRecords({
-                jobs: projectAgentJobs,
-                chatHistory,
-                requestedIds,
-                playbookReferenceMode,
-                hasUserUploadedImages
-            });
-
-            // [DEBUG] Log reference decision
-            console.log(`[Agent] Reference IDs requested by AI:`, requestedIds, `pre-extracted size: ${executionParams.smartAssets?.length ?? 0}`);
-            if (requestedIds.length === 0 && Array.isArray(toolArgs.reference_image_ids)) {
-                console.log(`[Agent] AI explicitly passed empty reference_image_ids.`);
-            }
-            if (selectedReferences.length === 0 && requestedIds.length === 0 && !hasUserUploadedImages && playbookReferenceMode !== 'LAST_GENERATED') {
-                console.log('[Agent] No transcript or artifact reference fallback found.');
-            }
-
-            // Add selected references to smartAssets (avoid duplicates)
-            selectedReferences.forEach(ref => {
-                const exists = executionParams.smartAssets?.some(a => a.data.slice(0, 50) === ref.asset.data.slice(0, 50));
-                if (!exists) {
-                    executionParams.smartAssets?.push(ref.asset);
-                }
-            });
-
-            if (selectedReferences.length > 0) {
-                console.log(`[Agent] Selected ${selectedReferences.length} reference images`);
-                // AUDIT: Removed redundant Reference Active toast
-            }
-
-            let onSuccessCallback: ((asset: AssetItem) => void) | undefined;
-            if (save_as_reference && save_as_reference !== 'NONE') {
-                onSuccessCallback = async (asset: AssetItem) => {
-                    try {
-                        const response = await fetch(asset.url);
-                        const blob = await response.blob();
-                        const compressedBase64 = await compressImageForContext(blob);
-                        const matches = compressedBase64.match(/^data:(.+);base64,(.+)$/);
-                        if (matches) {
-                            const newSmartAsset: SmartAsset = {
-                                id: crypto.randomUUID(), data: matches[2], mimeType: matches[1]
-                            };
-                            setAgentContextAssets(prev => [...prev, newSmartAsset]);
-                            // AUDIT: Removed redundant Context Anchored toast
-                        }
-                    } catch (e) { console.error("Failed to capture asset context", e); }
-                };
-            }
-
-            const upsertChatFeedbackImage = (asset: AssetItem, imageUrl: string) => {
-                if (!imageUrl) return;
-                const assetSignatures = (asset.metadata as any)?.thoughtSignatures;
-                setChatHistory(prev => {
-                    const next = [...prev];
-                    const feedbackIndex = next.findIndex(message =>
-                        message.isSystem &&
-                        message.relatedJobId === asset.jobId &&
-                        message.content.startsWith('[SYSTEM_FEEDBACK]: Image generated successfully')
-                    );
-                    const feedbackMessage: ChatMessage = {
-                        role: 'user',
-                        content: `[SYSTEM_FEEDBACK]: Image generated successfully based on prompt: "${asset.prompt}".\nHere is the visual result (Thumbnail). Use this as context for consistency.`,
-                        timestamp: Date.now(),
-                        image: imageUrl,
-                        isSystem: true,
-                        relatedJobId: asset.jobId,
-                        thoughtSignatures: assetSignatures
-                    };
-                    if (feedbackIndex >= 0) {
-                        next[feedbackIndex] = {
-                            ...next[feedbackIndex],
-                            ...feedbackMessage
-                        };
-                        return next;
-                    }
-                    return [...next, feedbackMessage];
-                });
-            };
-
-            const onPreview = (asset: AssetItem) => {
-                if (asset.jobId) {
-                    updateLastModelMessage(message => ({
-                        ...message,
-                        relatedJobId: asset.jobId
-                    }));
-                }
-                upsertChatFeedbackImage(asset, asset.url);
-            };
-
-            const onComplete = async (asset: AssetItem) => {
-                if (onSuccessCallback) await onSuccessCallback(asset);
-                let contextImageBase64 = '';
-                try {
-                    const response = await fetch(asset.url);
-                    const blob = await response.blob();
-                    contextImageBase64 = await compressImageForContext(blob);
-                } catch (e) { console.warn("Failed to fetch image data for chat context", e); }
-                if (contextImageBase64) {
-                    upsertChatFeedbackImage(asset, contextImageBase64);
-                }
-            };
-            try {
-                const toolResults = await handleGenerate(executionParams as GenerationParams, {
-                    modeOverride: AppMode.IMAGE,
-                    onPreview,
-                    onSuccess: onComplete,
-                    historyOverride: chatHistory,
-                    useParamsAsBase: false, // CLEAN ISOLATION: Don't merge with params config page
-                    jobSource: 'chat',
-                    toolCall: action,
-                    selectedReferenceRecords: selectedReferences,
-                    searchContextOverride: extractSearchContextFromProgress(latestSearchProgress),
-                    resumeJobId: typeof toolArgs.resume_job_id === 'string' && toolArgs.resume_job_id.trim() ? toolArgs.resume_job_id : undefined,
-                    resumeActionType: typeof toolArgs.requires_action_type === 'string' ? toolArgs.requires_action_type : undefined
-                });
-                const primaryResult = toolResults[0] || createToolErrorResult('Tool execution produced no result.');
-                upsertLastModelToolCall(toolCallId, existing => ({
-                    ...(existing || {
-                        id: toolCallId,
-                        toolName: action.toolName,
-                        args: toolArgs
-                    }),
-                    status: resolveToolCallRecordStatus(primaryResult.status),
-                    jobId: primaryResult.jobId,
-                    stepId: primaryResult.stepId,
-                    completedAt: Date.now(),
-                    result: primaryResult
-                }));
-                if (primaryResult.jobId) {
-                    updateLastModelMessage(message => ({
-                        ...message,
-                        relatedJobId: primaryResult.jobId
-                    }));
-                }
-                // Clear AI assistant's edit params after generation (don't reuse for next generation)
-                setChatEditParams({});
-                return primaryResult;
-            } catch (error: any) {
-                const failedResult = createToolErrorResult(error?.message || String(error));
-                upsertLastModelToolCall(toolCallId, existing => ({
-                    ...(existing || {
-                        id: toolCallId,
-                        toolName: action.toolName,
-                        args: toolArgs
-                    }),
-                    status: 'failed',
-                    completedAt: Date.now(),
-                    result: failedResult
-                }));
-                return failedResult;
-            }
-        }
-
-        return createToolErrorResult(`Unsupported tool: ${action.toolName}`);
-        } finally {
-            processingToolCallRef.current.delete(toolCallKey);
-        }
-    };
-
-    executeToolCallsRef.current = createAppAgentToolExecutor({
+    const executeAppToolCalls = createAppAgentToolExecutor({
         executeToolCall: handleAgentToolCall
     });
 
@@ -1127,49 +765,15 @@ export function App() {
         if (e.includes('storage_quota_exceeded')) return t('err.storage');
         return t('err.unknown');
     };
-    const handleGenerate = async (
-        fullParams: GenerationParams,
-        options?: {
-            modeOverride?: AppMode;
-            onPreview?: (asset: AssetItem) => void;
-            onSuccess?: (asset: AssetItem) => void;
-            historyOverride?: ChatMessage[];
-            useParamsAsBase?: boolean; // Default false for isolation
-            jobSource?: AgentJob['source'];
-            toolCall?: AgentAction;
-            selectedReferenceRecords?: SelectedReferenceRecord[];
-            searchContextOverride?: AgentJob['searchContext'];
-            resumeJobId?: string;
-            resumeActionType?: string;
-        }
-    ): Promise<AgentToolResult[]> => {
-        const {
-            modeOverride,
-            onPreview,
-            onSuccess,
-            historyOverride,
-            useParamsAsBase = false,
-            jobSource,
-            toolCall,
-            selectedReferenceRecords = [],
-            searchContextOverride,
-            resumeJobId,
-            resumeActionType
-        } = options || {};
-
-        // RESUME AUDIO CONTEXT ON USER CLICK: Critical for browser audio policies
-        const audioCtx = getAudioContext();
-        if (audioCtx && audioCtx.state === 'suspended') {
-            audioCtx.resume().catch(console.warn);
-        }
-        const preflight = await prepareAppGenerationRequest({
+    const appHandleGenerate = createAppHandleGenerate({
+        prepareRequest: (fullParams, options) => prepareAppGenerationRequest({
             fullParams,
-            useParamsAsBase,
+            useParamsAsBase: options?.useParamsAsBase === true,
             params,
-            mode: modeOverride || mode,
+            mode: options?.modeOverride || mode,
             activeProjectId,
             projects,
-            historyOverride,
+            historyOverride: options?.historyOverride as ChatMessage[] | undefined,
             videoCooldownEndTime,
             getUserApiKey,
             sanitizeImageModel,
@@ -1179,148 +783,172 @@ export function App() {
             generateTitle,
             setProjects,
             saveProject,
-            jobSource,
+            jobSource: options?.jobSource as AgentJob['source'] | undefined,
             resolveNewProjectLabel: () => t('nav.new_project')
-        });
-        if (!preflight) return [];
-
-        const {
-            userKey,
-            activeParams,
-            currentProjectId,
+        }),
+        buildTaskFlowDepsBuilder: ({ currentMode, activeParams, userKey, toolCall, historyOverride }) => () => createAppGenerationTaskFlowDepsBuilder({
             currentMode,
-            resolvedJobSource,
-            triggerMessageTimestamp
-        } = preflight;
+            activeParams,
+            normalizeGenerationParamsForExecution,
+            translateTag: tagKey => t(tagKey as any) || tagKey,
+            executeGenerationAttempt,
+            executePrimaryReview,
+            executeAutoRevisionFlow,
+            resolvePrimaryReview,
+            resolveGenerationFailure,
+            generateImageImpl: (params, projectId, onStartCb, signal, taskIdArg, historyArg, onThoughtImage) => generateImage(
+                params,
+                projectId,
+                onStartCb,
+                signal,
+                taskIdArg,
+                historyArg,
+                (imageData) => {
+                    setThoughtImages(prev => [...prev, {
+                        id: crypto.randomUUID(),
+                        ...imageData,
+                        timestamp: Date.now()
+                    }]);
+                    onThoughtImage?.(imageData);
+                }
+            ),
+            generateVideoImpl: (params, onUpdate, onStartCb, signal) => generateVideo(params, onUpdate, onStartCb, signal),
+            normalizeAssistantMode,
+            buildImageCriticContext: ({
+                assistantMode,
+                negativePrompt,
+                selectedReferences,
+                consistencyProfile,
+                searchContext
+            }) => buildImageCriticContext({
+                assistantMode: normalizeAssistantMode(assistantMode),
+                negativePrompt,
+                selectedReferences: selectedReferences as SelectedReferenceRecord[],
+                consistencyProfile,
+                searchContext
+            }),
+            reviewGeneratedAsset,
+            buildDefaultRefinePromptRequiresAction,
+            toolCall: toolCall as AgentAction | undefined,
+            historyOverride: historyOverride as ChatMessage[] | undefined,
+            chatHistory,
+            userKey,
+            runMemoryExtractionTask,
+            addToast,
+            handleUseAsReference,
+            playSuccessSound,
+            playErrorSound,
+            setVideoCooldownEndTime,
+            getFriendlyError,
+            language
+        }),
+        executeGenerationFlow: executeAppGenerationFlow,
+        getProjectName: projectId => projects.find(p => p.id === projectId)?.name || 'Project',
+        computeHistoryForGeneration: ({ currentMode, activeParams, historyOverride }) => {
+            const isEditMode = currentMode === AppMode.IMAGE && !!activeParams.editBaseImage && !!activeParams.editMask;
+            return !isEditMode && currentMode === AppMode.IMAGE ? historyOverride : undefined;
+        }
+    });
+    const buildAppHandleGenerateContext = createAppHandleGenerateContextBuilder({
+        tasksRef,
+        setTaskViews: setTasks,
+        saveTaskView: saveTask,
+        deleteTaskView: deleteTask,
+        activeProjectIdRef,
+        setAssets,
+        saveAsset,
+        updateAsset,
+        deleteAssetPermanently: permanentlyDeleteAssetFromDB,
+        saveAgentJobSnapshot: saveAgentJob,
+        loadAgentJobsByProject,
+        taskControllers,
+        createGenerationTaskLaunchController,
+        executeAppGenerationRequest,
+        dispatchKernelCommand: command => appAgentKernel.dispatchCommand(command),
+        createResumeActionStep,
+        buildConsistencyProfile,
+        normalizeAssistantMode,
+        prepareGenerationLaunch,
+        playSuccessSound
+    });
+    const handleGenerate = async (
+        fullParams: GenerationParams,
+        options?: {
+            modeOverride?: AppMode;
+            onPreview?: (asset: AssetItem) => void;
+            onSuccess?: (asset: AssetItem) => void;
+            historyOverride?: ChatMessage[];
+            useParamsAsBase?: boolean;
+            jobSource?: AgentJob['source'];
+            toolCall?: AgentAction;
+            selectedReferenceRecords?: SelectedReferenceRecord[];
+            searchContextOverride?: AgentJob['searchContext'];
+            resumeJobId?: string;
+            resumeActionType?: string;
+        }
+    ): Promise<AgentToolResult[]> => {
+        const audioCtx = getAudioContext();
+        if (audioCtx && audioCtx.state === 'suspended') {
+            audioCtx.resume().catch(console.warn);
+        }
 
-        // DEBUG: Trace smartAssets at entry point
         console.log('[handleGenerate] ENTRY - smartAssets:', {
-            fromFullParams: fullParams.smartAssets?.length || 0,
-            fromActiveParams: activeParams.smartAssets?.length || 0
+            fromFullParams: fullParams.smartAssets?.length || 0
         });
 
-        const projectName = projects.find(p => p.id === currentProjectId)?.name || 'Project';
-        const isEditMode = currentMode === AppMode.IMAGE && !!activeParams.editBaseImage && !!activeParams.editMask;
-        const historyForGeneration = !isEditMode && currentMode === AppMode.IMAGE ? historyOverride : undefined;
-        const createTaskFlowDepsBuilder = () => createAppGenerationTaskFlowDepsBuilder({
-                currentMode,
-                activeParams,
-                normalizeGenerationParamsForExecution,
-                translateTag: tagKey => t(tagKey as any) || tagKey,
-                executeGenerationAttempt,
-                executePrimaryReview,
-                executeAutoRevisionFlow,
-                resolvePrimaryReview,
-                resolveGenerationFailure,
-                generateImageImpl: (params, projectId, onStartCb, signal, taskIdArg, historyArg, onThoughtImage) => generateImage(
-                    params,
-                    projectId,
-                    onStartCb,
-                    signal,
-                    taskIdArg,
-                    historyArg,
-                    (imageData) => {
-                        setThoughtImages(prev => [...prev, {
-                            id: crypto.randomUUID(),
-                            ...imageData,
-                            timestamp: Date.now()
-                        }]);
-                        onThoughtImage?.(imageData);
-                    }
-                ),
-                generateVideoImpl: (params, onUpdate, onStartCb, signal) => generateVideo(params, onUpdate, onStartCb, signal),
-                normalizeAssistantMode,
-                buildImageCriticContext: ({
-                    assistantMode,
-                    negativePrompt,
-                    selectedReferences,
-                    consistencyProfile,
-                    searchContext
-                }) => buildImageCriticContext({
-                    assistantMode: normalizeAssistantMode(assistantMode),
-                    negativePrompt,
-                    selectedReferences: selectedReferences as SelectedReferenceRecord[],
-                    consistencyProfile,
-                    searchContext
-                }),
-                reviewGeneratedAsset,
-                buildDefaultRefinePromptRequiresAction,
-                toolCall,
-                historyOverride,
-                chatHistory,
-                userKey,
-                runMemoryExtractionTask,
-                addToast,
-                handleUseAsReference,
-                playSuccessSound,
-                playErrorSound,
-                setVideoCooldownEndTime,
-                getFriendlyError,
-                language
-            });
-
-        return executeAppGenerationFlow({
-            launchControllerInput: {
-                persistenceDeps: {
-                    taskViewsRef: tasksRef,
-                    setTaskViews: setTasks,
-                    saveTaskView: saveTask,
-                    deleteTaskView: deleteTask,
-                    activeProjectIdRef,
-                    setAssets,
-                    saveAsset,
-                    updateAsset,
-                    deleteAssetPermanently: permanentlyDeleteAssetFromDB,
-                    saveAgentJobSnapshot: saveAgentJob,
-                    onPreview,
-                    onSuccess
-                },
-                launcherDeps: {
-                    loadExistingJob: async (projectId, maybeResumeJobId) => maybeResumeJobId
-                        ? (await loadAgentJobsByProject(projectId)).find(job => job.id === maybeResumeJobId)
-                        : undefined,
-                    getPreviousTaskIds: (jobId: string) => tasks.filter(task => task.jobId === jobId).map(task => task.id),
-                    createAbortController: () => new AbortController(),
-                    registerController: (taskId: string, controller: AbortController) => {
-                        taskControllers.current[taskId] = controller;
-                    },
-                    unregisterController: (taskId: string) => {
-                        delete taskControllers.current[taskId];
-                    }
-                },
-                runtimeDeps: {
-                    now: () => Date.now(),
-                    createId: () => crypto.randomUUID()
-                }
-            },
-            requestInput: {
-                count: activeParams.numberOfImages || 1,
-                currentProjectId,
-                currentMode,
-                activeParams,
-                resolvedJobSource,
-                triggerMessageTimestamp,
-                searchContextOverride,
-                selectedReferenceRecords,
-                resumeJobId,
-                resumeActionType,
-                toolCall,
-                historyForGeneration,
-                projectName,
-                createSessionInput: {
-                    createResumeActionStep,
-                    buildConsistencyProfile,
-                    normalizeAssistantMode,
-                    prepareGenerationLaunch
-                },
-                createTaskFlowDepsBuilder,
-                playSuccessSound
-            },
-            createGenerationTaskLaunchController,
-            executeAppGenerationRequest,
-            dispatchKernelCommand: command => appAgentKernel.dispatchCommand(command)
+        return appHandleGenerate(fullParams, options, {
+            ...buildAppHandleGenerateContext({
+                onPreview: options?.onPreview,
+                onSuccess: options?.onSuccess
+            })
         });
     };
+
+    const appAgentKernel = useMemo(() => createAppAgentKernel({
+        executeResolveRequiresAction: command => executeAppResolveRequiresAction({
+            command,
+            activeProjectId: activeProjectIdRef.current,
+            loadAgentJobsByProject,
+            saveAgentJobSnapshot: saveAgentJob,
+            tasksRef,
+            setTaskViews: setTasks,
+            saveTaskView: saveTask,
+            deleteTaskView: deleteTask,
+            projects
+        }),
+        executeCancelJob: command => executeAppCancelJob({
+            command,
+            activeProjectId: activeProjectIdRef.current,
+            loadAgentJobsByProject,
+            saveAgentJobSnapshot: saveAgentJob,
+            tasksRef,
+            setTaskViews: setTasks,
+            saveTaskView: saveTask,
+            deleteTaskView: deleteTask,
+            projects
+        }),
+        executeResumeJob: command => executeAppResumeJob({
+            command,
+            activeProjectId: activeProjectIdRef.current,
+            loadAgentJobsByProject,
+            saveAgentJobSnapshot: saveAgentJob,
+            tasksRef,
+            setTaskViews: setTasks,
+            saveTaskView: saveTask,
+            deleteTaskView: deleteTask,
+            projects
+        }),
+        executeStartGeneration: payload => executeAppStartGeneration({
+            ...payload,
+            createGenerationTaskLaunchController,
+            executeAppGenerationRequest
+        }),
+        executeSubmitUserTurn: payload => executeAppSubmitUserTurn({
+            payload,
+            executeStreamingTurn: executeChatStreamingTurn
+        }),
+        executeToolCalls: command => executeAppToolCalls(command)
+    }), [projects, executeAppToolCalls]);
 
     // Wrapper for Params Config page - merges with params state (backward compatible)
     const handleParamsGenerate = async (overrideParams?: Partial<GenerationParams>) => {
