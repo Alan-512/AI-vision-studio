@@ -75,7 +75,10 @@ describe('generationResolutionRuntime', () => {
 
     expect(resolvePrimaryReview).toHaveBeenCalledWith(expect.objectContaining({ status: 'requires_action' }), false);
     expect(addToast).toHaveBeenCalledWith('info', 'Refinement Suggestion', 'Need confirmation');
-    expect(result).toBe(reviewedToolResult);
+    expect(result).toMatchObject({
+      toolName: reviewedToolResult.toolName,
+      status: reviewedToolResult.status
+    });
   });
 
   it('handles accepted primary review by syncing the completed job and running post-success hooks', async () => {
@@ -106,7 +109,10 @@ describe('generationResolutionRuntime', () => {
     expect(runMemoryExtraction).not.toHaveBeenCalled();
     expect(playSuccessSound).toHaveBeenCalledTimes(1);
     expect(useAsReference).toHaveBeenCalledWith(asset, false);
-    expect(result).toBe(reviewedToolResult);
+    expect(result).toMatchObject({
+      toolName: reviewedToolResult.toolName,
+      status: reviewedToolResult.status
+    });
   });
 
   it('handles auto revision requires_action by syncing the resolved job and showing a suggestion toast', async () => {
@@ -131,11 +137,14 @@ describe('generationResolutionRuntime', () => {
 
     expect(resolveAutoRevision).toHaveBeenCalledWith(expect.objectContaining({ status: 'requires_action' }), false);
     expect(addToast).toHaveBeenCalledWith('info', 'Refinement Suggestion', 'Need another decision');
-    expect(result).toBe(revisedToolResult);
+    expect(result).toMatchObject({
+      toolName: revisedToolResult.toolName,
+      status: revisedToolResult.status
+    });
   });
 
   it('prepares and resolves a primary review from review payload', async () => {
-    const resolvePrimaryReviewFn = vi.fn().mockResolvedValue(undefined);
+    const resolvePrimaryReviewFn = vi.fn().mockResolvedValue({ events: [{ type: 'ReviewCompleted' }, { type: 'RequiresActionRaised' }] });
     const addToast = vi.fn();
     const reviewedToolResult = createToolResult({ status: 'requires_action' });
 
@@ -164,11 +173,18 @@ describe('generationResolutionRuntime', () => {
 
     expect(resolvePrimaryReviewFn).toHaveBeenCalledWith(expect.objectContaining({ status: 'requires_action' }), false);
     expect(addToast).toHaveBeenCalledWith('info', 'Refinement Suggestion', 'Needs refinement');
-    expect(result).toBe(reviewedToolResult);
+    expect(result).toMatchObject({
+      toolName: reviewedToolResult.toolName,
+      status: reviewedToolResult.status
+    });
+    expect(result.metadata?.runtimeEvents).toMatchObject([
+      { type: 'ReviewCompleted' },
+      { type: 'RequiresActionRaised' }
+    ]);
   });
 
   it('prepares and resolves an auto revision from review payload', async () => {
-    const resolveAutoRevisionFn = vi.fn().mockResolvedValue(undefined);
+    const resolveAutoRevisionFn = vi.fn().mockResolvedValue({ events: [{ type: 'ReviewCompleted' }, { type: 'RequiresActionRaised' }] });
     const addToast = vi.fn();
     const revisedToolResult = createToolResult({ status: 'requires_action', metadata: { revisedPrompt: 'refined' } });
 
@@ -203,6 +219,13 @@ describe('generationResolutionRuntime', () => {
 
     expect(resolveAutoRevisionFn).toHaveBeenCalledWith(expect.objectContaining({ status: 'requires_action' }), false);
     expect(addToast).toHaveBeenCalledWith('info', 'Refinement Suggestion', 'revise again');
-    expect(result).toBe(revisedToolResult);
+    expect(result).toMatchObject({
+      toolName: revisedToolResult.toolName,
+      status: revisedToolResult.status
+    });
+    expect(result.metadata?.runtimeEvents).toMatchObject([
+      { type: 'ReviewCompleted' },
+      { type: 'RequiresActionRaised' }
+    ]);
   });
 });

@@ -77,7 +77,10 @@ const createStep = (overrides: Partial<JobStep> = {}): JobStep => ({
 
 describe('generationAutoRevisionRuntime', () => {
   it('coordinates auto revision execution, second review, and resolution', async () => {
-    const startAutoRevision = vi.fn().mockResolvedValue(undefined);
+    const startAutoRevision = vi.fn().mockResolvedValue([
+      { events: [{ type: 'ReviewStarted' }] },
+      { events: [{ type: 'ReviewStarted' }] }
+    ]);
     const playVisibleSuccess = vi.fn();
     const executeAttempt = vi.fn().mockResolvedValue({
       revisedAsset: {
@@ -93,7 +96,8 @@ describe('generationAutoRevisionRuntime', () => {
       finalizedRevisedGenerationStep: createStep({ id: 'step-2', kind: 'generation' }),
       revisedGeneratedArtifact: createArtifact({ id: 'artifact-2' }),
       secondReviewStep: createStep({ id: 'step-3', status: 'running' }),
-      reviewingRevisionJob: createJob({ status: 'reviewing', currentStepId: 'step-3' })
+      reviewingRevisionJob: createJob({ status: 'reviewing', currentStepId: 'step-3' }),
+      runtimeEvents: [{ type: 'AssetProduced' }, { type: 'ReviewStarted' }]
     });
     const executeReview = vi.fn().mockResolvedValue({
       secondReview: {
@@ -105,7 +109,10 @@ describe('generationAutoRevisionRuntime', () => {
       finalizedSecondReviewStep: createStep({ id: 'step-3', status: 'failed' }),
       revisedToolResult: createToolResult({ status: 'requires_action' })
     });
-    const resolveAutoRevision = vi.fn().mockResolvedValue(createToolResult({ status: 'requires_action' }));
+    const resolveAutoRevision = vi.fn().mockResolvedValue({
+      ...createToolResult({ status: 'requires_action' }),
+      runtimeEvents: [{ type: 'ReviewCompleted' }, { type: 'RequiresActionRaised' }]
+    });
 
     const result = await executeAutoRevisionFlow({
       job: createJob(),
@@ -157,5 +164,13 @@ describe('generationAutoRevisionRuntime', () => {
     expect(playVisibleSuccess).toHaveBeenCalledTimes(1);
     expect(resolveAutoRevision).toHaveBeenCalledTimes(1);
     expect(result).toMatchObject({ status: 'requires_action' });
+    expect(result.metadata?.runtimeEvents || result.runtimeEvents).toMatchObject([
+      { type: 'ReviewStarted' },
+      { type: 'ReviewStarted' },
+      { type: 'AssetProduced' },
+      { type: 'ReviewStarted' },
+      { type: 'ReviewCompleted' },
+      { type: 'RequiresActionRaised' }
+    ]);
   });
 });

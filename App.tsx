@@ -795,6 +795,7 @@ export function App() {
             executePrimaryReview,
             executeAutoRevisionFlow,
             resolvePrimaryReview,
+            resolveAutoRevision,
             resolveGenerationFailure,
             generateImageImpl: (params, projectId, onStartCb, signal, taskIdArg, historyArg, onThoughtImage) => generateImage(
                 params,

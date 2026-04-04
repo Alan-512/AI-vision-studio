@@ -40,27 +40,17 @@ export interface TurnRuntimeState {
 }
 
 export type StreamingTurnCompatInput = {
+  surfaceBindingKey: string;
   sendingProjectId: string;
-  projectIdRef: { current: string };
   newHistory: unknown[];
   userMessage: unknown;
   selectedModel: unknown;
   mode: unknown;
   projectContextSummary?: string;
   projectSummaryCursor?: number;
-  onUpdateProjectContext?: (summary: string, cursor: number) => void;
-  handleToolCallWithRetry: (action: AgentAction) => Promise<void>;
   useSearch: boolean;
   params: Record<string, unknown>;
   agentContextAssets?: unknown[];
-  signal: AbortSignal;
-  appendModelPlaceholder: () => void;
-  onChunk: (chunkText: string) => void;
-  onThoughtImage?: (imageData: { data: string; mimeType: string; isFinal: boolean }) => void;
-  onThinkingText: (text: string) => void;
-  onSearchProgress: (progress: unknown) => void;
-  onStreamError: (error: Error) => void;
-  onFinish: (result: { collectedSignatures: Array<{ partIndex: number; signature: string }> }) => void;
 };
 
 export type StreamingTurnCompatPayload = {
@@ -69,8 +59,9 @@ export type StreamingTurnCompatPayload = {
 };
 
 export type StartGenerationCompatInput = {
-  launchControllerInput: Record<string, unknown>;
-  requestInput: Record<string, unknown>;
+  bindingKey: string;
+  currentProjectId?: string;
+  resolvedJobSource?: 'chat' | 'studio' | 'resume';
 };
 
 export type StartGenerationCompatPayload = {

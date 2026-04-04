@@ -52,7 +52,10 @@ const createToolResult = (overrides: Partial<AgentToolResult> = {}): AgentToolRe
 
 describe('generationTaskFlowRuntime', () => {
   it('routes accepted review to primary review resolution', async () => {
-    const resolvePrimaryReview = vi.fn().mockResolvedValue(createToolResult({ status: 'success' }));
+    const resolvePrimaryReview = vi.fn().mockResolvedValue({
+      ...createToolResult({ status: 'success' }),
+      metadata: { runtimeEvents: [{ type: 'ReviewCompleted' }, { type: 'JobCompleted' }] }
+    });
     const result = await executePreparedGenerationTask({
       mode: AppMode.IMAGE,
       agentJob: createJob(),
@@ -69,7 +72,8 @@ describe('generationTaskFlowRuntime', () => {
         normalizeGenerationParams: vi.fn().mockReturnValue(createParams()),
         executeGenerationAttempt: vi.fn().mockResolvedValue({
           asset: createAsset(),
-          toolResult: createToolResult()
+          toolResult: createToolResult(),
+          runtimeEvents: [{ type: 'AssetProduced' }]
         }),
         afterVisibleImage: vi.fn().mockResolvedValue(undefined),
         executePrimaryReview: vi.fn().mockResolvedValue({
@@ -77,7 +81,8 @@ describe('generationTaskFlowRuntime', () => {
           review: { decision: 'accept', summary: 'good', warnings: [] },
           reviewArtifact: { id: 'artifact-2', kind: 'review' },
           finalizedReviewStep: { id: 'review-step-1', kind: 'review', name: 'review_output', status: 'success', startTime: 1, endTime: 2, input: {}, output: {} },
-          reviewedToolResult: createToolResult()
+          reviewedToolResult: createToolResult(),
+          runtimeEvents: [{ type: 'ReviewStarted' }]
         }),
         executeAutoRevisionFlow: vi.fn(),
         resolvePrimaryReview,
@@ -87,10 +92,19 @@ describe('generationTaskFlowRuntime', () => {
 
     expect(resolvePrimaryReview).toHaveBeenCalledTimes(1);
     expect(result.status).toBe('success');
+    expect(result.metadata?.runtimeEvents).toMatchObject([
+      { type: 'AssetProduced' },
+      { type: 'ReviewStarted' },
+      { type: 'ReviewCompleted' },
+      { type: 'JobCompleted' }
+    ]);
   });
 
   it('routes auto revise review to auto revision flow', async () => {
-    const executeAutoRevisionFlow = vi.fn().mockResolvedValue(createToolResult({ status: 'requires_action' }));
+    const executeAutoRevisionFlow = vi.fn().mockResolvedValue({
+      ...createToolResult({ status: 'requires_action' }),
+      metadata: { runtimeEvents: [{ type: 'ReviewCompleted' }, { type: 'RequiresActionRaised' }] }
+    });
     const result = await executePreparedGenerationTask({
       mode: AppMode.IMAGE,
       agentJob: createJob(),
@@ -107,7 +121,8 @@ describe('generationTaskFlowRuntime', () => {
         normalizeGenerationParams: vi.fn().mockReturnValue(createParams()),
         executeGenerationAttempt: vi.fn().mockResolvedValue({
           asset: createAsset(),
-          toolResult: createToolResult()
+          toolResult: createToolResult(),
+          runtimeEvents: [{ type: 'AssetProduced' }]
         }),
         afterVisibleImage: vi.fn().mockResolvedValue(undefined),
         executePrimaryReview: vi.fn().mockResolvedValue({
@@ -115,7 +130,8 @@ describe('generationTaskFlowRuntime', () => {
           review: { decision: 'auto_revise', summary: 'fix anatomy', warnings: [], revisionReason: 'fix anatomy' },
           reviewArtifact: { id: 'artifact-2', kind: 'review' },
           finalizedReviewStep: { id: 'review-step-1', kind: 'review', name: 'review_output', status: 'success', startTime: 1, endTime: 2, input: {}, output: {} },
-          reviewedToolResult: createToolResult()
+          reviewedToolResult: createToolResult(),
+          runtimeEvents: [{ type: 'ReviewStarted' }]
         }),
         executeAutoRevisionFlow,
         resolvePrimaryReview: vi.fn(),
@@ -125,11 +141,22 @@ describe('generationTaskFlowRuntime', () => {
 
     expect(executeAutoRevisionFlow).toHaveBeenCalledTimes(1);
     expect(result.status).toBe('requires_action');
+    expect(result.metadata?.runtimeEvents).toMatchObject([
+      { type: 'AssetProduced' },
+      { type: 'ReviewStarted' },
+      { type: 'ReviewCompleted' },
+      { type: 'RequiresActionRaised' }
+    ]);
   });
 
   it('routes thrown errors to generation failure runtime', async () => {
     const resolveGenerationFailure = vi.fn().mockResolvedValue({
-      toolResult: createToolResult({ status: 'error' }),
+      toolResult: {
+        ...createToolResult({ status: 'error' }),
+        metadata: {
+          runtimeEvents: [{ type: 'JobFailed' }]
+        }
+      },
       taskMarkedVisibleComplete: false
     });
     const result = await executePreparedGenerationTask({
@@ -157,5 +184,6 @@ describe('generationTaskFlowRuntime', () => {
 
     expect(resolveGenerationFailure).toHaveBeenCalledTimes(1);
     expect(result.status).toBe('error');
+    expect(result.metadata?.runtimeEvents).toMatchObject([{ type: 'JobFailed' }]);
   });
 });

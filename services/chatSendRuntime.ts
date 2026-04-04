@@ -3,6 +3,10 @@ import type { AgentAction, ChatMessage, GenerationParams, SearchProgress, SmartA
 import type { KernelTransitionResult, SubmitUserTurnCommand } from './agentKernelTypes';
 import { buildSubmitUserTurnCommand } from './chatSubmitTurnRuntime';
 import { createChatStreamingSurfaceCallbacks } from './chatStreamingSurfaceRuntime';
+import {
+  clearStreamingTurnSurfaceBindings,
+  registerStreamingTurnSurfaceBindings
+} from './streamingTurnSurfaceBindingRuntime';
 import { buildOutgoingChatMessage, executeChatStreamingTurn } from './chatStreamingRuntime';
 import { finalizeChatStreamingTurn } from './chatSurfaceRuntime';
 
@@ -123,7 +127,7 @@ export const executeChatSendFlow = async ({
     setSearchIsCollapsed(false);
 
     if (dispatchKernelCommand) {
-      const result = await dispatchKernelCommand(buildSubmitUserTurnCommand({
+      const command = buildSubmitUserTurnCommand({
         createId,
         sendingProjectId,
         projectIdRef,
@@ -138,14 +142,35 @@ export const executeChatSendFlow = async ({
         useSearch,
         params,
         agentContextAssets,
-        signal: abortController.signal,
-        onThoughtImage: appendThoughtImage,
-        streamingCallbacks,
-        onCollectedSignatures: finalSignatures => {
-          collectedSignatures = finalSignatures;
+        signal: abortController.signal
+      });
+      const surfaceBindingKey = command.payload?.input.surfaceBindingKey;
+      if (surfaceBindingKey) {
+        registerStreamingTurnSurfaceBindings(surfaceBindingKey, {
+          projectIdRef,
+          onUpdateProjectContext,
+          handleToolCallWithRetry,
+          signal: abortController.signal,
+          appendModelPlaceholder: streamingCallbacks.appendModelPlaceholder,
+          onChunk: streamingCallbacks.onChunk,
+          onThoughtImage: appendThoughtImage,
+          onThinkingText: streamingCallbacks.onThinkingText,
+          onSearchProgress: streamingCallbacks.onSearchProgress,
+          onStreamError: streamingCallbacks.onStreamError,
+          onFinish: ({ collectedSignatures: finalSignatures }) => {
+            streamingCallbacks.onFinish({ collectedSignatures: finalSignatures });
+            collectedSignatures = finalSignatures;
+          }
+        });
+      }
+      try {
+        const result = await dispatchKernelCommand(command);
+        return result.turnOutput;
+      } finally {
+        if (surfaceBindingKey) {
+          clearStreamingTurnSurfaceBindings(surfaceBindingKey);
         }
-      }));
-      return result.turnOutput;
+      }
     }
 
     await executeStreamingTurn({

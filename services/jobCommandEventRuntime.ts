@@ -75,3 +75,95 @@ export const buildResolveRequiresActionEvents = ({
 
   return events;
 };
+
+export const buildReviewStartedEvents = ({
+  job,
+  timestamp
+}: {
+  job: AgentJob;
+  timestamp: number;
+}): RuntimeProjectionEvent[] => [
+  createEvent('ReviewStarted', job.id, timestamp, {
+    status: job.status
+  })
+];
+
+export const buildReviewResolutionEvents = ({
+  job,
+  timestamp,
+  resolution
+}: {
+  job: AgentJob;
+  timestamp: number;
+  resolution: 'requires_action' | 'completed';
+}): RuntimeProjectionEvent[] => {
+  const events: RuntimeProjectionEvent[] = [
+    createEvent('ReviewCompleted', job.id, timestamp, {
+      resolution
+    })
+  ];
+
+  if (resolution === 'requires_action') {
+    events.push(createEvent('RequiresActionRaised', job.id, timestamp, {
+      requiresActionType: job.requiresAction?.type
+    }));
+  } else {
+    events.push(createEvent('JobCompleted', job.id, timestamp));
+  }
+
+  return events;
+};
+
+export const buildStepStartedEvents = ({
+  job,
+  timestamp,
+  stepId
+}: {
+  job: AgentJob;
+  timestamp: number;
+  stepId?: string;
+}): RuntimeProjectionEvent[] => [
+  createEvent('StepStarted', job.id, timestamp, undefined)
+].map(event => ({
+  ...event,
+  stepId
+}));
+
+export const buildAssetProducedEvents = ({
+  job,
+  timestamp,
+  artifactId
+}: {
+  job: AgentJob;
+  timestamp: number;
+  artifactId?: string;
+}): RuntimeProjectionEvent[] => [
+  createEvent('AssetProduced', job.id, timestamp, undefined)
+].map(event => ({
+  ...event,
+  artifactId
+}));
+
+export const buildCompletedJobEvents = ({
+  job,
+  timestamp
+}: {
+  job: AgentJob;
+  timestamp: number;
+}): RuntimeProjectionEvent[] => [
+  createEvent('JobCompleted', job.id, timestamp)
+];
+
+export const buildFailedJobEvents = ({
+  job,
+  timestamp,
+  error
+}: {
+  job: AgentJob;
+  timestamp: number;
+  error?: string;
+}): RuntimeProjectionEvent[] => [
+  createEvent('JobFailed', job.id, timestamp, {
+    error
+  })
+];

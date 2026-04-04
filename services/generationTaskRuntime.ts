@@ -1,6 +1,15 @@
 import type { AgentJob, AssetItem, BackgroundTaskView } from '../types';
 import { createAgentJobSnapshotPersister } from './agentJobPersistence';
 import { createAssetProjectionController } from './assetProjectionPersistence';
+import {
+  buildAssetProducedEvents,
+  buildCancelJobEvents,
+  buildCompletedJobEvents,
+  buildFailedJobEvents,
+  buildReviewResolutionEvents,
+  buildReviewStartedEvents,
+  buildStepStartedEvents
+} from './jobCommandEventRuntime';
 import { createTaskViewProjectionController } from './taskProjectionPersistence';
 
 export const createGenerationTaskRuntimeController = ({
@@ -79,20 +88,49 @@ export const createGenerationTaskRuntimeController = ({
       if (shouldSyncTaskView) {
         await taskView.upsertForJob(persisted);
       }
-      return persisted;
+      return {
+        job: persisted,
+        events: buildReviewStartedEvents({
+          job: persisted,
+          timestamp: persisted.updatedAt
+        })
+      };
     }),
-    startAutoRevision: async (jobs: AgentJob[]) => Promise.all(jobs.map(job => persistJob(job))),
+    startAutoRevision: async (jobs: AgentJob[]) => Promise.all(jobs.map(async job => {
+      const persisted = await persistJob(job);
+      return {
+        job: persisted,
+        events: buildReviewStartedEvents({
+          job: persisted,
+          timestamp: persisted.updatedAt
+        })
+      };
+    })),
     resolvePrimaryReview: (job: AgentJob, shouldSyncTaskView: boolean) => persistJob(job).then(async persisted => {
       if (shouldSyncTaskView) {
         await taskView.upsertForJob(persisted);
       }
-      return persisted;
+      return {
+        job: persisted,
+        events: buildReviewResolutionEvents({
+          job: persisted,
+          timestamp: persisted.updatedAt,
+          resolution: persisted.status === 'completed' ? 'completed' : 'requires_action'
+        })
+      };
     }),
     resolveAutoRevision: (job: AgentJob, shouldSyncTaskView: boolean) => persistJob(job).then(async persisted => {
       if (shouldSyncTaskView) {
         await taskView.upsertForJob(persisted);
       }
-      return persisted;
+      return {
+        job: persisted,
+        events: buildReviewResolutionEvents({
+          job: persisted,
+          timestamp: persisted.updatedAt,
+          resolution: persisted.status === 'completed' ? 'completed' : 'requires_action'
+        })
+      };
     }),
     initializeQueuedJob: (job: AgentJob) => persistJob(job).then(async persisted => {
       await taskView.upsertForJob(persisted);
@@ -114,7 +152,14 @@ export const createGenerationTaskRuntimeController = ({
       });
       return persistJob(runningJob).then(async persisted => {
         await taskView.upsertForJob(persisted);
-        return persisted;
+        return {
+          job: persisted,
+          events: buildStepStartedEvents({
+            job: persisted,
+            timestamp: persisted.updatedAt,
+            stepId: persisted.currentStepId
+          })
+        };
       });
     },
     upsertTaskView: (job: AgentJob) => taskView.upsertForJob(job),
@@ -128,9 +173,24 @@ export const createGenerationTaskRuntimeController = ({
     }: {
       asset: AssetItem;
       completedJob: AgentJob;
-    }) => {
+      }) => {
       await asset.publishGeneratedAsset(assetItem);
-      return persistJob(completedJob);
+      const persisted = await persistJob(completedJob);
+      return {
+        job: persisted,
+        events: [
+          ...buildAssetProducedEvents({
+            job: persisted,
+            timestamp: persisted.updatedAt,
+            artifactId: assetItem.id
+          }),
+          ...buildReviewResolutionEvents({
+            job: persisted,
+            timestamp: persisted.updatedAt,
+            resolution: 'completed'
+          }).filter(event => event.type === 'JobCompleted')
+        ]
+      };
     },
     publishAssetAndPersistJob: async ({
       asset: assetItem,
@@ -140,7 +200,21 @@ export const createGenerationTaskRuntimeController = ({
       job: AgentJob;
     }) => {
       await asset.publishGeneratedAsset(assetItem);
-      return persistJob(job);
+      const persisted = await persistJob(job);
+      return {
+        job: persisted,
+        events: [
+          ...buildAssetProducedEvents({
+            job: persisted,
+            timestamp: persisted.updatedAt,
+            artifactId: assetItem.id
+          }),
+          ...buildReviewStartedEvents({
+            job: persisted,
+            timestamp: persisted.updatedAt
+          })
+        ]
+      };
     },
     patchAsset: (patches: { persistedPatch: Partial<AssetItem>; visiblePatch?: Partial<AssetItem> }) => asset.patchTaskAsset(patches),
     updateOperation: async ({
@@ -153,7 +227,15 @@ export const createGenerationTaskRuntimeController = ({
       await asset.patchTaskAsset({
         persistedPatch: assetPatch
       });
-      return persistJob(operationJob);
+      const persisted = await persistJob(operationJob);
+      return {
+        job: persisted,
+        events: buildStepStartedEvents({
+          job: persisted,
+          timestamp: persisted.updatedAt,
+          stepId: persisted.currentStepId
+        })
+      };
     },
     completeVideo: async ({
       assetUpdates,
@@ -166,7 +248,22 @@ export const createGenerationTaskRuntimeController = ({
         persistedPatch: assetUpdates,
         visiblePatch: assetUpdates
       });
-      return persistJob(completedJob);
+      const persisted = await persistJob(completedJob);
+      return {
+        job: persisted,
+        events: [
+          ...buildAssetProducedEvents({
+            job: persisted,
+            timestamp: persisted.updatedAt,
+            artifactId: assetRuntime.options.taskId
+          }),
+          ...buildReviewResolutionEvents({
+            job: persisted,
+            timestamp: persisted.updatedAt,
+            resolution: 'completed'
+          }).filter(event => event.type === 'JobCompleted')
+        ]
+      };
     },
     deleteTaskAsset: async () => {
       if (!assetRuntime.deps.deleteAssetPermanently) {
@@ -178,7 +275,7 @@ export const createGenerationTaskRuntimeController = ({
       }
     },
     cancel: async (cancelledJob: AgentJob, taskId = taskRuntime.options.viewId) => {
-      await persistJob(cancelledJob);
+      const persisted = await persistJob(cancelledJob);
       if (taskRuntime.deps.taskViewsRef.current.some(taskViewItem => taskViewItem.id === taskId)) {
         await taskView.dismissById(taskId);
       } else {
@@ -188,6 +285,14 @@ export const createGenerationTaskRuntimeController = ({
       if (assetRuntime.deps.activeProjectIdRef.current === assetRuntime.options.currentProjectId) {
         assetRuntime.deps.setAssets(assets => assets.filter(assetItem => assetItem.id !== assetRuntime.options.taskId));
       }
+      return {
+        job: persisted,
+        events: buildCancelJobEvents({
+          job: persisted,
+          timestamp: persisted.updatedAt,
+          reason: 'user'
+        })
+      };
     },
     recoverVisibleAsset: async ({
       recoveredJob,
@@ -198,20 +303,36 @@ export const createGenerationTaskRuntimeController = ({
       visibleJob: AgentJob;
       shouldMarkVisibleComplete: boolean;
     }) => {
-      await persistJob(recoveredJob);
+      const persisted = await persistJob(recoveredJob);
       if (shouldMarkVisibleComplete) {
         await taskView.markVisibleComplete(visibleJob);
       }
+      return {
+        job: persisted,
+        events: buildCompletedJobEvents({
+          job: persisted,
+          timestamp: persisted.updatedAt
+        })
+      };
     },
     fail: async (failedJob: AgentJob) => {
-      await (async () => {
-        const persisted = await persistJob(failedJob);
-        await taskView.upsertForJob(persisted);
+      const persisted = await (async () => {
+        const job = await persistJob(failedJob);
+        await taskView.upsertForJob(job);
+        return job;
       })();
       await assetRuntime.deps.deleteAssetPermanently?.(assetRuntime.options.taskId);
       if (assetRuntime.deps.activeProjectIdRef.current === assetRuntime.options.currentProjectId) {
         assetRuntime.deps.setAssets(assets => assets.filter(assetItem => assetItem.id !== assetRuntime.options.taskId));
       }
+      return {
+        job: persisted,
+        events: buildFailedJobEvents({
+          job: persisted,
+          timestamp: persisted.updatedAt,
+          error: persisted.lastError
+        })
+      };
     }
   };
 };

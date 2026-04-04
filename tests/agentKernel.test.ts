@@ -209,7 +209,10 @@ describe('agentKernel', () => {
       executeToolCalls: async command => command.toolCalls.map(toolCall => ({
         toolName: toolCall.toolName,
         status: 'success',
-        jobId: 'job-tool-call'
+        jobId: 'job-tool-call',
+        metadata: {
+          runtimeEvents: [{ type: 'AssetProduced' }]
+        }
       }))
     });
 
@@ -229,10 +232,13 @@ describe('agentKernel', () => {
 
     expect(result.turn.status).toBe('waiting_on_job');
     expect(result.turn.activeJobId).toBe('job-tool-call');
-    expect(result.toolResults).toEqual([{
+    expect(result.toolResults).toMatchObject([{
       toolName: 'generate_image',
       status: 'success',
-      jobId: 'job-tool-call'
+      jobId: 'job-tool-call',
+      metadata: {
+        runtimeEvents: [{ type: 'AssetProduced' }]
+      }
     }]);
     expect(result.jobTransition).toMatchObject({
       job: {
@@ -245,6 +251,8 @@ describe('agentKernel', () => {
         payload: {
           source: 'chat'
         }
+      }, {
+        type: 'AssetProduced'
       }]
     });
   });
@@ -259,7 +267,10 @@ describe('agentKernel', () => {
         {
           status: 'success',
           toolName: 'generate_image',
-          jobId: 'job-start-1'
+          jobId: 'job-start-1',
+          metadata: {
+            runtimeEvents: [{ type: 'ReviewStarted' }]
+          }
         }
       ])
     });
@@ -269,11 +280,9 @@ describe('agentKernel', () => {
       payload: {
         kind: 'generation_request',
         input: {
-          launchControllerInput: {},
-          requestInput: {
-            currentProjectId: 'project-1',
-            resolvedJobSource: 'studio'
-          }
+          bindingKey: 'generation-1',
+          currentProjectId: 'project-1',
+          resolvedJobSource: 'studio'
         }
       }
     });
@@ -292,7 +301,87 @@ describe('agentKernel', () => {
         payload: {
           source: 'studio'
         }
+      }, {
+        type: 'ReviewStarted'
       }]
     });
+  });
+
+  it('fails StartGeneration turns when tool results return an immediate error without a job', async () => {
+    const kernel = createAgentKernel({
+      planner: async () => ({
+        type: 'final_response',
+        text: 'unused'
+      }),
+      startGeneration: async () => ([
+        {
+          status: 'error',
+          toolName: 'generate_image',
+          error: 'quota exceeded'
+        }
+      ])
+    });
+
+    const result = await kernel.dispatchCommand({
+      type: 'StartGeneration',
+      payload: {
+        kind: 'generation_request',
+        input: {
+          launchControllerInput: {},
+          requestInput: {
+            currentProjectId: 'project-1',
+            resolvedJobSource: 'studio'
+          }
+        }
+      }
+    });
+
+    expect(result.turn.status).toBe('failed');
+    expect(result.turn.error?.type).toBe('tool_error');
+    expect(result.events.map(event => event.type)).toContain('TurnFailed');
+    expect(result.toolResults).toMatchObject([{
+      toolName: 'generate_image',
+      status: 'error',
+      error: 'quota exceeded'
+    }]);
+  });
+
+  it('fails ExecuteToolCalls turns when tool results return an immediate error without a job', async () => {
+    const kernel = createAgentKernel({
+      planner: async () => ({
+        type: 'final_response',
+        text: 'unused'
+      }),
+      executeToolCalls: async () => ([
+        {
+          toolName: 'generate_image',
+          status: 'error',
+          error: 'Tool execution failed'
+        }
+      ])
+    });
+
+    const result = await kernel.dispatchCommand({
+      type: 'ExecuteToolCalls',
+      turnId: 'turn-tool-call-error',
+      sessionId: 'project-1',
+      projectId: 'project-1',
+      source: 'chat',
+      toolCalls: [{
+        toolName: 'generate_image',
+        args: {
+          prompt: 'poster'
+        }
+      }]
+    });
+
+    expect(result.turn.status).toBe('failed');
+    expect(result.turn.error?.type).toBe('tool_error');
+    expect(result.events.map(event => event.type)).toContain('TurnFailed');
+    expect(result.toolResults).toMatchObject([{
+      toolName: 'generate_image',
+      status: 'error',
+      error: 'Tool execution failed'
+    }]);
   });
 });

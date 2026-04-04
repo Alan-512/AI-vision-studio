@@ -3,17 +3,7 @@ import { AppMode, ImageModel, TextModel } from '../types';
 import { buildSubmitUserTurnCommand } from '../services/chatSubmitTurnRuntime';
 
 describe('chatSubmitTurnRuntime', () => {
-  it('builds a submit-turn command with streaming compat payload', () => {
-    let collectedSignatures: Array<{ partIndex: number; signature: string }> = [];
-    const streamingCallbacks = {
-      appendModelPlaceholder: vi.fn(),
-      onChunk: vi.fn(),
-      onThinkingText: vi.fn(),
-      onSearchProgress: vi.fn(),
-      onStreamError: vi.fn(),
-      onFinish: vi.fn()
-    };
-
+  it('builds a submit-turn command with a surface binding key instead of inline callbacks', () => {
     const command = buildSubmitUserTurnCommand({
       createId: () => 'turn-1',
       sendingProjectId: 'project-1',
@@ -32,11 +22,7 @@ describe('chatSubmitTurnRuntime', () => {
       params: { prompt: 'hello', imageModel: ImageModel.FLASH_3_1 } as any,
       agentContextAssets: [],
       signal: new AbortController().signal,
-      onThoughtImage: vi.fn(),
-      streamingCallbacks: streamingCallbacks as any,
-      onCollectedSignatures: signatures => {
-        collectedSignatures = signatures;
-      }
+      surfaceBindingKey: 'turn-1'
     });
 
     expect(command).toMatchObject({
@@ -50,17 +36,18 @@ describe('chatSubmitTurnRuntime', () => {
         kind: 'streaming_turn',
         input: expect.objectContaining({
           sendingProjectId: 'project-1',
+          surfaceBindingKey: 'turn-1',
           userMessage: expect.objectContaining({
             content: 'hello'
           })
         })
       }
     });
-
-    ((command.payload as any).input as any).onFinish({
-      collectedSignatures: [{ partIndex: 0, signature: 'sig-1' }]
-    });
-
-    expect(collectedSignatures).toEqual([{ partIndex: 0, signature: 'sig-1' }]);
+    expect((command.payload as any).input.appendModelPlaceholder).toBeUndefined();
+    expect((command.payload as any).input.onChunk).toBeUndefined();
+    expect((command.payload as any).input.onFinish).toBeUndefined();
+    expect((command.payload as any).input.projectIdRef).toBeUndefined();
+    expect((command.payload as any).input.handleToolCallWithRetry).toBeUndefined();
+    expect((command.payload as any).input.signal).toBeUndefined();
   });
 });

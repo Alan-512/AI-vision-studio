@@ -1,4 +1,4 @@
-import { AppMode, type AgentJob, type AgentToolResult, type AssetItem, type GenerationParams, type JobStep } from '../types';
+import { AppMode, type AgentJob, type AgentToolResult, type AssetItem, type GenerationParams, type JobStep, type RuntimeProjectionEvent } from '../types';
 import { buildAutoRevisionReviewHandoff } from './generationOrchestrator';
 import {
   transitionJobGenerationOperation,
@@ -69,7 +69,8 @@ export const executeGenerationAttempt = async ({
   historyForGeneration?: any;
   onThoughtImage?: (imageData: any) => void;
   now?: () => number;
-}): Promise<{ asset: AssetItem; toolResult: AgentToolResult }> => {
+}): Promise<{ asset: AssetItem; toolResult: AgentToolResult; runtimeEvents: RuntimeProjectionEvent[] }> => {
+  const runtimeEvents: RuntimeProjectionEvent[] = [];
   const onStart = () => {
     const runningAt = now();
     const runningJob = transitionJobToGenerationRunning({
@@ -83,6 +84,10 @@ export const executeGenerationAttempt = async ({
       runningJob,
       assetPatch,
       assetViewPatch
+    }).then((result: any) => {
+      if (Array.isArray(result?.events)) {
+        runtimeEvents.push(...result.events);
+      }
     }).catch(console.error);
   };
 
@@ -113,11 +118,14 @@ export const executeGenerationAttempt = async ({
         aspectRatio: asset.metadata?.aspectRatio
       }
     });
-    await taskRuntime.completeVisibleImage({
+    const completed = await taskRuntime.completeVisibleImage({
       asset,
       completedJob
     });
-    return { asset, toolResult };
+    if (Array.isArray((completed as any)?.events)) {
+      runtimeEvents.push(...(completed as any).events);
+    }
+    return { asset, toolResult, runtimeEvents };
   }
 
   const videoResult = await generateVideoImpl(
@@ -131,10 +139,13 @@ export const executeGenerationAttempt = async ({
         now: now()
       });
       const assetPatch = { operationName };
-      await taskRuntime.updateOperation({
+      const operationUpdate = await taskRuntime.updateOperation({
         operationJob: jobWithOperation,
         assetPatch
       });
+      if (Array.isArray((operationUpdate as any)?.events)) {
+        runtimeEvents.push(...(operationUpdate as any).events);
+      }
     },
     onStart,
     signal
@@ -156,11 +167,14 @@ export const executeGenerationAttempt = async ({
       videoUri: videoResult.videoUri
     }
   });
-  await taskRuntime.completeVideo({
+  const completed = await taskRuntime.completeVideo({
     assetUpdates: updates,
     completedJob
   });
-  return { asset, toolResult };
+  if (Array.isArray((completed as any)?.events)) {
+    runtimeEvents.push(...(completed as any).events);
+  }
+  return { asset, toolResult, runtimeEvents };
 };
 
 export const executeAutoRevisionAttempt = async ({
@@ -213,6 +227,7 @@ export const executeAutoRevisionAttempt = async ({
   onThoughtImage?: (imageData: any) => void;
   now?: () => number;
 }) => {
+  const runtimeEvents: RuntimeProjectionEvent[] = [];
   const revisedAsset = await generateImageImpl(
     revisedParams,
     currentProjectId,
@@ -241,16 +256,20 @@ export const executeAutoRevisionAttempt = async ({
     toolResult,
     now: now()
   });
-  await taskRuntime.publishAssetAndPersistJob({
+  const published = await taskRuntime.publishAssetAndPersistJob({
     asset: revisedAsset,
     job: reviewingRevisionJob
   });
+  if (Array.isArray((published as any)?.events)) {
+    runtimeEvents.push(...(published as any).events);
+  }
 
   return {
     revisedAsset,
     finalizedRevisedGenerationStep,
     revisedGeneratedArtifact,
     secondReviewStep,
-    reviewingRevisionJob
+    reviewingRevisionJob,
+    runtimeEvents
   };
 };

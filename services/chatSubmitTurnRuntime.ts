@@ -1,6 +1,5 @@
 import type { AgentAction, ChatMessage, GenerationParams, SmartAsset, TextModel } from '../types';
 import type { StreamingTurnCompatInput, SubmitUserTurnCommand } from './agentKernelTypes';
-import { createChatStreamingSurfaceCallbacks } from './chatStreamingSurfaceRuntime';
 
 export const buildSubmitUserTurnCommand = ({
   createId = () => crypto.randomUUID(),
@@ -18,9 +17,7 @@ export const buildSubmitUserTurnCommand = ({
   params,
   agentContextAssets,
   signal,
-  onThoughtImage,
-  streamingCallbacks,
-  onCollectedSignatures
+  surfaceBindingKey
 }: {
   createId?: () => string;
   sendingProjectId: string;
@@ -37,41 +34,27 @@ export const buildSubmitUserTurnCommand = ({
   params: GenerationParams;
   agentContextAssets?: SmartAsset[];
   signal: AbortSignal;
-  onThoughtImage?: (imageData: { data: string; mimeType: string; isFinal: boolean }) => void;
-  streamingCallbacks: ReturnType<typeof createChatStreamingSurfaceCallbacks>;
-  onCollectedSignatures: (signatures: Array<{ partIndex: number; signature: string }>) => void;
+  surfaceBindingKey?: string;
 }): SubmitUserTurnCommand => {
+  const turnId = createId();
   const input: StreamingTurnCompatInput = {
+    surfaceBindingKey: surfaceBindingKey ?? turnId,
     sendingProjectId,
-    projectIdRef,
     newHistory: nextHistory,
     userMessage,
     selectedModel,
     mode,
     projectContextSummary,
     projectSummaryCursor,
-    onUpdateProjectContext,
-    handleToolCallWithRetry,
     useSearch,
     params: params as unknown as Record<string, unknown>,
-    agentContextAssets,
-    signal,
-    appendModelPlaceholder: streamingCallbacks.appendModelPlaceholder,
-    onChunk: streamingCallbacks.onChunk,
-    onThoughtImage,
-    onThinkingText: streamingCallbacks.onThinkingText,
-    onSearchProgress: progress => streamingCallbacks.onSearchProgress(progress as any),
-    onStreamError: streamingCallbacks.onStreamError,
-    onFinish: ({ collectedSignatures }) => {
-      streamingCallbacks.onFinish({ collectedSignatures });
-      onCollectedSignatures(collectedSignatures);
-    }
+    agentContextAssets
   };
 
   return {
     type: 'SubmitUserTurn',
     turn: {
-      id: createId(),
+      id: turnId,
       sessionId: sendingProjectId,
       userMessage: userMessage.content,
       status: 'ready',

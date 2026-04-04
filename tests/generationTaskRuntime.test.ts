@@ -223,11 +223,15 @@ describe('generationTaskRuntime', () => {
       }
     });
 
-    await controller.cancel(createJob({ status: 'cancelled' }), 'task-1');
+    const result = await controller.cancel(createJob({ status: 'cancelled' }), 'task-1');
 
     expect(saveAgentJobSnapshot).toHaveBeenCalledWith(expect.objectContaining({ status: 'cancelled' }));
     expect(deleteTaskView).toHaveBeenCalledWith('task-1');
     expect(deleteAssetPermanently).toHaveBeenCalledWith('task-1');
+    expect(result).toMatchObject({
+      job: expect.objectContaining({ status: 'cancelled' }),
+      events: [{ type: 'JobCancelled' }]
+    });
   });
 
   it('recovers a visible asset by persisting the recovered job and marking the current job visible complete when needed', async () => {
@@ -265,7 +269,7 @@ describe('generationTaskRuntime', () => {
       }
     });
 
-    await controller.recoverVisibleAsset({
+    const result = await controller.recoverVisibleAsset({
       recoveredJob: createJob({ status: 'completed' }),
       visibleJob: createJob({ status: 'completed' }),
       shouldMarkVisibleComplete: true
@@ -273,6 +277,10 @@ describe('generationTaskRuntime', () => {
 
     expect(saveAgentJobSnapshot).toHaveBeenCalledWith(expect.objectContaining({ status: 'completed' }));
     expect(saveTaskView).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({
+      job: expect.objectContaining({ status: 'completed' }),
+      events: [{ type: 'JobCompleted' }]
+    });
   });
 
   it('fails a task by syncing the failed job and deleting the pending task asset', async () => {
@@ -312,11 +320,15 @@ describe('generationTaskRuntime', () => {
       }
     });
 
-    await controller.fail(createJob({ status: 'failed' }));
+    const result = await controller.fail(createJob({ status: 'failed', lastError: 'boom' }));
 
     expect(saveAgentJobSnapshot).toHaveBeenCalledWith(expect.objectContaining({ status: 'failed' }));
     expect(saveTaskView).toHaveBeenCalledTimes(1);
     expect(deleteAssetPermanently).toHaveBeenCalledWith('task-1');
+    expect(result).toMatchObject({
+      job: expect.objectContaining({ status: 'failed' }),
+      events: [{ type: 'JobFailed', payload: { error: 'boom' } }]
+    });
   });
 
   it('persists multiple job snapshots through one controller call', async () => {
@@ -441,7 +453,7 @@ describe('generationTaskRuntime', () => {
       }
     });
 
-    await controller.stageRunningJob({
+    const result = await controller.stageRunningJob({
       runningJob: createJob({ status: 'executing' }),
       assetPatch: { status: 'GENERATING' as const },
       assetViewPatch: { status: 'GENERATING' as const }
@@ -450,6 +462,10 @@ describe('generationTaskRuntime', () => {
     expect(updateAsset).toHaveBeenCalledWith('task-1', { status: 'GENERATING' });
     expect(saveAgentJobSnapshot).toHaveBeenCalledWith(expect.objectContaining({ status: 'executing' }));
     expect(saveTaskView).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({
+      job: expect.objectContaining({ status: 'executing' }),
+      events: [{ type: 'StepStarted' }]
+    });
   });
 
   it('publishes a completed image and persists its completed job', async () => {
@@ -487,13 +503,20 @@ describe('generationTaskRuntime', () => {
       }
     });
 
-    await controller.completeVisibleImage({
+    const result = await controller.completeVisibleImage({
       asset: createAsset(),
       completedJob: createJob({ status: 'completed' })
     });
 
     expect(saveAsset).toHaveBeenCalled();
     expect(saveAgentJobSnapshot).toHaveBeenCalledWith(expect.objectContaining({ status: 'completed' }));
+    expect(result).toMatchObject({
+      job: expect.objectContaining({ status: 'completed' }),
+      events: [
+        { type: 'AssetProduced' },
+        { type: 'JobCompleted' }
+      ]
+    });
   });
 
   it('updates an operation asset patch and persists the operation job', async () => {
@@ -531,13 +554,17 @@ describe('generationTaskRuntime', () => {
       }
     });
 
-    await controller.updateOperation({
+    const result = await controller.updateOperation({
       operationJob: createJob({ status: 'executing' }),
       assetPatch: { operationName: 'op-1' }
     });
 
     expect(updateAsset).toHaveBeenCalledWith('task-1', { operationName: 'op-1' });
     expect(saveAgentJobSnapshot).toHaveBeenCalledWith(expect.objectContaining({ status: 'executing' }));
+    expect(result).toMatchObject({
+      job: expect.objectContaining({ status: 'executing' }),
+      events: [{ type: 'StepStarted' }]
+    });
   });
 
   it('publishes an asset and then persists a follow-up job snapshot', async () => {
@@ -575,13 +602,20 @@ describe('generationTaskRuntime', () => {
       }
     });
 
-    await controller.publishAssetAndPersistJob({
+    const result = await controller.publishAssetAndPersistJob({
       asset: createAsset({ id: 'task-2' }),
       job: createJob({ status: 'reviewing' })
     });
 
     expect(saveAsset).toHaveBeenCalled();
     expect(saveAgentJobSnapshot).toHaveBeenCalledWith(expect.objectContaining({ status: 'reviewing' }));
+    expect(result).toMatchObject({
+      job: expect.objectContaining({ status: 'reviewing' }),
+      events: [
+        { type: 'AssetProduced' },
+        { type: 'ReviewStarted' }
+      ]
+    });
   });
 
   it('syncs the initial queued job into the task view surface', async () => {
@@ -702,7 +736,7 @@ describe('generationTaskRuntime', () => {
       }
     });
 
-    await controller.completeVideo({
+    const result = await controller.completeVideo({
       assetUpdates: { status: 'COMPLETED' as const, url: 'blob://video', videoUri: 'gs://video' },
       completedJob: createJob({ status: 'completed' })
     });
@@ -714,6 +748,13 @@ describe('generationTaskRuntime', () => {
     });
     expect(setAssets).toHaveBeenCalledTimes(1);
     expect(saveAgentJobSnapshot).toHaveBeenCalledWith(expect.objectContaining({ status: 'completed' }));
+    expect(result).toMatchObject({
+      job: expect.objectContaining({ status: 'completed' }),
+      events: [
+        { type: 'AssetProduced' },
+        { type: 'JobCompleted' }
+      ]
+    });
   });
 
   it('starts a review by persisting the review job and optionally syncing task view', async () => {
@@ -751,11 +792,19 @@ describe('generationTaskRuntime', () => {
       }
     });
 
-    await controller.startReview(createJob({ status: 'reviewing' }), true);
-    await controller.startReview(createJob({ status: 'reviewing', updatedAt: 1710000000002 }), false);
+    const first = await controller.startReview(createJob({ status: 'reviewing' }), true);
+    const second = await controller.startReview(createJob({ status: 'reviewing', updatedAt: 1710000000002 }), false);
 
     expect(saveAgentJobSnapshot).toHaveBeenCalledTimes(2);
     expect(saveTaskView).toHaveBeenCalledTimes(1);
+    expect(first).toMatchObject({
+      job: expect.objectContaining({ status: 'reviewing' }),
+      events: [{ type: 'ReviewStarted' }]
+    });
+    expect(second).toMatchObject({
+      job: expect.objectContaining({ status: 'reviewing' }),
+      events: [{ type: 'ReviewStarted' }]
+    });
   });
 
   it('starts auto revision by persisting both revising and executing jobs', async () => {
@@ -792,7 +841,7 @@ describe('generationTaskRuntime', () => {
       }
     });
 
-    await controller.startAutoRevision([
+    const results = await controller.startAutoRevision([
       createJob({ status: 'revising' }),
       createJob({ status: 'executing', updatedAt: 1710000000002 })
     ]);
@@ -800,6 +849,16 @@ describe('generationTaskRuntime', () => {
     expect(saveAgentJobSnapshot).toHaveBeenCalledTimes(2);
     expect(saveAgentJobSnapshot).toHaveBeenNthCalledWith(1, expect.objectContaining({ status: 'revising' }));
     expect(saveAgentJobSnapshot).toHaveBeenNthCalledWith(2, expect.objectContaining({ status: 'executing' }));
+    expect(results).toMatchObject([
+      {
+        job: expect.objectContaining({ status: 'revising' }),
+        events: [{ type: 'ReviewStarted' }]
+      },
+      {
+        job: expect.objectContaining({ status: 'executing' }),
+        events: [{ type: 'ReviewStarted' }]
+      }
+    ]);
   });
 
   it('resolves a primary review by persisting the resolved job and applying the surface policy', async () => {
@@ -837,11 +896,25 @@ describe('generationTaskRuntime', () => {
       }
     });
 
-    await controller.resolvePrimaryReview(createJob({ status: 'requires_action' }), true);
-    await controller.resolvePrimaryReview(createJob({ status: 'completed', updatedAt: 1710000000002 }), false);
+    const blocked = await controller.resolvePrimaryReview(createJob({ status: 'requires_action' }), true);
+    const completed = await controller.resolvePrimaryReview(createJob({ status: 'completed', updatedAt: 1710000000002 }), false);
 
     expect(saveAgentJobSnapshot).toHaveBeenCalledTimes(2);
     expect(saveTaskView).toHaveBeenCalledTimes(1);
+    expect(blocked).toMatchObject({
+      job: expect.objectContaining({ status: 'requires_action' }),
+      events: [
+        { type: 'ReviewCompleted' },
+        { type: 'RequiresActionRaised' }
+      ]
+    });
+    expect(completed).toMatchObject({
+      job: expect.objectContaining({ status: 'completed' }),
+      events: [
+        { type: 'ReviewCompleted' },
+        { type: 'JobCompleted' }
+      ]
+    });
   });
 
   it('resolves an auto revision by persisting the resolved job and applying the surface policy', async () => {
@@ -879,10 +952,24 @@ describe('generationTaskRuntime', () => {
       }
     });
 
-    await controller.resolveAutoRevision(createJob({ status: 'requires_action' }), true);
-    await controller.resolveAutoRevision(createJob({ status: 'completed', updatedAt: 1710000000002 }), false);
+    const blocked = await controller.resolveAutoRevision(createJob({ status: 'requires_action' }), true);
+    const completed = await controller.resolveAutoRevision(createJob({ status: 'completed', updatedAt: 1710000000002 }), false);
 
     expect(saveAgentJobSnapshot).toHaveBeenCalledTimes(2);
     expect(saveTaskView).toHaveBeenCalledTimes(1);
+    expect(blocked).toMatchObject({
+      job: expect.objectContaining({ status: 'requires_action' }),
+      events: [
+        { type: 'ReviewCompleted' },
+        { type: 'RequiresActionRaised' }
+      ]
+    });
+    expect(completed).toMatchObject({
+      job: expect.objectContaining({ status: 'completed' }),
+      events: [
+        { type: 'ReviewCompleted' },
+        { type: 'JobCompleted' }
+      ]
+    });
   });
 });

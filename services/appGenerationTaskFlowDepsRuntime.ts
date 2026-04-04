@@ -9,6 +9,7 @@ export const createAppGenerationTaskFlowDepsBuilder = ({
   executePrimaryReview,
   executeAutoRevisionFlow,
   resolvePrimaryReview,
+  resolveAutoRevision,
   resolveGenerationFailure,
   generateImageImpl,
   generateVideoImpl,
@@ -163,7 +164,7 @@ export const createAppGenerationTaskFlowDepsBuilder = ({
               })
             }
           }),
-          resolveAutoRevision: (nestedInput: any) => resolvePrimaryReview({
+          resolveAutoRevision: (nestedInput: any) => resolveAutoRevision({
             ...nestedInput,
             deps: {
               resolveAutoRevision: (job: AgentJob, shouldSyncTaskView: boolean) => taskRuntime.resolveAutoRevision(job, shouldSyncTaskView),

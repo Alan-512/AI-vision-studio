@@ -114,15 +114,9 @@ describe('appAgentKernelRuntime', () => {
       payload: {
         kind: 'generation_request',
         input: {
-          launchControllerInput: {
-            persistenceDeps: {},
-            launcherDeps: {},
-            runtimeDeps: {}
-          },
-          requestInput: {
-            currentProjectId: 'project-1',
-            resolvedJobSource: 'studio'
-          }
+          bindingKey: 'generation-1',
+          currentProjectId: 'project-1',
+          resolvedJobSource: 'studio'
         }
       }
     });
@@ -130,15 +124,9 @@ describe('appAgentKernelRuntime', () => {
     expect(executeStartGeneration).toHaveBeenCalledWith({
       kind: 'generation_request',
       input: {
-        launchControllerInput: {
-          persistenceDeps: {},
-          launcherDeps: {},
-          runtimeDeps: {}
-        },
-        requestInput: {
-          currentProjectId: 'project-1',
-          resolvedJobSource: 'studio'
-        }
+        bindingKey: 'generation-1',
+        currentProjectId: 'project-1',
+        resolvedJobSource: 'studio'
       }
     });
     expect(result.toolResults).toEqual([{

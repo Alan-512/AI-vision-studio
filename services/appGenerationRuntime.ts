@@ -1,12 +1,17 @@
 import type { AgentToolResult } from '../types';
 import type { StartGenerationCommand } from './agentKernelTypes';
+import {
+  clearStartGenerationBindings,
+  registerStartGenerationBindings
+} from './startGenerationBindingRuntime';
 
 export const executeAppGenerationFlow = async ({
   launchControllerInput,
   requestInput,
   createGenerationTaskLaunchController,
   executeAppGenerationRequest,
-  dispatchKernelCommand
+  dispatchKernelCommand,
+  createId = () => crypto.randomUUID()
 }: {
   launchControllerInput: any;
   requestInput: any;
@@ -16,6 +21,7 @@ export const executeAppGenerationFlow = async ({
     type: 'StartGeneration';
     payload: StartGenerationCommand['payload'];
   }) => Promise<{ toolResults?: unknown[] }>;
+  createId?: () => string;
 }) => {
   if (dispatchKernelCommand) {
     if (requestInput.resumeJobId) {
@@ -26,17 +32,28 @@ export const executeAppGenerationFlow = async ({
       });
     }
 
-    const result = await dispatchKernelCommand({
-      type: 'StartGeneration',
-      payload: {
-        kind: 'generation_request',
-        input: {
-          launchControllerInput,
-          requestInput
-        }
-      }
+    const bindingKey = createId();
+    registerStartGenerationBindings(bindingKey, {
+      launchControllerInput,
+      requestInput
     });
-    return (result.toolResults || []) as AgentToolResult[];
+
+    try {
+      const result = await dispatchKernelCommand({
+        type: 'StartGeneration',
+        payload: {
+          kind: 'generation_request',
+          input: {
+            bindingKey,
+            currentProjectId: requestInput.currentProjectId,
+            resolvedJobSource: requestInput.resolvedJobSource
+          }
+        }
+      });
+      return (result.toolResults || []) as AgentToolResult[];
+    } finally {
+      clearStartGenerationBindings(bindingKey);
+    }
   }
 
   const launchPreparedTask = createGenerationTaskLaunchController(launchControllerInput);

@@ -53,7 +53,7 @@ const createParams = (): GenerationParams => ({
 
 describe('generationReviewRuntime', () => {
   it('executes primary review and returns finalized review artifacts', async () => {
-    const startReview = vi.fn().mockResolvedValue(undefined);
+    const startReview = vi.fn().mockResolvedValue({ events: [{ type: 'ReviewStarted' }] });
     const buildCriticContext = vi.fn().mockReturnValue({ hardConstraints: [] });
     const reviewAsset = vi.fn().mockResolvedValue({
       decision: 'accept',
@@ -94,6 +94,7 @@ describe('generationReviewRuntime', () => {
     expect(result.reviewArtifact.id).toBe('review-artifact-1');
     expect(result.finalizedReviewStep.status).toBe('success');
     expect(result.reviewedToolResult.status).toBe('success');
+    expect(result.runtimeEvents).toMatchObject([{ type: 'ReviewStarted' }]);
   });
 
   it('executes auto revision review and builds revised tool result', async () => {

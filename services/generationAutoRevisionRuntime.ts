@@ -1,4 +1,4 @@
-import { AppMode, type AgentAction, type AgentJob, type AgentToolResult, type GenerationParams, type JobArtifact, type JobStep } from '../types';
+import { AppMode, type AgentAction, type AgentJob, type AgentToolResult, type GenerationParams, type JobArtifact, type JobStep, type RuntimeProjectionEvent } from '../types';
 import type { GenerationReviewPayload } from './generationOrchestrator';
 import { buildAutoRevisionExecutionHandoff } from './generationOrchestrator';
 
@@ -107,6 +107,7 @@ export const executeAutoRevisionFlow = async ({
     createId?: () => string;
   };
 }) => {
+  const runtimeEvents: RuntimeProjectionEvent[] = [];
   const now = deps.now || (() => Date.now());
   const createId = deps.createId || (() => crypto.randomUUID());
   const revisionStepId = createId();
@@ -136,14 +137,25 @@ export const executeAutoRevisionFlow = async ({
     now: now()
   });
 
-  taskRuntime.startAutoRevision([revisingJob, executingRevisionJob]).catch(console.error);
+  taskRuntime.startAutoRevision([revisingJob, executingRevisionJob])
+    .then((results: any) => {
+      if (Array.isArray(results)) {
+        for (const result of results) {
+          if (Array.isArray(result?.events)) {
+            runtimeEvents.push(...result.events);
+          }
+        }
+      }
+    })
+    .catch(console.error);
 
   const secondReviewStepId = createId();
   const {
     revisedAsset,
     finalizedRevisedGenerationStep,
     revisedGeneratedArtifact,
-    secondReviewStep
+    secondReviewStep,
+    runtimeEvents: attemptEvents = []
   } = await deps.executeAttempt({
     executingRevisionJob,
     stepsAfterRevision,
@@ -168,7 +180,8 @@ export const executeAutoRevisionFlow = async ({
     secondReview,
     secondReviewArtifact,
     finalizedSecondReviewStep,
-    revisedToolResult
+    revisedToolResult,
+    runtimeEvents: reviewEvents = []
   } = await deps.executeReview({
     revisedAsset,
     revisedPrompt,
@@ -182,7 +195,7 @@ export const executeAutoRevisionFlow = async ({
     reviewSummary: review.revisionReason || review.summary
   });
 
-  return deps.resolveAutoRevision({
+  const resolved = await deps.resolveAutoRevision({
     mode: currentMode,
     job,
     stepsAfterRevision,
@@ -200,4 +213,16 @@ export const executeAutoRevisionFlow = async ({
     continuousMode,
     revisedAsset
   });
+
+  const resolutionEvents = Array.isArray((resolved as any)?.runtimeEvents) ? (resolved as any).runtimeEvents : [];
+  runtimeEvents.push(...attemptEvents, ...reviewEvents, ...resolutionEvents);
+
+  if (resolved && typeof resolved === 'object' && !Array.isArray(resolved)) {
+    return {
+      ...(resolved as Record<string, unknown>),
+      runtimeEvents
+    } as AgentToolResult;
+  }
+
+  return resolved;
 };

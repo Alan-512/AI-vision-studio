@@ -74,14 +74,16 @@ export const executePreparedGenerationTask = async ({
 }): Promise<AgentToolResult> => {
   let latestVisibleAsset: AssetItem | null = null;
   let taskMarkedVisibleComplete = false;
+  const runtimeEvents: unknown[] = [];
 
   try {
     await deps.stagePendingAsset(initialPendingAsset);
     const genParams = deps.normalizeGenerationParams();
-    const { asset, toolResult } = await deps.executeGenerationAttempt({
+    const { asset, toolResult, runtimeEvents: generationEvents = [] } = await deps.executeGenerationAttempt({
       genParams,
       historyForGeneration
     });
+    runtimeEvents.push(...generationEvents);
     latestVisibleAsset = asset;
 
     if (mode === AppMode.IMAGE) {
@@ -95,15 +97,17 @@ export const executePreparedGenerationTask = async ({
       review,
       reviewArtifact,
       finalizedReviewStep,
-      reviewedToolResult
+      reviewedToolResult,
+      runtimeEvents: reviewEvents = []
     } = await deps.executePrimaryReview({
       asset,
       genParams,
       toolResult
     });
+    runtimeEvents.push(...reviewEvents);
 
     if (review.decision === 'auto_revise' && mode === AppMode.IMAGE) {
-      return deps.executeAutoRevisionFlow({
+      const result = await deps.executeAutoRevisionFlow({
         review,
         genParams,
         toolResult,
@@ -112,9 +116,21 @@ export const executePreparedGenerationTask = async ({
         finalizedReviewStep,
         selectedReferenceRecords
       });
+      const nestedEvents = Array.isArray((result as any)?.runtimeEvents)
+        ? (result as any).runtimeEvents
+        : Array.isArray((result as any)?.metadata?.runtimeEvents)
+          ? (result as any).metadata.runtimeEvents
+          : [];
+      return {
+        ...result,
+        metadata: {
+          ...((result as any)?.metadata || {}),
+          runtimeEvents: [...runtimeEvents, ...nestedEvents]
+        }
+      };
     }
 
-    return deps.resolvePrimaryReview({
+    const result = await deps.resolvePrimaryReview({
       review,
       genParams,
       reviewedToolResult,
@@ -123,6 +139,16 @@ export const executePreparedGenerationTask = async ({
       finalizedReviewStep,
       asset
     });
+    const nestedEvents = Array.isArray((result as any)?.metadata?.runtimeEvents)
+      ? (result as any).metadata.runtimeEvents
+      : [];
+    return {
+      ...result,
+      metadata: {
+        ...((result as any)?.metadata || {}),
+        runtimeEvents: [...runtimeEvents, ...nestedEvents]
+      }
+    };
   } catch (error) {
     const failure = await deps.resolveGenerationFailure({
       error: error as Error,
@@ -130,6 +156,15 @@ export const executePreparedGenerationTask = async ({
       taskMarkedVisibleComplete
     });
     taskMarkedVisibleComplete = failure.taskMarkedVisibleComplete;
-    return failure.toolResult;
+    const nestedEvents = Array.isArray((failure.toolResult as any)?.metadata?.runtimeEvents)
+      ? (failure.toolResult as any).metadata.runtimeEvents
+      : [];
+    return {
+      ...failure.toolResult,
+      metadata: {
+        ...((failure.toolResult as any)?.metadata || {}),
+        runtimeEvents: [...runtimeEvents, ...nestedEvents]
+      }
+    };
   }
 };

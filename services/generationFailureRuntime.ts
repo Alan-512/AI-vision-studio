@@ -40,6 +40,14 @@ export const resolveGenerationFailure = async ({
     now?: () => number;
   };
 }): Promise<{ toolResult: AgentToolResult; taskMarkedVisibleComplete: boolean }> => {
+  const withRuntimeEvents = (toolResult: AgentToolResult, result: unknown): AgentToolResult => ({
+    ...toolResult,
+    metadata: {
+      ...(toolResult.metadata || {}),
+      runtimeEvents: Array.isArray((result as any)?.events) ? (result as any).events : []
+    }
+  });
+
   if (error.message === 'Cancelled' || error.name === 'AbortError') {
     const { cancelledJob, toolResult } = prepareCancelledGeneration({
       job: agentJob,
@@ -49,9 +57,9 @@ export const resolveGenerationFailure = async ({
       reason: 'Cancelled by user',
       now: (deps.now || Date.now)()
     });
-    await deps.taskRuntime.cancel(cancelledJob, taskId);
+    const cancelResult = await deps.taskRuntime.cancel(cancelledJob, taskId);
     return {
-      toolResult,
+      toolResult: withRuntimeEvents(toolResult, cancelResult),
       taskMarkedVisibleComplete
     };
   }
@@ -68,7 +76,7 @@ export const resolveGenerationFailure = async ({
       now: (deps.now || Date.now)()
     });
     const nextTaskMarkedVisibleComplete = true;
-    await deps.taskRuntime.recoverVisibleAsset({
+    const recoveryResult = await deps.taskRuntime.recoverVisibleAsset({
       recoveredJob,
       visibleJob: agentJob,
       shouldMarkVisibleComplete: nextTaskMarkedVisibleComplete
@@ -79,7 +87,7 @@ export const resolveGenerationFailure = async ({
       errorText
     );
     return {
-      toolResult,
+      toolResult: withRuntimeEvents(toolResult, recoveryResult),
       taskMarkedVisibleComplete: nextTaskMarkedVisibleComplete
     };
   }
@@ -94,14 +102,14 @@ export const resolveGenerationFailure = async ({
     retryable,
     now: (deps.now || Date.now)()
   });
-  await deps.taskRuntime.fail(failedJob);
+  const failedResult = await deps.taskRuntime.fail(failedJob);
   deps.playErrorSound();
   deps.addToast('error', 'task.failed', deps.getFriendlyError(errorText));
   if (retryable) {
     deps.setCooldown((deps.now || Date.now)() + 60000);
   }
   return {
-    toolResult,
+    toolResult: withRuntimeEvents(toolResult, failedResult),
     taskMarkedVisibleComplete
   };
 };

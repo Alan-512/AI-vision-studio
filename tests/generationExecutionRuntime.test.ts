@@ -67,8 +67,8 @@ const createToolResult = (): AgentToolResult => ({
 
 describe('generationExecutionRuntime', () => {
   it('runs an image generation attempt through the task runtime', async () => {
-    const stageRunningJob = vi.fn().mockResolvedValue(undefined);
-    const completeVisibleImage = vi.fn().mockResolvedValue(undefined);
+    const stageRunningJob = vi.fn().mockResolvedValue({ events: [{ type: 'StepStarted' }] });
+    const completeVisibleImage = vi.fn().mockResolvedValue({ events: [{ type: 'AssetProduced' }, { type: 'JobCompleted' }] });
     const asset: AssetItem = {
       id: 'asset-1',
       projectId: 'project-1',
@@ -122,12 +122,17 @@ describe('generationExecutionRuntime', () => {
     });
     expect(result.asset).toMatchObject({ id: 'asset-1', jobId: 'job-1' });
     expect(result.toolResult.toolName).toBe('generate_image');
+    expect(result.runtimeEvents).toMatchObject([
+      { type: 'StepStarted' },
+      { type: 'AssetProduced' },
+      { type: 'JobCompleted' }
+    ]);
   });
 
   it('runs a video generation attempt through the task runtime', async () => {
-    const stageRunningJob = vi.fn().mockResolvedValue(undefined);
-    const updateOperation = vi.fn().mockResolvedValue(undefined);
-    const completeVideo = vi.fn().mockResolvedValue(undefined);
+    const stageRunningJob = vi.fn().mockResolvedValue({ events: [{ type: 'StepStarted' }] });
+    const updateOperation = vi.fn().mockResolvedValue({ events: [{ type: 'StepStarted' }] });
+    const completeVideo = vi.fn().mockResolvedValue({ events: [{ type: 'AssetProduced' }, { type: 'JobCompleted' }] });
 
     const result = await executeGenerationAttempt({
       mode: AppMode.VIDEO,
@@ -186,10 +191,16 @@ describe('generationExecutionRuntime', () => {
     });
     expect(result.asset).toMatchObject({ type: 'VIDEO', url: 'blob://video', videoUri: 'gs://video' });
     expect(result.toolResult.toolName).toBe('generate_video');
+    expect(result.runtimeEvents).toMatchObject([
+      { type: 'StepStarted' },
+      { type: 'StepStarted' },
+      { type: 'AssetProduced' },
+      { type: 'JobCompleted' }
+    ]);
   });
 
   it('runs an auto revision image attempt through publish-and-review handoff', async () => {
-    const publishAssetAndPersistJob = vi.fn().mockResolvedValue(undefined);
+    const publishAssetAndPersistJob = vi.fn().mockResolvedValue({ events: [{ type: 'AssetProduced' }, { type: 'ReviewStarted' }] });
     const revisedAsset: AssetItem = {
       id: 'asset-2',
       projectId: 'project-1',
@@ -243,5 +254,9 @@ describe('generationExecutionRuntime', () => {
     expect(result.revisedAsset).toMatchObject({ id: 'asset-2', jobId: 'job-1' });
     expect(result.secondReviewStep.id).toBe('step-3');
     expect(result.reviewingRevisionJob.status).toBe('reviewing');
+    expect(result.runtimeEvents).toMatchObject([
+      { type: 'AssetProduced' },
+      { type: 'ReviewStarted' }
+    ]);
   });
 });

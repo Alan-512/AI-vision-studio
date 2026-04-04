@@ -69,11 +69,13 @@ const createEvent = (
 const buildQueuedJobTransition = ({
   jobId,
   projectId,
-  source
+  source,
+  runtimeEvents = []
 }: {
   jobId: string;
   projectId?: string;
   source?: 'chat' | 'studio' | 'resume';
+  runtimeEvents?: Array<Record<string, unknown>>;
 }) => {
   const timestamp = Date.now();
   const job = {
@@ -90,12 +92,79 @@ const buildQueuedJobTransition = ({
 
   return {
     job,
-    events: buildQueuedJobEvents({
-      job,
-      timestamp,
-      source
-    }),
+    events: [
+      ...buildQueuedJobEvents({
+        job,
+        timestamp,
+        source
+      }),
+      ...runtimeEvents.map(event => ({
+        jobId,
+        timestamp,
+        ...event
+      }))
+    ],
     toolResult: undefined
+  };
+};
+
+const extractRuntimeEventsFromResults = (results: unknown[]): Array<Record<string, unknown>> =>
+  results.flatMap(result => {
+    if (!result || typeof result !== 'object') {
+      return [];
+    }
+
+    const metadata = (result as { metadata?: Record<string, unknown> }).metadata;
+    const runtimeEvents = metadata?.runtimeEvents;
+    if (!Array.isArray(runtimeEvents)) {
+      return [];
+    }
+
+    return runtimeEvents.filter((event): event is Record<string, unknown> => !!event && typeof event === 'object');
+  });
+
+const findImmediateFailedResult = (results: unknown[]) =>
+  results.find(result =>
+    typeof result === 'object' &&
+    result !== null &&
+    'status' in result &&
+    (result as { status?: unknown }).status === 'error'
+  ) as { error?: string } | undefined;
+
+const buildImmediateFailureTurn = ({
+  turnId,
+  sessionId,
+  userMessage,
+  results
+}: {
+  turnId: string;
+  sessionId: string;
+  userMessage: string;
+  results: unknown[];
+}): KernelTransitionResult | null => {
+  const failedResult = findImmediateFailedResult(results);
+  if (!failedResult) {
+    return null;
+  }
+
+  const turn = failTurnRuntimeState(createTurnRuntimeState({
+    turnId,
+    sessionId,
+    userMessage
+  }), {
+    error: failedResult.error || 'Tool execution failed',
+    errorType: 'tool_error'
+  });
+
+  return {
+    turn,
+    events: [
+      createEvent('TurnStarted', turnId),
+      createEvent('TurnFailed', turnId, {
+        error: failedResult.error
+      })
+    ],
+    toolResults: results
   };
 };
 
@@ -146,7 +215,8 @@ const promoteResultsToWaitingJob = ({
     jobTransition: buildQueuedJobTransition({
       jobId: firstJobResult.jobId,
       projectId,
-      source
+      source,
+      runtimeEvents: extractRuntimeEventsFromResults(results)
     })
   };
 };
@@ -253,12 +323,22 @@ export const createAgentKernel = ({
             sessionId: 'kernel:StartGeneration',
             userMessage: 'StartGeneration',
             results: startGenerationResults,
-            projectId: command.payload.input.requestInput.currentProjectId as string | undefined,
-            source: command.payload.input.requestInput.resolvedJobSource as 'chat' | 'studio' | 'resume' | undefined
+            projectId: command.payload.input.currentProjectId,
+            source: command.payload.input.resolvedJobSource
           });
 
           if (promotedStartGeneration) {
             return promotedStartGeneration;
+          }
+
+          const failedStartGeneration = buildImmediateFailureTurn({
+            turnId,
+            sessionId: 'kernel:StartGeneration',
+            userMessage: 'StartGeneration',
+            results: startGenerationResults
+          });
+          if (failedStartGeneration) {
+            return failedStartGeneration;
           }
 
           return {
@@ -292,6 +372,16 @@ export const createAgentKernel = ({
 
           if (promotedExecuteToolCalls) {
             return promotedExecuteToolCalls;
+          }
+
+          const failedExecuteToolCalls = buildImmediateFailureTurn({
+            turnId,
+            sessionId: 'kernel:ExecuteToolCalls',
+            userMessage: 'ExecuteToolCalls',
+            results: executeToolCallResults
+          });
+          if (failedExecuteToolCalls) {
+            return failedExecuteToolCalls;
           }
 
           return {

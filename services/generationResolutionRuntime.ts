@@ -32,18 +32,31 @@ export const resolvePrimaryReviewOutcome = async ({
   };
 }): Promise<AgentToolResult> => {
   const shouldSyncTaskView = mode !== AppMode.IMAGE;
+  const runtimeEvents: unknown[] = [];
 
   if (blockedJob) {
-    await deps.resolvePrimaryReview(blockedJob, shouldSyncTaskView);
+    const result = await deps.resolvePrimaryReview(blockedJob, shouldSyncTaskView);
+    if (Array.isArray((result as any)?.events)) {
+      runtimeEvents.push(...(result as any).events);
+    }
     deps.addToast('info', 'Refinement Suggestion', reviewSummary);
-    return reviewedToolResult;
+    return {
+      ...reviewedToolResult,
+      metadata: {
+        ...(reviewedToolResult.metadata || {}),
+        runtimeEvents
+      }
+    };
   }
 
   if (!completedJob) {
     return reviewedToolResult;
   }
 
-  await deps.resolvePrimaryReview(completedJob, shouldSyncTaskView);
+  const result = await deps.resolvePrimaryReview(completedJob, shouldSyncTaskView);
+  if (Array.isArray((result as any)?.events)) {
+    runtimeEvents.push(...(result as any).events);
+  }
   if (mode === AppMode.IMAGE) {
     await deps.runMemoryExtraction();
   } else {
@@ -52,7 +65,13 @@ export const resolvePrimaryReviewOutcome = async ({
   if (continuousMode && asset?.type === 'IMAGE') {
     deps.useAsReference(asset, false);
   }
-  return reviewedToolResult;
+  return {
+    ...reviewedToolResult,
+    metadata: {
+      ...(reviewedToolResult.metadata || {}),
+      runtimeEvents
+    }
+  };
 };
 
 export const resolvePrimaryReview = async ({
@@ -140,11 +159,21 @@ export const resolveAutoRevisionOutcome = async ({
   };
 }): Promise<AgentToolResult> => {
   const shouldSyncTaskView = mode !== AppMode.IMAGE;
-  await deps.resolveAutoRevision(resolvedJob, shouldSyncTaskView);
+  const runtimeEvents: unknown[] = [];
+  const result = await deps.resolveAutoRevision(resolvedJob, shouldSyncTaskView);
+  if (Array.isArray((result as any)?.events)) {
+    runtimeEvents.push(...(result as any).events);
+  }
 
   if (resolution === 'requires_action') {
     deps.addToast('info', 'Refinement Suggestion', reviewSummary);
-    return revisedToolResult;
+    return {
+      ...revisedToolResult,
+      metadata: {
+        ...(revisedToolResult.metadata || {}),
+        runtimeEvents
+      }
+    };
   }
 
   await deps.runMemoryExtraction();
@@ -154,7 +183,13 @@ export const resolveAutoRevisionOutcome = async ({
   if (continuousMode && revisedAsset) {
     deps.useAsReference(revisedAsset, false);
   }
-  return revisedToolResult;
+  return {
+    ...revisedToolResult,
+    metadata: {
+      ...(revisedToolResult.metadata || {}),
+      runtimeEvents
+    }
+  };
 };
 
 export const resolveAutoRevision = async ({

@@ -1,4 +1,4 @@
-import type { AgentJob, AgentToolResult, AssetItem, GenerationParams, JobStep } from '../types';
+import type { AgentJob, AgentToolResult, AssetItem, GenerationParams, JobStep, RuntimeProjectionEvent } from '../types';
 import type { ImageCriticContextInput } from './imageCriticService';
 import type { LocalReviewResult } from './assetReviewRuntime';
 import {
@@ -45,6 +45,7 @@ export const executePrimaryReview = async ({
   now?: () => number;
   createId?: () => string;
 }) => {
+  const runtimeEvents: RuntimeProjectionEvent[] = [];
   const reviewStepId = createId();
   const reviewStartedAt = now();
   const {
@@ -60,7 +61,13 @@ export const executePrimaryReview = async ({
     startedAt: reviewStartedAt
   });
 
-  taskRuntime.startReview(reviewingJob, asset.type !== 'IMAGE').catch(console.error);
+  taskRuntime.startReview(reviewingJob, asset.type !== 'IMAGE')
+    .then((result: any) => {
+      if (Array.isArray(result?.events)) {
+        runtimeEvents.push(...result.events);
+      }
+    })
+    .catch(console.error);
 
   const criticContext = buildCriticContext({
     assistantMode,
@@ -92,7 +99,8 @@ export const executePrimaryReview = async ({
     review,
     reviewArtifact,
     finalizedReviewStep,
-    reviewedToolResult
+    reviewedToolResult,
+    runtimeEvents
   };
 };
 
