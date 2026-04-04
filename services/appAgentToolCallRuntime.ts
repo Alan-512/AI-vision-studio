@@ -14,6 +14,7 @@ import {
   type ImageStyle as ImageStyleType,
   type SmartAsset
 } from '../types';
+import { buildSequenceFramePrompts } from './toolboxRuntime';
 
 const defaultCreateToolCallKey = (action: AgentAction, rawArgs: unknown) =>
   `${action.toolName}-${JSON.stringify(rawArgs ?? {}).slice(0, 100)}`;
@@ -143,7 +144,7 @@ export const createAppAgentToolCallHandler = ({
       }
 
       const toolArgs = rawArgs && typeof rawArgs === 'object' ? rawArgs : {};
-      const { prompt, aspectRatio, style, resolution, thinkingLevel, negativePrompt, save_as_reference, numberOfImages } = toolArgs as Record<string, any>;
+      const { prompt, aspectRatio, style, resolution, thinkingLevel, negativePrompt, save_as_reference, numberOfImages, sequence_frame_prompts } = toolArgs as Record<string, any>;
       upsertLastModelToolCall(toolCallId, () => ({
         id: toolCallId,
         toolName: action.toolName,
@@ -211,6 +212,17 @@ export const createAppAgentToolCallHandler = ({
       const parsedNumberOfImages = Number(numberOfImages);
       const resolvedNumberOfImages = Number.isFinite(parsedNumberOfImages) ? parsedNumberOfImages : 1;
 
+      const explicitSequenceFramePrompts = Array.isArray(sequence_frame_prompts)
+        ? sequence_frame_prompts.filter((value): value is string => typeof value === 'string')
+        : undefined;
+      const normalizedSequenceFramePrompts = explicitSequenceFramePrompts
+        ? buildSequenceFramePrompts({
+            basePrompt: normalizedPrompt,
+            count: Number.isFinite(parsedNumberOfImages) ? resolvedNumberOfImages : explicitSequenceFramePrompts.length,
+            framePrompts: explicitSequenceFramePrompts
+          })
+        : undefined;
+
       const executionParams: Partial<GenerationParams> = {
         prompt: normalizedPrompt,
         aspectRatio: resolvedAspectRatio,
@@ -219,7 +231,8 @@ export const createAppAgentToolCallHandler = ({
         imageResolution: resolvedResolution,
         thinkingLevel: resolvedThinkingLevel as ThinkingLevel,
         negativePrompt: resolvedNegativePrompt,
-        numberOfImages: resolvedNumberOfImages,
+        numberOfImages: normalizedSequenceFramePrompts?.length || resolvedNumberOfImages,
+        sequenceFramePrompts: normalizedSequenceFramePrompts,
         useGrounding: effectiveGrounding,
         videoModel: chatParams.videoModel,
         smartAssets: (() => {
@@ -308,55 +321,56 @@ export const createAppAgentToolCallHandler = ({
         }
       };
 
-      try {
-        const toolResults = await handleGenerate(executionParams as GenerationParams, {
-          modeOverride: AppMode.IMAGE,
-          onPreview,
-          onSuccess: onComplete,
-          historyOverride: chatHistory,
-          useParamsAsBase: false,
-          jobSource: 'chat',
-          toolCall: action,
-          selectedReferenceRecords: selectedReferences,
-          searchContextOverride: extractSearchContextFromProgress(latestSearchProgress),
-          resumeJobId: typeof (toolArgs as any).resume_job_id === 'string' && (toolArgs as any).resume_job_id.trim() ? (toolArgs as any).resume_job_id : undefined,
-          resumeActionType: typeof (toolArgs as any).requires_action_type === 'string' ? (toolArgs as any).requires_action_type : undefined
-        });
-        const primaryResult = toolResults[0] || createToolErrorResult(action.toolName, 'Tool execution produced no result.');
-        upsertLastModelToolCall(toolCallId, existing => ({
-          ...(existing || {
-            id: toolCallId,
-            toolName: action.toolName,
-            args: toolArgs
-          }),
-          status: resolveToolCallRecordStatus(primaryResult.status),
-          jobId: primaryResult.jobId,
-          stepId: primaryResult.stepId,
-          completedAt: Date.now(),
-          result: primaryResult
+      const toolResults = await handleGenerate(executionParams as GenerationParams, {
+        modeOverride: AppMode.IMAGE,
+        onPreview,
+        onSuccess: onComplete,
+        historyOverride: chatHistory,
+        useParamsAsBase: false,
+        jobSource: 'chat',
+        toolCall: action,
+        selectedReferenceRecords: selectedReferences,
+        searchContextOverride: extractSearchContextFromProgress(latestSearchProgress),
+        resumeJobId: typeof (toolArgs as any).resume_job_id === 'string' && (toolArgs as any).resume_job_id.trim() ? (toolArgs as any).resume_job_id : undefined,
+        resumeActionType: typeof (toolArgs as any).requires_action_type === 'string' ? (toolArgs as any).requires_action_type : undefined
+      });
+      const primaryResult = toolResults[0] || createToolErrorResult(action.toolName, 'Tool execution produced no result.');
+      upsertLastModelToolCall(toolCallId, existing => ({
+        ...(existing || {
+          id: toolCallId,
+          toolName: action.toolName,
+          args: toolArgs
+        }),
+        status: resolveToolCallRecordStatus(primaryResult.status),
+        jobId: primaryResult.jobId,
+        stepId: primaryResult.stepId,
+        completedAt: Date.now(),
+        result: primaryResult
+      }));
+      if (primaryResult.jobId) {
+        updateLastModelMessage(message => ({
+          ...message,
+          relatedJobId: primaryResult.jobId
         }));
-        if (primaryResult.jobId) {
-          updateLastModelMessage(message => ({
-            ...message,
-            relatedJobId: primaryResult.jobId
-          }));
-        }
-        setChatEditParams({});
-        return primaryResult;
-      } catch (error: any) {
-        const failedResult = createToolErrorResult(action.toolName, error?.message || String(error));
-        upsertLastModelToolCall(toolCallId, existing => ({
-          ...(existing || {
-            id: toolCallId,
-            toolName: action.toolName,
-            args: toolArgs
-          }),
-          status: 'failed',
-          completedAt: Date.now(),
-          result: failedResult
-        }));
-        return failedResult;
       }
+      setChatEditParams({});
+      return primaryResult;
+    } catch (error: any) {
+      if (typeof error?.message === 'string' && error.message.includes('Sequence generation')) {
+        addToast('error', 'Sequence Generation Error', error.message);
+      }
+      const failedResult = createToolErrorResult(action.toolName, error?.message || String(error));
+      upsertLastModelToolCall(toolCallId, existing => ({
+        ...(existing || {
+          id: toolCallId,
+          toolName: action.toolName,
+          args: rawArgs && typeof rawArgs === 'object' ? rawArgs : {}
+        }),
+        status: 'failed',
+        completedAt: Date.now(),
+        result: failedResult
+      }));
+      return failedResult;
     } finally {
       processingToolCallKeys.delete(toolCallKey);
     }

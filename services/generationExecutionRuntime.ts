@@ -71,6 +71,7 @@ export const executeGenerationAttempt = async ({
   now?: () => number;
 }): Promise<{ asset: AssetItem; toolResult: AgentToolResult; runtimeEvents: RuntimeProjectionEvent[] }> => {
   const runtimeEvents: RuntimeProjectionEvent[] = [];
+  let stageRunningPromise: Promise<void> | null = null;
   const onStart = () => {
     const runningAt = now();
     const runningJob = transitionJobToGenerationRunning({
@@ -80,15 +81,19 @@ export const executeGenerationAttempt = async ({
     });
     const assetPatch = { status: 'GENERATING' as const };
     const assetViewPatch = { status: 'GENERATING' as const };
-    taskRuntime.stageRunningJob({
-      runningJob,
-      assetPatch,
-      assetViewPatch
-    }).then((result: any) => {
-      if (Array.isArray(result?.events)) {
-        runtimeEvents.push(...result.events);
-      }
-    }).catch(console.error);
+    if (stageRunningPromise) {
+      return;
+    }
+    stageRunningPromise =
+      taskRuntime.stageRunningJob({
+        runningJob,
+        assetPatch,
+        assetViewPatch
+      }).then((result: any) => {
+        if (Array.isArray(result?.events)) {
+          runtimeEvents.push(...result.events);
+        }
+      }).catch(console.error);
   };
 
   if (mode === AppMode.IMAGE) {
@@ -122,6 +127,7 @@ export const executeGenerationAttempt = async ({
       asset,
       completedJob
     });
+    await stageRunningPromise;
     if (Array.isArray((completed as any)?.events)) {
       runtimeEvents.push(...(completed as any).events);
     }
@@ -171,6 +177,7 @@ export const executeGenerationAttempt = async ({
     assetUpdates: updates,
     completedJob
   });
+  await stageRunningPromise;
   if (Array.isArray((completed as any)?.events)) {
     runtimeEvents.push(...(completed as any).events);
   }

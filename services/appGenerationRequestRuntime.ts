@@ -55,7 +55,7 @@ export const executeAppGenerationRequest = async ({
   const sequenceFramePrompts = buildSequenceFramePrompts({
     basePrompt: activeParams.prompt,
     count,
-    framePrompts: undefined
+    framePrompts: activeParams.sequenceFramePrompts
   });
 
   return launchAppGenerationTasks({
@@ -114,7 +114,7 @@ export const executeAppGenerationRequest = async ({
           taskId,
           jobId,
           currentProjectId,
-          activeParams,
+          activeParams: taskParams,
           initialPendingAsset,
           signal,
           selectedReferenceRecords,

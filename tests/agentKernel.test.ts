@@ -307,6 +307,61 @@ describe('agentKernel', () => {
     });
   });
 
+  it('promotes StartGeneration terminal job snapshots without forcing waiting_on_job', async () => {
+    const kernel = createAgentKernel({
+      planner: async () => ({
+        type: 'final_response',
+        text: 'unused'
+      }),
+      startGeneration: async () => ([
+        {
+          status: 'success',
+          toolName: 'generate_image',
+          jobId: 'job-start-terminal',
+          metadata: {
+            jobSnapshot: {
+              id: 'job-start-terminal',
+              projectId: 'project-1',
+              type: 'IMAGE_GENERATION',
+              status: 'completed',
+              createdAt: 1,
+              updatedAt: 2,
+              source: 'studio',
+              steps: [],
+              artifacts: []
+            },
+            runtimeEvents: [{ type: 'ReviewCompleted' }, { type: 'JobCompleted' }]
+          }
+        }
+      ])
+    });
+
+    const result = await kernel.dispatchCommand({
+      type: 'StartGeneration',
+      payload: {
+        kind: 'generation_request',
+        input: {
+          bindingKey: 'generation-terminal',
+          currentProjectId: 'project-1',
+          resolvedJobSource: 'studio'
+        }
+      }
+    });
+
+    expect(result.turn.status).toBe('completed');
+    expect(result.turn.activeJobId).toBeUndefined();
+    expect(result.jobTransition).toMatchObject({
+      job: {
+        id: 'job-start-terminal',
+        status: 'completed'
+      },
+      events: [
+        { type: 'ReviewCompleted' },
+        { type: 'JobCompleted' }
+      ]
+    });
+  });
+
   it('fails StartGeneration turns when tool results return an immediate error without a job', async () => {
     const kernel = createAgentKernel({
       planner: async () => ({

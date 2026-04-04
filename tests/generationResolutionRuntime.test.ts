@@ -181,6 +181,9 @@ describe('generationResolutionRuntime', () => {
       { type: 'ReviewCompleted' },
       { type: 'RequiresActionRaised' }
     ]);
+    expect(result.metadata?.jobSnapshot).toMatchObject({
+      status: 'requires_action'
+    });
   });
 
   it('prepares and resolves an auto revision from review payload', async () => {
@@ -227,5 +230,8 @@ describe('generationResolutionRuntime', () => {
       { type: 'ReviewCompleted' },
       { type: 'RequiresActionRaised' }
     ]);
+    expect(result.metadata?.jobSnapshot).toMatchObject({
+      status: 'requires_action'
+    });
   });
 });

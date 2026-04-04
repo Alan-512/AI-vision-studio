@@ -40,11 +40,12 @@ export const resolveGenerationFailure = async ({
     now?: () => number;
   };
 }): Promise<{ toolResult: AgentToolResult; taskMarkedVisibleComplete: boolean }> => {
-  const withRuntimeEvents = (toolResult: AgentToolResult, result: unknown): AgentToolResult => ({
+  const withRuntimeMetadata = (toolResult: AgentToolResult, result: unknown): AgentToolResult => ({
     ...toolResult,
     metadata: {
       ...(toolResult.metadata || {}),
-      runtimeEvents: Array.isArray((result as any)?.events) ? (result as any).events : []
+      runtimeEvents: Array.isArray((result as any)?.events) ? (result as any).events : [],
+      jobSnapshot: (result as any)?.job
     }
   });
 
@@ -59,7 +60,7 @@ export const resolveGenerationFailure = async ({
     });
     const cancelResult = await deps.taskRuntime.cancel(cancelledJob, taskId);
     return {
-      toolResult: withRuntimeEvents(toolResult, cancelResult),
+      toolResult: withRuntimeMetadata(toolResult, cancelResult),
       taskMarkedVisibleComplete
     };
   }
@@ -87,7 +88,7 @@ export const resolveGenerationFailure = async ({
       errorText
     );
     return {
-      toolResult: withRuntimeEvents(toolResult, recoveryResult),
+      toolResult: withRuntimeMetadata(toolResult, recoveryResult),
       taskMarkedVisibleComplete: nextTaskMarkedVisibleComplete
     };
   }
@@ -109,7 +110,7 @@ export const resolveGenerationFailure = async ({
     deps.setCooldown((deps.now || Date.now)() + 60000);
   }
   return {
-    toolResult: withRuntimeEvents(toolResult, failedResult),
+    toolResult: withRuntimeMetadata(toolResult, failedResult),
     taskMarkedVisibleComplete
   };
 };

@@ -137,17 +137,14 @@ export const executeAutoRevisionFlow = async ({
     now: now()
   });
 
-  taskRuntime.startAutoRevision([revisingJob, executingRevisionJob])
-    .then((results: any) => {
-      if (Array.isArray(results)) {
-        for (const result of results) {
-          if (Array.isArray(result?.events)) {
-            runtimeEvents.push(...result.events);
-          }
-        }
+  const autoRevisionStart = await taskRuntime.startAutoRevision([revisingJob, executingRevisionJob]);
+  if (Array.isArray(autoRevisionStart)) {
+    for (const result of autoRevisionStart) {
+      if (Array.isArray((result as any)?.events)) {
+        runtimeEvents.push(...(result as any).events);
       }
-    })
-    .catch(console.error);
+    }
+  }
 
   const secondReviewStepId = createId();
   const {

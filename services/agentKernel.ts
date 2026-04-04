@@ -1,4 +1,4 @@
-import type { AgentAction, JobTransitionResult } from '../types';
+import type { AgentAction, AgentJob, JobTransitionResult } from '../types';
 import type {
   CancelJobCommand,
   ExecuteToolCallsCommand,
@@ -123,6 +123,71 @@ const extractRuntimeEventsFromResults = (results: unknown[]): Array<Record<strin
     return runtimeEvents.filter((event): event is Record<string, unknown> => !!event && typeof event === 'object');
   });
 
+const extractJobSnapshotFromResults = (results: unknown[]): AgentJob | undefined => {
+  for (const result of results) {
+    const candidate = (result as { metadata?: Record<string, unknown> } | undefined)?.metadata?.jobSnapshot;
+    if (candidate && typeof candidate === 'object' && typeof (candidate as AgentJob).id === 'string') {
+      return candidate as AgentJob;
+    }
+  }
+
+  return undefined;
+};
+
+const buildJobTransitionFromSnapshot = ({
+  job,
+  runtimeEvents
+}: {
+  job: AgentJob;
+  runtimeEvents: Array<Record<string, unknown>>;
+}): JobTransitionResult => ({
+  job,
+  events: runtimeEvents as any[],
+  toolResult: undefined
+});
+
+const buildTurnFromJobSnapshot = ({
+  turnId,
+  sessionId,
+  userMessage,
+  job
+}: {
+  turnId: string;
+  sessionId: string;
+  userMessage: string;
+  job: AgentJob;
+}): TurnRuntimeState => {
+  if (job.status === 'queued' || job.status === 'planning' || job.status === 'executing' || job.status === 'reviewing' || job.status === 'revising' || job.status === 'interrupted') {
+    return attachTurnActiveJob(
+      createTurnRuntimeState({
+        turnId,
+        sessionId,
+        userMessage
+      }),
+      { jobId: job.id }
+    );
+  }
+
+  if (job.status === 'failed' || job.status === 'cancelled') {
+    return failTurnRuntimeState(createTurnRuntimeState({
+      turnId,
+      sessionId,
+      userMessage
+    }), {
+      error: job.lastError || `${job.status} job`,
+      errorType: 'tool_error'
+    });
+  }
+
+  return completeTurnRuntimeState(createTurnRuntimeState({
+    turnId,
+    sessionId,
+    userMessage
+  }), {
+    assistantText: ''
+  });
+};
+
 const findImmediateFailedResult = (results: unknown[]) =>
   results.find(result =>
     typeof result === 'object' &&
@@ -194,6 +259,30 @@ const promoteResultsToWaitingJob = ({
     return null;
   }
 
+  const runtimeEvents = extractRuntimeEventsFromResults(results);
+  const jobSnapshot = extractJobSnapshotFromResults(results);
+  if (jobSnapshot) {
+    return {
+      turn: buildTurnFromJobSnapshot({
+        turnId,
+        sessionId,
+        userMessage,
+        job: jobSnapshot
+      }),
+      events: [
+        createEvent('TurnStarted', turnId),
+        createEvent('JobTransitioned', turnId, {
+          jobId: jobSnapshot.id
+        })
+      ],
+      toolResults: results,
+      jobTransition: buildJobTransitionFromSnapshot({
+        job: jobSnapshot,
+        runtimeEvents
+      })
+    };
+  }
+
   const turn = attachTurnActiveJob(
     createTurnRuntimeState({
       turnId,
@@ -216,7 +305,7 @@ const promoteResultsToWaitingJob = ({
       jobId: firstJobResult.jobId,
       projectId,
       source,
-      runtimeEvents: extractRuntimeEventsFromResults(results)
+      runtimeEvents
     })
   };
 };

@@ -130,19 +130,15 @@ export const executeChatSendFlow = async ({
       const command = buildSubmitUserTurnCommand({
         createId,
         sendingProjectId,
-        projectIdRef,
         nextHistory,
         userMessage,
         selectedModel,
         mode,
         projectContextSummary,
         projectSummaryCursor,
-        onUpdateProjectContext,
-        handleToolCallWithRetry,
         useSearch,
         params,
         agentContextAssets,
-        signal: abortController.signal
       });
       const surfaceBindingKey = command.payload?.input.surfaceBindingKey;
       if (surfaceBindingKey) {

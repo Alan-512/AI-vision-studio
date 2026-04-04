@@ -35,7 +35,10 @@ const createAsset = (overrides: Partial<AssetItem> = {}): AssetItem => ({
 
 describe('generationFailureRuntime', () => {
   it('cancels a generation attempt through the task runtime', async () => {
-    const cancel = vi.fn().mockResolvedValue({ events: [{ type: 'JobCancelled' }] });
+    const cancel = vi.fn().mockResolvedValue({
+      job: createJob({ status: 'cancelled' }),
+      events: [{ type: 'JobCancelled' }]
+    });
 
     const result = await resolveGenerationFailure({
       mode: AppMode.IMAGE,
@@ -61,10 +64,14 @@ describe('generationFailureRuntime', () => {
     expect(cancel).toHaveBeenCalledWith(expect.objectContaining({ status: 'cancelled' }), 'task-1');
     expect(result.toolResult.status).toBe('error');
     expect(result.toolResult.metadata?.runtimeEvents).toMatchObject([{ type: 'JobCancelled' }]);
+    expect(result.toolResult.metadata?.jobSnapshot).toMatchObject({ status: 'cancelled' });
   });
 
   it('recovers a visible image asset when post-review fails', async () => {
-    const recoverVisibleAsset = vi.fn().mockResolvedValue({ events: [{ type: 'JobCompleted' }] });
+    const recoverVisibleAsset = vi.fn().mockResolvedValue({
+      job: createJob({ status: 'completed' }),
+      events: [{ type: 'JobCompleted' }]
+    });
     const addToast = vi.fn();
 
     const result = await resolveGenerationFailure({
@@ -99,10 +106,14 @@ describe('generationFailureRuntime', () => {
     expect(result.toolResult.status).toBe('success');
     expect(result.taskMarkedVisibleComplete).toBe(true);
     expect(result.toolResult.metadata?.runtimeEvents).toMatchObject([{ type: 'JobCompleted' }]);
+    expect(result.toolResult.metadata?.jobSnapshot).toMatchObject({ status: 'completed' });
   });
 
   it('fails a generation attempt and applies retry cooldown when retryable', async () => {
-    const fail = vi.fn().mockResolvedValue({ events: [{ type: 'JobFailed' }] });
+    const fail = vi.fn().mockResolvedValue({
+      job: createJob({ status: 'failed' }),
+      events: [{ type: 'JobFailed' }]
+    });
     const addToast = vi.fn();
     const playErrorSound = vi.fn();
     const setCooldown = vi.fn();
@@ -134,5 +145,6 @@ describe('generationFailureRuntime', () => {
     expect(setCooldown).toHaveBeenCalledWith(1710000000300 + 60000);
     expect(result.toolResult.status).toBe('error');
     expect(result.toolResult.metadata?.runtimeEvents).toMatchObject([{ type: 'JobFailed' }]);
+    expect(result.toolResult.metadata?.jobSnapshot).toMatchObject({ status: 'failed' });
   });
 });

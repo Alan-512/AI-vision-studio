@@ -7,7 +7,6 @@ describe('chatSubmitTurnRuntime', () => {
     const command = buildSubmitUserTurnCommand({
       createId: () => 'turn-1',
       sendingProjectId: 'project-1',
-      projectIdRef: { current: 'project-1' },
       nextHistory: [],
       userMessage: {
         role: 'user',
@@ -16,12 +15,9 @@ describe('chatSubmitTurnRuntime', () => {
       } as any,
       selectedModel: TextModel.FLASH,
       mode: AppMode.IMAGE,
-      onUpdateProjectContext: vi.fn(),
-      handleToolCallWithRetry: vi.fn(),
       useSearch: true,
       params: { prompt: 'hello', imageModel: ImageModel.FLASH_3_1 } as any,
       agentContextAssets: [],
-      signal: new AbortController().signal,
       surfaceBindingKey: 'turn-1'
     });
 

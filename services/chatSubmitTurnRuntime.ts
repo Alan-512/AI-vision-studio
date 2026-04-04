@@ -1,39 +1,31 @@
-import type { AgentAction, ChatMessage, GenerationParams, SmartAsset, TextModel } from '../types';
+import type { ChatMessage, GenerationParams, SmartAsset, TextModel } from '../types';
 import type { StreamingTurnCompatInput, SubmitUserTurnCommand } from './agentKernelTypes';
 
 export const buildSubmitUserTurnCommand = ({
   createId = () => crypto.randomUUID(),
   sendingProjectId,
-  projectIdRef,
   nextHistory,
   userMessage,
   selectedModel,
   mode,
   projectContextSummary,
   projectSummaryCursor,
-  onUpdateProjectContext,
-  handleToolCallWithRetry,
   useSearch,
   params,
   agentContextAssets,
-  signal,
   surfaceBindingKey
 }: {
   createId?: () => string;
   sendingProjectId: string;
-  projectIdRef: { current: string };
   nextHistory: ChatMessage[];
   userMessage: ChatMessage;
   selectedModel: TextModel;
   mode: any;
   projectContextSummary?: string;
   projectSummaryCursor?: number;
-  onUpdateProjectContext?: (summary: string, cursor: number) => void;
-  handleToolCallWithRetry: (action: AgentAction) => Promise<void>;
   useSearch: boolean;
   params: GenerationParams;
   agentContextAssets?: SmartAsset[];
-  signal: AbortSignal;
   surfaceBindingKey?: string;
 }): SubmitUserTurnCommand => {
   const turnId = createId();

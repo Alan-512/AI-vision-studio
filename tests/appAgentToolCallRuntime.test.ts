@@ -131,4 +131,168 @@ describe('appAgentToolCallRuntime', () => {
       error: 'Unsupported tool: unknown_tool'
     });
   });
+
+  it('passes explicit sequence frame prompts through the unified generation contract', async () => {
+    const handleGenerate = vi.fn().mockResolvedValue([{
+      jobId: 'job-1',
+      toolName: 'generate_image',
+      status: 'success'
+    } satisfies AgentToolResult]);
+
+    const handler = createAppAgentToolCallHandler({
+      mode: AppMode.IMAGE,
+      processingToolCallKeys: new Set<string>(),
+      createToolCallId: () => 'tool-1',
+      createToolCallKey: () => 'generate_image-sequence',
+      upsertLastModelToolCall: vi.fn(),
+      updateLastModelMessage: vi.fn(),
+      setChatHistory: vi.fn(),
+      handleModeSwitch: vi.fn(),
+      addToast: vi.fn(),
+      handleGenerate,
+      normalizeAssistantMode: vi.fn(),
+      getPlaybookDefaults: vi.fn().mockReturnValue({}),
+      loadAgentJobsByProject: vi.fn().mockResolvedValue([]),
+      activeProjectId: 'project-1',
+      chatParams: {} as any,
+      chatHistory: [],
+      chatEditParams: {},
+      setRightPanelMode: vi.fn(),
+      setThoughtImages: vi.fn(),
+      setChatEditParams: vi.fn(),
+      setAgentContextAssets: vi.fn(),
+      extractSearchContextFromProgress: vi.fn(),
+      selectReferenceRecords: vi.fn().mockReturnValue([]),
+      latestSearchProgress: undefined,
+      compressImageForContext: vi.fn(),
+      resolveToolCallRecordStatus: vi.fn().mockReturnValue('success')
+    });
+
+    await handler({
+      toolName: 'generate_image',
+      args: {
+        prompt: 'weather anchor sequence',
+        numberOfImages: 2,
+        sequence_frame_prompts: [
+          'Frame 1: anchor introduces today weather.',
+          'Frame 2: anchor points to storm cell.'
+        ]
+      }
+    } as AgentAction);
+
+    expect(handleGenerate).toHaveBeenCalledWith(expect.objectContaining({
+      sequenceFramePrompts: [
+        'Frame 1: anchor introduces today weather.',
+        'Frame 2: anchor points to storm cell.'
+      ],
+      numberOfImages: 2
+    }), expect.any(Object));
+  });
+
+  it('normalizes numberOfImages from explicit sequence frame prompts when omitted', async () => {
+    const handleGenerate = vi.fn().mockResolvedValue([{
+      jobId: 'job-1',
+      toolName: 'generate_image',
+      status: 'success'
+    } satisfies AgentToolResult]);
+
+    const handler = createAppAgentToolCallHandler({
+      mode: AppMode.IMAGE,
+      processingToolCallKeys: new Set<string>(),
+      createToolCallId: () => 'tool-1',
+      createToolCallKey: () => 'generate_image-sequence-implicit-count',
+      upsertLastModelToolCall: vi.fn(),
+      updateLastModelMessage: vi.fn(),
+      setChatHistory: vi.fn(),
+      handleModeSwitch: vi.fn(),
+      addToast: vi.fn(),
+      handleGenerate,
+      normalizeAssistantMode: vi.fn(),
+      getPlaybookDefaults: vi.fn().mockReturnValue({}),
+      loadAgentJobsByProject: vi.fn().mockResolvedValue([]),
+      activeProjectId: 'project-1',
+      chatParams: {} as any,
+      chatHistory: [],
+      chatEditParams: {},
+      setRightPanelMode: vi.fn(),
+      setThoughtImages: vi.fn(),
+      setChatEditParams: vi.fn(),
+      setAgentContextAssets: vi.fn(),
+      extractSearchContextFromProgress: vi.fn(),
+      selectReferenceRecords: vi.fn().mockReturnValue([]),
+      latestSearchProgress: undefined,
+      compressImageForContext: vi.fn(),
+      resolveToolCallRecordStatus: vi.fn().mockReturnValue('success')
+    });
+
+    await handler({
+      toolName: 'generate_image',
+      args: {
+        prompt: 'weather anchor sequence',
+        sequence_frame_prompts: [
+          'Frame 1: anchor introduces today weather.',
+          'Frame 2: anchor points to storm cell.',
+          'Frame 3: anchor wraps up the segment.'
+        ]
+      }
+    } as AgentAction);
+
+    expect(handleGenerate).toHaveBeenCalledWith(expect.objectContaining({
+      numberOfImages: 3,
+      sequenceFramePrompts: [
+        'Frame 1: anchor introduces today weather.',
+        'Frame 2: anchor points to storm cell.',
+        'Frame 3: anchor wraps up the segment.'
+      ]
+    }), expect.any(Object));
+  });
+
+  it('rejects mismatched explicit sequence frame prompt counts before generation starts', async () => {
+    const addToast = vi.fn();
+    const handleGenerate = vi.fn();
+    const handler = createAppAgentToolCallHandler({
+      mode: AppMode.IMAGE,
+      processingToolCallKeys: new Set<string>(),
+      createToolCallId: () => 'tool-1',
+      createToolCallKey: () => 'generate_image-sequence-mismatch',
+      upsertLastModelToolCall: vi.fn(),
+      updateLastModelMessage: vi.fn(),
+      setChatHistory: vi.fn(),
+      handleModeSwitch: vi.fn(),
+      addToast,
+      handleGenerate,
+      normalizeAssistantMode: vi.fn(),
+      getPlaybookDefaults: vi.fn().mockReturnValue({}),
+      loadAgentJobsByProject: vi.fn().mockResolvedValue([]),
+      activeProjectId: 'project-1',
+      chatParams: {} as any,
+      chatHistory: [],
+      chatEditParams: {},
+      setRightPanelMode: vi.fn(),
+      setThoughtImages: vi.fn(),
+      setChatEditParams: vi.fn(),
+      setAgentContextAssets: vi.fn(),
+      extractSearchContextFromProgress: vi.fn(),
+      selectReferenceRecords: vi.fn().mockReturnValue([]),
+      latestSearchProgress: undefined,
+      compressImageForContext: vi.fn(),
+      resolveToolCallRecordStatus: vi.fn().mockReturnValue('failed')
+    });
+
+    const result = await handler({
+      toolName: 'generate_image',
+      args: {
+        prompt: 'weather anchor sequence',
+        numberOfImages: 2,
+        sequence_frame_prompts: [
+          'Frame 1: anchor introduces today weather.'
+        ]
+      }
+    } as AgentAction);
+
+    expect(handleGenerate).not.toHaveBeenCalled();
+    expect(result.status).toBe('error');
+    expect(result.error).toContain('Sequence generation requires 2 explicit frame prompts');
+    expect(addToast).toHaveBeenCalled();
+  });
 });

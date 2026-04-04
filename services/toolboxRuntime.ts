@@ -45,8 +45,25 @@ export const buildSequenceFramePrompts = ({
     return [basePrompt];
   }
 
-  if (framePrompts && framePrompts.length === count && framePrompts.every(prompt => typeof prompt === 'string' && prompt.trim().length > 0)) {
-    return framePrompts;
+  if (framePrompts) {
+    const normalizedFramePrompts = framePrompts.map(prompt => prompt.trim());
+    const hasValidLength = normalizedFramePrompts.length === count;
+    const hasOnlyNonEmpty = normalizedFramePrompts.every(prompt => prompt.length > 0);
+    const hasDistinctPrompts = new Set(normalizedFramePrompts).size === normalizedFramePrompts.length;
+
+    if (!hasValidLength) {
+      throw new Error(`Sequence generation requires ${count} explicit frame prompts.`);
+    }
+
+    if (!hasOnlyNonEmpty) {
+      throw new Error('Sequence generation requires non-empty frame prompts.');
+    }
+
+    if (!hasDistinctPrompts) {
+      throw new Error('Sequence generation requires distinct frame prompts.');
+    }
+
+    return normalizedFramePrompts;
   }
 
   return Array.from({ length: count }, (_unused, index) => (

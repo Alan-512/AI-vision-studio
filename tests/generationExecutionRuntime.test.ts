@@ -66,6 +66,65 @@ const createToolResult = (): AgentToolResult => ({
 });
 
 describe('generationExecutionRuntime', () => {
+  it('awaits running job staging events before returning image results', async () => {
+    let resolveStageRunning: ((value: { events: { type: string }[] }) => void) | null = null;
+    const stageRunningJob = vi.fn().mockImplementation(
+      () => new Promise(resolve => {
+        resolveStageRunning = resolve;
+      })
+    );
+    const completeVisibleImage = vi.fn().mockResolvedValue({ events: [{ type: 'AssetProduced' }, { type: 'JobCompleted' }] });
+    const asset: AssetItem = {
+      id: 'asset-1',
+      projectId: 'project-1',
+      type: 'IMAGE',
+      url: 'blob://image',
+      prompt: 'cinematic poster',
+      createdAt: 1710000000000,
+      status: 'COMPLETED'
+    };
+
+    const promise = executeGenerationAttempt({
+      mode: AppMode.IMAGE,
+      agentJob: createExecutingJob(),
+      stepId: 'step-1',
+      taskId: 'task-1',
+      jobId: 'job-1',
+      currentProjectId: 'project-1',
+      genParams: createParams(),
+      initialPendingAsset: createPendingAsset(),
+      signal: new AbortController().signal,
+      taskRuntime: {
+        stageRunningJob,
+        completeVisibleImage,
+        updateOperation: vi.fn(),
+        completeVideo: vi.fn()
+      },
+      generateImageImpl: async (_params, _projectId, onStart) => {
+        onStart();
+        return asset;
+      },
+      generateVideoImpl: vi.fn(),
+      now: () => 1710000000100
+    });
+
+    let settled = false;
+    void promise.then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    resolveStageRunning?.({ events: [{ type: 'StepStarted' }] });
+
+    const result = await promise;
+    expect(completeVisibleImage).toHaveBeenCalledTimes(1);
+    expect(result.runtimeEvents).toMatchObject([
+      { type: 'StepStarted' },
+      { type: 'AssetProduced' },
+      { type: 'JobCompleted' }
+    ]);
+  });
+
   it('runs an image generation attempt through the task runtime', async () => {
     const stageRunningJob = vi.fn().mockResolvedValue({ events: [{ type: 'StepStarted' }] });
     const completeVisibleImage = vi.fn().mockResolvedValue({ events: [{ type: 'AssetProduced' }, { type: 'JobCompleted' }] });

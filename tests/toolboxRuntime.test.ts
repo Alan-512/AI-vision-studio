@@ -125,4 +125,15 @@ describe('toolboxRuntime', () => {
     expect(prompts[0]).toContain('Sequence frame 1 of 4');
     expect(prompts[3]).toContain('Sequence frame 4 of 4');
   });
+
+  it('rejects explicit frame prompts that are not distinct for sequence generation', () => {
+    expect(() => buildSequenceFramePrompts({
+      basePrompt: 'Weather anchor in studio.',
+      count: 2,
+      framePrompts: [
+        'Same frame',
+        'Same frame'
+      ]
+    })).toThrow('distinct frame prompts');
+  });
 });

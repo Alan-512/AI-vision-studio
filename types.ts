@@ -179,6 +179,7 @@ export interface GenerationParams {
   imageResolution?: ImageResolution;
   imageStyle?: ImageStyle;
   numberOfImages?: number; // New: Number of images to generate (1-4)
+  sequenceFramePrompts?: string[]; // Optional explicit prompts for multi-frame sequence generation
   useGrounding?: boolean; // New: Use Google Search Grounding (Pro model only)
   searchPolicy?: SearchPolicy; // New: Controls search behavior (llm_only, image_only, both)
   thinkingLevel?: ThinkingLevel; // New: Controls thinking depth for models that support it (Nano Banana 2)

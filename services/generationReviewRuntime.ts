@@ -61,13 +61,10 @@ export const executePrimaryReview = async ({
     startedAt: reviewStartedAt
   });
 
-  taskRuntime.startReview(reviewingJob, asset.type !== 'IMAGE')
-    .then((result: any) => {
-      if (Array.isArray(result?.events)) {
-        runtimeEvents.push(...result.events);
-      }
-    })
-    .catch(console.error);
+  const reviewStart = await taskRuntime.startReview(reviewingJob, asset.type !== 'IMAGE');
+  if (Array.isArray((reviewStart as any)?.events)) {
+    runtimeEvents.push(...(reviewStart as any).events);
+  }
 
   const criticContext = buildCriticContext({
     assistantMode,
@@ -203,6 +200,7 @@ export const executeAutoRevisionReview = async ({
     secondReview,
     secondReviewArtifact,
     finalizedSecondReviewStep,
-    revisedToolResult
+    revisedToolResult,
+    runtimeEvents: []
   };
 };

@@ -76,6 +76,101 @@ const createStep = (overrides: Partial<JobStep> = {}): JobStep => ({
 });
 
 describe('generationAutoRevisionRuntime', () => {
+  it('awaits auto revision start persistence before returning runtime events', async () => {
+    let resolveStartAutoRevision: ((value: Array<{ events: { type: string }[] }>) => void) | null = null;
+    const startAutoRevision = vi.fn().mockImplementation(
+      () => new Promise(resolve => {
+        resolveStartAutoRevision = resolve;
+      })
+    );
+    const executeAttempt = vi.fn().mockResolvedValue({
+      revisedAsset: {
+        id: 'asset-2',
+        projectId: 'project-1',
+        type: 'IMAGE',
+        url: 'blob://revised',
+        prompt: 'refined poster',
+        createdAt: 1710000000000,
+        status: 'COMPLETED',
+        jobId: 'job-1'
+      } as AssetItem,
+      finalizedRevisedGenerationStep: createStep({ id: 'step-2', kind: 'generation' }),
+      revisedGeneratedArtifact: createArtifact({ id: 'artifact-2' }),
+      secondReviewStep: createStep({ id: 'step-3', status: 'running' }),
+      reviewingRevisionJob: createJob({ status: 'reviewing', currentStepId: 'step-3' }),
+      runtimeEvents: [{ type: 'AssetProduced' }, { type: 'ReviewStarted' }]
+    });
+    const executeReview = vi.fn().mockResolvedValue({
+      secondReview: {
+        decision: 'accept',
+        summary: 'looks good',
+        warnings: []
+      },
+      secondReviewArtifact: createArtifact({ id: 'artifact-3', kind: 'review' }),
+      finalizedSecondReviewStep: createStep({ id: 'step-3', status: 'success' }),
+      revisedToolResult: createToolResult({ status: 'success' }),
+      runtimeEvents: []
+    });
+    const resolveAutoRevision = vi.fn().mockResolvedValue({
+      ...createToolResult({ status: 'success' }),
+      runtimeEvents: [{ type: 'ReviewCompleted' }, { type: 'JobCompleted' }]
+    });
+
+    const promise = executeAutoRevisionFlow({
+      job: createJob(),
+      review: {
+        decision: 'auto_revise',
+        summary: 'improve anatomy',
+        warnings: [],
+        revisionReason: 'improve anatomy'
+      },
+      currentMode: AppMode.IMAGE,
+      originalPrompt: 'poster',
+      genParams: createParams(),
+      toolCall: undefined,
+      finalizedReviewStep: createStep(),
+      reviewArtifact: createArtifact({ id: 'review-1', kind: 'review' }),
+      generatedArtifact: createArtifact({ id: 'generated-1' }),
+      currentProjectId: 'project-1',
+      signal: new AbortController().signal,
+      taskId: 'task-1',
+      jobId: 'job-1',
+      toolResult: createToolResult(),
+      selectedReferences: [],
+      historyForGeneration: [],
+      continuousMode: false,
+      taskRuntime: { startAutoRevision },
+      deps: {
+        executeAttempt,
+        executeReview,
+        resolveAutoRevision,
+        playVisibleSuccess: vi.fn(),
+        normalizeAssistantMode: value => value as any,
+        now: () => 1710000000200,
+        createId: vi.fn()
+          .mockReturnValueOnce('revision-step-1')
+          .mockReturnValueOnce('revision-artifact-1')
+          .mockReturnValueOnce('revised-generation-step-1')
+          .mockReturnValueOnce('second-review-step-1')
+      }
+    });
+
+    resolveStartAutoRevision?.([
+      { events: [{ type: 'ReviewStarted' }] },
+      { events: [{ type: 'ReviewStarted' }] }
+    ]);
+
+    const result = await promise;
+    expect(result.metadata?.runtimeEvents || result.runtimeEvents).toMatchObject([
+      { type: 'ReviewStarted' },
+      { type: 'ReviewStarted' },
+      { type: 'AssetProduced' },
+      { type: 'ReviewStarted' },
+      { type: 'ReviewCompleted' },
+      { type: 'JobCompleted' }
+    ]);
+  });
+
   it('coordinates auto revision execution, second review, and resolution', async () => {
     const startAutoRevision = vi.fn().mockResolvedValue([
       { events: [{ type: 'ReviewStarted' }] },

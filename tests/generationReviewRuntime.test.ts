@@ -52,6 +52,46 @@ const createParams = (): GenerationParams => ({
 });
 
 describe('generationReviewRuntime', () => {
+  it('awaits review start persistence before returning primary review events', async () => {
+    let resolveStartReview: ((value: { events: { type: string }[] }) => void) | null = null;
+    const startReview = vi.fn().mockImplementation(
+      () => new Promise(resolve => {
+        resolveStartReview = resolve;
+      })
+    );
+    const reviewAsset = vi.fn().mockResolvedValue({
+      decision: 'accept',
+      summary: 'looks good',
+      warnings: []
+    });
+
+    const promise = executePrimaryReview({
+      job: createJob(),
+      asset: createAsset(),
+      generationStepId: 'step-1',
+      toolResult: {
+        toolName: 'generate_image',
+        status: 'success',
+        summary: 'done',
+        artifactIds: ['asset-1']
+      },
+      prompt: 'poster',
+      genParams: createParams(),
+      selectedReferences: [],
+      assistantMode: 'EDIT_LAST',
+      taskRuntime: { startReview },
+      buildCriticContext: vi.fn().mockReturnValue({ hardConstraints: [] }),
+      reviewAsset,
+      now: () => 1710000000200,
+      createId: vi.fn().mockReturnValueOnce('review-step-1').mockReturnValueOnce('review-artifact-1')
+    });
+
+    resolveStartReview?.({ events: [{ type: 'ReviewStarted' }] });
+
+    const result = await promise;
+    expect(result.runtimeEvents).toMatchObject([{ type: 'ReviewStarted' }]);
+  });
+
   it('executes primary review and returns finalized review artifacts', async () => {
     const startReview = vi.fn().mockResolvedValue({ events: [{ type: 'ReviewStarted' }] });
     const buildCriticContext = vi.fn().mockReturnValue({ hardConstraints: [] });
@@ -156,5 +196,6 @@ describe('generationReviewRuntime', () => {
     expect(result.finalizedSecondReviewStep.status).toBe('failed');
     expect(result.revisedToolResult.status).toBe('requires_action');
     expect(result.revisedToolResult.metadata?.revisedPrompt).toBe('revised poster');
+    expect(result.runtimeEvents).toEqual([]);
   });
 });

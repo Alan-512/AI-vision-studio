@@ -44,7 +44,8 @@ export const resolvePrimaryReviewOutcome = async ({
       ...reviewedToolResult,
       metadata: {
         ...(reviewedToolResult.metadata || {}),
-        runtimeEvents
+        runtimeEvents,
+        jobSnapshot: blockedJob
       }
     };
   }
@@ -69,7 +70,8 @@ export const resolvePrimaryReviewOutcome = async ({
     ...reviewedToolResult,
     metadata: {
       ...(reviewedToolResult.metadata || {}),
-      runtimeEvents
+      runtimeEvents,
+      jobSnapshot: completedJob
     }
   };
 };
@@ -171,7 +173,8 @@ export const resolveAutoRevisionOutcome = async ({
       ...revisedToolResult,
       metadata: {
         ...(revisedToolResult.metadata || {}),
-        runtimeEvents
+        runtimeEvents,
+        jobSnapshot: resolvedJob
       }
     };
   }
@@ -187,7 +190,8 @@ export const resolveAutoRevisionOutcome = async ({
     ...revisedToolResult,
     metadata: {
       ...(revisedToolResult.metadata || {}),
-      runtimeEvents
+      runtimeEvents,
+      jobSnapshot: resolvedJob
     }
   };
 };
