@@ -1,5 +1,6 @@
 import type { AgentJob, AgentToolResult, GenerationParams } from '../types';
 import { launchAppGenerationTasks } from './appGenerationTaskLauncherRuntime';
+import { buildSequenceFramePrompts } from './toolboxRuntime';
 
 export const executeAppGenerationRequest = async ({
   count,
@@ -50,69 +51,79 @@ export const executeAppGenerationRequest = async ({
   createTaskFlowDepsBuilder: () => (runtimeInput: any) => any;
   launchPreparedTask: (input: any) => Promise<AgentToolResult>;
   playSuccessSound: () => void;
-}) => launchAppGenerationTasks({
-  count,
-  createLaunchInput: index => index,
-  launchPreparedTask: async (_index: number) => {
-    const taskParams: GenerationParams = {
-      ...activeParams,
-      numberOfImages: 1
-    };
-    const latestVisibleAssetRef = { current: null as any };
-    const taskMarkedVisibleCompleteRef = { current: false };
-    let successSoundPlayed = false;
-    const playVisibleSuccess = () => {
-      if (successSoundPlayed) return;
-      successSoundPlayed = true;
-      playSuccessSound();
-    };
+}) => {
+  const sequenceFramePrompts = buildSequenceFramePrompts({
+    basePrompt: activeParams.prompt,
+    count,
+    framePrompts: undefined
+  });
 
-    const buildTaskRuntimeDeps = createTaskFlowDepsBuilder();
+  return launchAppGenerationTasks({
+    count,
+    createLaunchInput: index => index,
+    launchPreparedTask: async (index: number) => {
+      const normalizedPrompt = sequenceFramePrompts[index] || activeParams.prompt;
+      const taskParams: GenerationParams = {
+        ...activeParams,
+        prompt: normalizedPrompt,
+        numberOfImages: 1
+      };
+      const latestVisibleAssetRef = { current: null as any };
+      const taskMarkedVisibleCompleteRef = { current: false };
+      let successSoundPlayed = false;
+      const playVisibleSuccess = () => {
+        if (successSoundPlayed) return;
+        successSoundPlayed = true;
+        playSuccessSound();
+      };
 
-    return launchPreparedTask({
-      currentProjectId,
-      currentMode,
-      activeParams: taskParams,
-      resolvedJobSource,
-      triggerMessageTimestamp,
-      searchContextOverride,
-      selectedReferenceRecords,
-      resumeJobId,
-      resumeActionType,
-      toolCall,
-      historyForGeneration,
-      createSessionInput: {
-        ...createSessionInput,
-        projectName
-      },
-      buildTaskRuntimeDeps: ({
-        taskRuntime,
-        getAgentJob,
-        stepId,
-        taskId,
-        jobId,
+      const buildTaskRuntimeDeps = createTaskFlowDepsBuilder();
+
+      return launchPreparedTask({
         currentProjectId,
+        currentMode,
         activeParams: taskParams,
-        initialPendingAsset,
-        signal,
+        resolvedJobSource,
+        triggerMessageTimestamp,
+        searchContextOverride,
         selectedReferenceRecords,
-        historyForGeneration
-      }: any) => buildTaskRuntimeDeps({
-        taskRuntime,
-        getAgentJob,
-        stepId,
-        taskId,
-        jobId,
-        currentProjectId,
-        activeParams,
-        initialPendingAsset,
-        signal,
-        selectedReferenceRecords,
+        resumeJobId,
+        resumeActionType,
+        toolCall,
         historyForGeneration,
-        latestVisibleAssetRef,
-        taskMarkedVisibleCompleteRef,
-        playVisibleSuccess
-      })
-    });
-  }
-});
+        createSessionInput: {
+          ...createSessionInput,
+          projectName
+        },
+        buildTaskRuntimeDeps: ({
+          taskRuntime,
+          getAgentJob,
+          stepId,
+          taskId,
+          jobId,
+          currentProjectId,
+          activeParams: taskParams,
+          initialPendingAsset,
+          signal,
+          selectedReferenceRecords,
+          historyForGeneration
+        }: any) => buildTaskRuntimeDeps({
+          taskRuntime,
+          getAgentJob,
+          stepId,
+          taskId,
+          jobId,
+          currentProjectId,
+          activeParams,
+          initialPendingAsset,
+          signal,
+          selectedReferenceRecords,
+          historyForGeneration,
+          latestVisibleAssetRef,
+          taskMarkedVisibleCompleteRef,
+          playVisibleSuccess
+        })
+      });
+    }
+  });
+};

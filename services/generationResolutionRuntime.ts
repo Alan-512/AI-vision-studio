@@ -1,7 +1,7 @@
 import { AppMode, type AgentJob, type AgentToolResult, type AssetItem, type JobArtifact, type JobStep } from '../types';
 import type { GenerationReviewPayload } from './generationOrchestrator';
-import { prepareAutoRevisionResolution, preparePrimaryReviewResolution } from './agentRuntime';
 import { buildDefaultPrimaryReviewRequiresAction, buildDefaultRefinePromptRequiresAction } from './generationOrchestrator';
+import { transitionAutoRevisionResolution, transitionPrimaryReviewResolution } from './jobTransitionRuntime';
 
 type ResolutionDeps = {
   addToast: (level: 'info' | 'error' | 'success', title: string, message: string) => void;
@@ -84,7 +84,7 @@ export const resolvePrimaryReview = async ({
   };
   now?: () => number;
 }): Promise<AgentToolResult> => {
-  const { resolvedJob } = preparePrimaryReviewResolution({
+  const { resolvedJob } = transitionPrimaryReviewResolution({
     job,
     finalizedReviewStep,
     generatedArtifact,
@@ -198,7 +198,7 @@ export const resolveAutoRevision = async ({
   };
   now?: () => number;
 }): Promise<AgentToolResult> => {
-  const { resolvedJob, resolution } = prepareAutoRevisionResolution({
+  const { resolvedJob, resolution } = transitionAutoRevisionResolution({
     job,
     stepsAfterRevision,
     finalizedRevisedGenerationStep,

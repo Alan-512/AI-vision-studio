@@ -1,5 +1,6 @@
 import type { Dispatch, SetStateAction } from 'react';
 import type { AgentAction, ChatMessage, GenerationParams, SearchProgress, SmartAsset, TextModel } from '../types';
+import type { KernelTransitionResult, SubmitUserTurnCommand } from './agentKernelTypes';
 import { buildOutgoingChatMessage, executeChatStreamingTurn } from './chatStreamingRuntime';
 import { finalizeChatStreamingTurn } from './chatSurfaceRuntime';
 
@@ -34,6 +35,8 @@ export const executeChatSendFlow = async ({
   clearContextAssets,
   clearThoughtImages,
   appendThoughtImage,
+  dispatchKernelCommand,
+  createId = () => crypto.randomUUID(),
   executeStreamingTurn = executeChatStreamingTurn
 }: {
   customText?: string;
@@ -66,6 +69,8 @@ export const executeChatSendFlow = async ({
   clearContextAssets?: () => void;
   clearThoughtImages?: () => void;
   appendThoughtImage?: (imageData: { data: string; mimeType: string; isFinal: boolean }) => void;
+  dispatchKernelCommand?: (command: SubmitUserTurnCommand) => Promise<Pick<KernelTransitionResult, 'turnOutput'>>;
+  createId?: () => string;
   executeStreamingTurn?: typeof executeChatStreamingTurn;
 }) => {
   const textToSend = customText || input.trim();
@@ -101,6 +106,92 @@ export const executeChatSendFlow = async ({
     setSearchProgress(null);
     searchProgressRef.current = null;
     setSearchIsCollapsed(false);
+
+    if (dispatchKernelCommand) {
+      const result = await dispatchKernelCommand({
+        type: 'SubmitUserTurn',
+        turn: {
+          id: createId(),
+          sessionId: sendingProjectId,
+          userMessage: userMessage.content,
+          status: 'ready',
+          createdAt: userMessage.timestamp || Date.now(),
+          updatedAt: userMessage.timestamp || Date.now(),
+          plannedToolCalls: [],
+          toolResults: []
+        },
+        payload: {
+          executeStreamingTurn,
+          sendingProjectId,
+          projectIdRef,
+          newHistory: nextHistory,
+          userMessage,
+          selectedModel,
+          mode,
+          projectContextSummary,
+          projectSummaryCursor,
+          onUpdateProjectContext,
+          handleToolCallWithRetry,
+          useSearch,
+          params,
+          agentContextAssets,
+          signal: abortController.signal,
+          appendModelPlaceholder: () => {
+            const tempAiMsg: ChatMessage = { role: 'model', content: '', timestamp: Date.now(), isThinking: true };
+            setHistory(prev => [...prev, tempAiMsg]);
+          },
+          onChunk: (chunkText: string) => {
+            setHistory(prev => {
+              const updated = [...prev];
+              updated[updated.length - 1] = { ...updated[updated.length - 1], content: chunkText };
+              return updated;
+            });
+          },
+          onThoughtImage: appendThoughtImage,
+          onThinkingText: (text: string) => {
+            thinkingTextRef.current += text;
+            setThinkingText(prev => prev + text);
+          },
+          onSearchProgress: (progress: SearchProgress) => {
+            setSearchProgress(progress);
+            searchProgressRef.current = progress;
+            if (progress.status === 'complete') {
+              setTimeout(() => {
+                setSearchIsCollapsed(true);
+              }, 2000);
+            }
+          },
+          onStreamError: (error: Error) => {
+            console.error('Chat Error:', error);
+            if (projectIdRef.current !== sendingProjectId) return;
+            setHistory(prev => {
+              const updated = [...prev];
+              const lastIdx = updated.length - 1;
+              if (lastIdx >= 0 && updated[lastIdx].role === 'model') {
+                const currentContent = updated[lastIdx].content;
+                const suppressInlineError = (updated[lastIdx].toolCalls || []).some(record =>
+                  record.toolName === 'generate_image' || record.toolName === 'generate_video'
+                );
+                updated[lastIdx] = {
+                  ...updated[lastIdx],
+                  content: suppressInlineError ? currentContent : (currentContent
+                    ? `${currentContent}\n\n*[System Error: ${error.message || 'Connection timed out'}]*`
+                    : `*[System Error: ${error.message || 'Connection timed out'}]*`),
+                  isThinking: false
+                };
+              }
+              return updated;
+            });
+          },
+          onFinish: ({ collectedSignatures: finalSignatures }: {
+            collectedSignatures: Array<{ partIndex: number; signature: string }>;
+          }) => {
+            collectedSignatures = finalSignatures;
+          }
+        }
+      });
+      return result.turnOutput;
+    }
 
     await executeStreamingTurn({
       sendingProjectId,

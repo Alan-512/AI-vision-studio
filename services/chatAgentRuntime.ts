@@ -1,5 +1,6 @@
 import { AspectRatio, ImageModel, ImageResolution, type AgentAction, type ChatMessage, type GenerationParams } from '../types';
 import { createGenerateAction, createInitialAgentState, type AgentState, type PendingAction } from './agentService';
+import type { ExecuteToolCallsCommand, KernelTransitionResult } from './agentKernelTypes';
 import { resolveActiveToolCallMessageTimestamp, type ActiveChatToolCallStatus } from './chatToolCallRuntime';
 
 type RetryControlError = Error & {
@@ -8,10 +9,24 @@ type RetryControlError = Error & {
 };
 
 export const createGenerateActionExecutor = ({
-  onToolCallRef
+  onToolCallRef,
+  dispatchKernelCommand
 }: {
   onToolCallRef: { current?: ((action: AgentAction) => Promise<any> | any) | undefined };
+  dispatchKernelCommand?: (command: ExecuteToolCallsCommand) => Promise<Pick<KernelTransitionResult, 'toolResults'>>;
 }) => async (action: PendingAction): Promise<any> => {
+  if (dispatchKernelCommand && action.type === 'GENERATE_IMAGE') {
+    const result = await dispatchKernelCommand({
+      type: 'ExecuteToolCalls',
+      turnId: 'chat-tool:generate_image',
+      toolCalls: [{
+        toolName: 'generate_image',
+        args: action.params
+      }]
+    });
+    return result.toolResults?.[0];
+  }
+
   if (onToolCallRef.current && action.type === 'GENERATE_IMAGE') {
     const result = await onToolCallRef.current({ toolName: 'generate_image', args: action.params });
     if (result?.status === 'error') {
@@ -35,14 +50,16 @@ export const createGenerateActionExecutor = ({
 
 export const createChatAgentMachine = ({
   onStateChange,
-  onToolCallRef
+  onToolCallRef,
+  dispatchKernelCommand
 }: {
   onStateChange: (state: AgentState) => void;
   onToolCallRef: { current?: ((action: AgentAction) => Promise<any> | any) | undefined };
+  dispatchKernelCommand?: (command: ExecuteToolCallsCommand) => Promise<Pick<KernelTransitionResult, 'toolResults'>>;
 }) => {
   let state = createInitialAgentState();
   const maxRetries = state.maxRetries;
-  const executeAction = createGenerateActionExecutor({ onToolCallRef });
+  const executeAction = createGenerateActionExecutor({ onToolCallRef, dispatchKernelCommand });
 
   const updateState = (updates: Partial<AgentState>) => {
     state = {
@@ -242,6 +259,7 @@ export const createChatAgentRuntimeStore = ({
   getParams,
   getHistory,
   onToolCallRef,
+  dispatchKernelCommand,
   setToolCallStatus,
   setToolCallExpanded,
   createMachine = createChatAgentMachine
@@ -249,11 +267,13 @@ export const createChatAgentRuntimeStore = ({
   getParams: () => GenerationParams;
   getHistory: () => ChatMessage[];
   onToolCallRef: { current?: ((action: AgentAction) => Promise<any> | any) | undefined };
+  dispatchKernelCommand?: (command: ExecuteToolCallsCommand) => Promise<Pick<KernelTransitionResult, 'toolResults'>>;
   setToolCallStatus: (status: ActiveChatToolCallStatus | null) => void;
   setToolCallExpanded: (expanded: boolean) => void;
   createMachine?: (input: {
     onStateChange: (state: AgentState) => void;
     onToolCallRef: { current?: ((action: AgentAction) => Promise<any> | any) | undefined };
+    dispatchKernelCommand?: (command: ExecuteToolCallsCommand) => Promise<Pick<KernelTransitionResult, 'toolResults'>>;
   }) => ReturnType<typeof createChatAgentMachine>;
 }) => {
   let agentState = createInitialAgentState();
@@ -264,7 +284,8 @@ export const createChatAgentRuntimeStore = ({
       agentState = nextState;
       listeners.forEach(listener => listener());
     },
-    onToolCallRef
+    onToolCallRef,
+    dispatchKernelCommand
   });
 
   const controller = createChatAgentRuntimeController({

@@ -139,6 +139,41 @@ describe('chatAgentRuntime', () => {
     });
   });
 
+  it('dispatches generate actions through kernel ExecuteToolCalls when provided', async () => {
+    const dispatchKernelCommand = vi.fn().mockResolvedValue({
+      toolResults: [{
+        status: 'success',
+        toolName: 'generate_image',
+        jobId: 'job-1'
+      }]
+    });
+    const executeAction = createGenerateActionExecutor({
+      onToolCallRef: { current: vi.fn() },
+      dispatchKernelCommand
+    });
+
+    const result = await executeAction({
+      type: 'GENERATE_IMAGE',
+      params: { prompt: 'poster' },
+      description: 'Generate poster',
+      requiresConfirmation: false
+    });
+
+    expect(dispatchKernelCommand).toHaveBeenCalledWith({
+      type: 'ExecuteToolCalls',
+      turnId: 'chat-tool:generate_image',
+      toolCalls: [{
+        toolName: 'generate_image',
+        args: { prompt: 'poster' }
+      }]
+    });
+    expect(result).toEqual({
+      status: 'success',
+      toolName: 'generate_image',
+      jobId: 'job-1'
+    });
+  });
+
   it('creates a chat agent machine that emits state updates', async () => {
     const onStateChange = vi.fn();
     const machine = createChatAgentMachine({

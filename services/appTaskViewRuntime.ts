@@ -1,4 +1,5 @@
 import type { AssetItem, TaskViewIntent } from '../types';
+import type { CancelJobCommand, KernelTransitionResult } from './agentKernelTypes';
 
 export const createAppTaskViewController = ({
   taskViewDismissal,
@@ -6,7 +7,8 @@ export const createAppTaskViewController = ({
   deleteAssetPermanently,
   activeProjectIdRef,
   getActiveProjectId,
-  setAssets
+  setAssets,
+  dispatchKernelCommand
 }: {
   taskViewDismissal: {
     dismissById: (taskId: string) => Promise<void>;
@@ -17,13 +19,21 @@ export const createAppTaskViewController = ({
   activeProjectIdRef: { current: string | null };
   getActiveProjectId: () => string | null;
   setAssets: (updater: (assets: AssetItem[]) => AssetItem[]) => void;
+  dispatchKernelCommand?: (command: CancelJobCommand) => Promise<Pick<KernelTransitionResult, 'jobTransition'>>;
 }) => {
-  const dismissTaskView = (taskId: string) => {
-    taskViewDismissal.dismissById(taskId).catch(console.error);
+  const dismissTaskView = async (taskId: string) => {
+    await taskViewDismissal.dismissById(taskId);
   };
 
-  const cancelTask = (taskId: string) => {
-    taskViewDismissal.dismissById(taskId).catch(console.error);
+  const cancelTask = async (taskId: string, jobId?: string) => {
+    if (jobId && dispatchKernelCommand) {
+      await dispatchKernelCommand({
+        type: 'CancelJob',
+        jobId,
+        reason: 'Cancelled from task center'
+      });
+    }
+    await taskViewDismissal.dismissById(taskId);
     if (taskControllers.current[taskId]) {
       taskControllers.current[taskId]?.abort();
       deleteAssetPermanently(taskId).catch(console.error);
@@ -33,13 +43,13 @@ export const createAppTaskViewController = ({
     }
   };
 
-  const handleTaskViewIntent = (intent: TaskViewIntent) => {
+  const handleTaskViewIntent = async (intent: TaskViewIntent) => {
     if (intent.type === 'cancel_job') {
-      cancelTask(intent.taskId);
+      await cancelTask(intent.taskId, intent.jobId);
       return;
     }
 
-    dismissTaskView(intent.taskId);
+    await dismissTaskView(intent.taskId);
   };
 
   const clearCompletedTasks = () => {

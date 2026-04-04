@@ -4,6 +4,7 @@ import { Send, User, Sparkles, ChevronDown, BrainCircuit, Zap, X, Box, Copy, Che
 import { ChatMessage, GenerationParams, ImageResolution, AppMode, ImageModel, VideoResolution, VideoModel, AspectRatio, SmartAsset, APP_LIMITS, AgentAction, TextModel, SearchProgress, ThinkingLevel, ToolCallRecord, ReviewTrace } from '../types';
 import { normalizeImageUrlForChat } from '../services/imageUtils';
 import { useChatAgentRuntimeController } from '../services/useChatAgentRuntimeController';
+import type { ExecuteToolCallsCommand, KernelCommand, KernelTransitionResult } from '../services/agentKernelTypes';
 import { applyChatActionCard, dismissChatActionCard, finalizeChatStreamingTurn, stopChatStreaming } from '../services/chatSurfaceRuntime';
 import { executeChatSendFlow } from '../services/chatSendRuntime';
 import { createChatSurfaceController } from '../services/chatSurfaceController';
@@ -26,6 +27,7 @@ interface ChatInterfaceProps {
   projectSummaryCursor?: number;
   onUpdateProjectContext?: (summary: string, cursor: number) => void;
   onToolCall?: (action: AgentAction) => Promise<any> | any;
+  dispatchKernelCommand?: (command: KernelCommand) => Promise<KernelTransitionResult>;
   onKeepCurrentAction?: (toolCall: ToolCallRecord) => Promise<void> | void;
   agentContextAssets?: SmartAsset[];
   onRemoveContextAsset?: (assetId: string) => void;
@@ -234,6 +236,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   projectSummaryCursor,
   onUpdateProjectContext,
   onToolCall,
+  dispatchKernelCommand,
   onKeepCurrentAction,
   agentContextAssets,
   onRemoveContextAsset,
@@ -347,6 +350,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
     params,
     historyRef,
     onToolCall,
+    dispatchKernelCommand,
     setToolCallStatus,
     setToolCallExpanded
   });
@@ -447,7 +451,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
           ...imageData,
           timestamp: Date.now()
         }]);
-      } : undefined
+      } : undefined,
+      dispatchKernelCommand: dispatchKernelCommand as ((command: any) => Promise<any>) | undefined
     }),
     dismissActionCard: toolCall => dismissChatActionCard({
       toolCall,

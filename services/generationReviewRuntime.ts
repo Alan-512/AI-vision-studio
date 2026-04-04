@@ -4,9 +4,9 @@ import type { LocalReviewResult } from './assetReviewRuntime';
 import {
   buildDefaultRefinePromptRequiresAction,
   buildRevisedToolResult,
-  finalizeReviewOutcome,
-  preparePrimaryReview
+  finalizeReviewOutcome
 } from './generationOrchestrator';
+import { transitionJobToPrimaryReview } from './jobTransitionRuntime';
 
 export const executePrimaryReview = async ({
   job,
@@ -51,7 +51,7 @@ export const executePrimaryReview = async ({
     generatedArtifact,
     reviewStep,
     reviewingJob
-  } = preparePrimaryReview({
+  } = transitionJobToPrimaryReview({
     job,
     asset,
     generationStepId,

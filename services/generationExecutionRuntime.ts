@@ -1,6 +1,10 @@
 import { AppMode, type AgentJob, type AgentToolResult, type AssetItem, type GenerationParams, type JobStep } from '../types';
 import { buildAutoRevisionReviewHandoff } from './generationOrchestrator';
-import { prepareCompletedGeneration, buildGenerationExecutionSnapshot, buildGenerationOperationSnapshot } from './agentRuntime';
+import {
+  transitionJobGenerationOperation,
+  transitionJobToGenerationCompleted,
+  transitionJobToGenerationRunning
+} from './jobTransitionRuntime';
 
 export const executeGenerationAttempt = async ({
   mode,
@@ -68,7 +72,8 @@ export const executeGenerationAttempt = async ({
 }): Promise<{ asset: AssetItem; toolResult: AgentToolResult }> => {
   const onStart = () => {
     const runningAt = now();
-    const runningJob = buildGenerationExecutionSnapshot(agentJob, {
+    const runningJob = transitionJobToGenerationRunning({
+      job: agentJob,
       stepId,
       now: runningAt
     });
@@ -95,7 +100,7 @@ export const executeGenerationAttempt = async ({
     asset.isNew = true;
     asset.jobId = jobId;
     const completedAt = now();
-    const { completedJob, toolResult } = prepareCompletedGeneration({
+    const { completedJob, toolResult } = transitionJobToGenerationCompleted({
       job: agentJob,
       stepId,
       taskId,
@@ -119,7 +124,8 @@ export const executeGenerationAttempt = async ({
     genParams,
     async operationName => {
       if (signal.aborted) throw new Error('Cancelled');
-      const jobWithOperation = buildGenerationOperationSnapshot(agentJob, {
+      const jobWithOperation = transitionJobGenerationOperation({
+        job: agentJob,
         stepId,
         operationName,
         now: now()
@@ -137,7 +143,7 @@ export const executeGenerationAttempt = async ({
   const updates = { status: 'COMPLETED' as const, url: videoResult.blobUrl, videoUri: videoResult.videoUri, isNew: true };
   const asset = { ...initialPendingAsset, ...updates, jobId };
   const completedAt = now();
-  const { completedJob, toolResult } = prepareCompletedGeneration({
+  const { completedJob, toolResult } = transitionJobToGenerationCompleted({
     job: agentJob,
     stepId,
     taskId,

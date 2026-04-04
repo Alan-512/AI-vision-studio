@@ -4,6 +4,7 @@ import { executeAppGenerationRequest } from '../services/appGenerationRequestRun
 
 describe('appGenerationRequestRuntime', () => {
   it('launches prepared generation tasks with per-task flow deps', async () => {
+    const prompts: string[] = [];
     const createTaskFlowDepsBuilder = vi.fn().mockReturnValue((input: any) => ({
       taskId: input.taskId,
       latestVisibleAssetRef: input.latestVisibleAssetRef,
@@ -25,6 +26,7 @@ describe('appGenerationRequestRuntime', () => {
       expect(deps.taskId).toBe('task-1');
       expect(typeof deps.playVisibleSuccess).toBe('function');
       expect(input.activeParams.numberOfImages).toBe(1);
+      prompts.push(input.activeParams.prompt);
       return { status: 'success', summary: input.currentProjectId } as AgentToolResult;
     });
 
@@ -48,6 +50,9 @@ describe('appGenerationRequestRuntime', () => {
 
     expect(createTaskFlowDepsBuilder).toHaveBeenCalledTimes(2);
     expect(launchPreparedTask).toHaveBeenCalledTimes(2);
+    expect(new Set(prompts).size).toBe(2);
+    expect(prompts[0]).toContain('Sequence frame 1 of 2');
+    expect(prompts[1]).toContain('Sequence frame 2 of 2');
     expect(results).toEqual([
       { status: 'success', summary: 'project-1' },
       { status: 'success', summary: 'project-1' }

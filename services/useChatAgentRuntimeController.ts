@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import type { AgentAction, ChatMessage, GenerationParams } from '../types';
+import type { ExecuteToolCallsCommand, KernelTransitionResult } from './agentKernelTypes';
 import { createChatAgentRuntimeStore } from './chatAgentRuntime';
 import { deriveChatAgentSurfaceStatus } from './chatAgentSurfaceRuntime';
 import type { ActiveChatToolCallStatus } from './chatToolCallRuntime';
@@ -9,6 +10,7 @@ export const useChatAgentRuntimeController = ({
   params,
   historyRef,
   onToolCall,
+  dispatchKernelCommand,
   setToolCallStatus,
   setToolCallExpanded
 }: {
@@ -16,6 +18,7 @@ export const useChatAgentRuntimeController = ({
   params: GenerationParams;
   historyRef: { current: ChatMessage[] };
   onToolCall?: (action: AgentAction) => Promise<any> | any;
+  dispatchKernelCommand?: (command: ExecuteToolCallsCommand) => Promise<Pick<KernelTransitionResult, 'toolResults'>>;
   setToolCallStatus: (status: ActiveChatToolCallStatus | null) => void;
   setToolCallExpanded: (expanded: boolean) => void;
 }) => {
@@ -34,6 +37,7 @@ export const useChatAgentRuntimeController = ({
     getParams: () => paramsRef.current,
     getHistory: () => historyRef.current,
     onToolCallRef,
+    dispatchKernelCommand,
     setToolCallStatus: status => setToolCallStatusRef.current(status),
     setToolCallExpanded: expanded => setToolCallExpandedRef.current(expanded)
   }), [historyRef]);

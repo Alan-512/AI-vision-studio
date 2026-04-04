@@ -32,9 +32,16 @@ import { createAppGenerationTaskFlowDepsBuilder } from './services/appGeneration
 import { prepareAppGenerationRequest } from './services/appGenerationPreflightRuntime';
 import { executeAppGenerationRequest } from './services/appGenerationRequestRuntime';
 import { executeAppGenerationFlow } from './services/appGenerationRuntime';
+import { createAppAgentToolExecutor } from './services/appAgentToolRuntime';
+import { executeAppCancelJob } from './services/appCancelJobRuntime';
+import { executeAppResolveRequiresAction } from './services/appResolveRequiresActionRuntime';
+import { executeAppResumeJob } from './services/appResumeJobRuntime';
+import { executeAppStartGeneration } from './services/appStartGenerationRuntime';
+import { executeAppSubmitUserTurn } from './services/appSubmitTurnRuntime';
 import { createAppTaskViewController } from './services/appTaskViewRuntime';
 import { recoverPersistedTaskViews } from './services/appInitializationRuntime';
 import { resolveKeepCurrentAction } from './services/appRequiresActionRuntime';
+import { createAppAgentKernel } from './services/appAgentKernelRuntime';
 import { buildDefaultRefinePromptRequiresAction, buildEditPrompt, normalizeGenerationParamsForExecution, prepareGenerationLaunch } from './services/generationOrchestrator';
 import { resolveToolCallRecordStatus } from './services/requiresActionRuntime';
 import {
@@ -590,6 +597,55 @@ export function App() {
         setToasts(prev => [...prev, { id: crypto.randomUUID(), type, title, message }]);
     };
     const removeToast = (id: string) => setToasts(prev => prev.filter(t => t.id !== id));
+    const executeToolCallsRef = useRef<((command: { toolCalls: AgentAction[] }) => Promise<AgentToolResult[]>) | null>(null);
+
+    const appAgentKernel = useMemo(() => createAppAgentKernel({
+        executeResolveRequiresAction: command => executeAppResolveRequiresAction({
+            command,
+            activeProjectId: activeProjectIdRef.current,
+            loadAgentJobsByProject,
+            saveAgentJobSnapshot: saveAgentJob,
+            tasksRef,
+            setTaskViews: setTasks,
+            saveTaskView: saveTask,
+            deleteTaskView: deleteTask,
+            projects
+        }),
+        executeCancelJob: command => executeAppCancelJob({
+            command,
+            activeProjectId: activeProjectIdRef.current,
+            loadAgentJobsByProject,
+            saveAgentJobSnapshot: saveAgentJob,
+            tasksRef,
+            setTaskViews: setTasks,
+            saveTaskView: saveTask,
+            deleteTaskView: deleteTask,
+            projects
+        }),
+        executeResumeJob: command => executeAppResumeJob({
+            command,
+            activeProjectId: activeProjectIdRef.current,
+            loadAgentJobsByProject,
+            saveAgentJobSnapshot: saveAgentJob,
+            tasksRef,
+            setTaskViews: setTasks,
+            saveTaskView: saveTask,
+            deleteTaskView: deleteTask,
+            projects
+        }),
+        executeStartGeneration: payload => executeAppStartGeneration({
+            ...(payload as any),
+            createGenerationTaskLaunchController,
+            executeAppGenerationRequest
+        }),
+        executeSubmitUserTurn: executeAppSubmitUserTurn,
+        executeToolCalls: command => {
+            if (!executeToolCallsRef.current) {
+                throw new Error('No app tool-call handler configured');
+            }
+            return executeToolCallsRef.current(command);
+        }
+    }), [projects]);
 
     const updateLastModelMessage = (updater: (message: ChatMessage) => ChatMessage) => {
         setChatHistory(prev => {
@@ -618,6 +674,7 @@ export function App() {
             toolCall,
             activeProjectId: activeProjectIdRef.current,
             loadAgentJobsByProject,
+            dispatchKernelCommand: command => appAgentKernel.dispatchCommand(command),
             saveAgentJobSnapshot: saveAgentJob,
             tasksRef,
             setTaskViews: setTasks,
@@ -1057,6 +1114,10 @@ export function App() {
         }
     };
 
+    executeToolCallsRef.current = createAppAgentToolExecutor({
+        executeToolCall: handleAgentToolCall
+    });
+
     const getFriendlyError = (err: string) => {
         const e = err.toLowerCase();
         if (e.includes('quota') || e.includes('429') || e.includes('resource_exhausted')) return t('err.quota');
@@ -1256,7 +1317,8 @@ export function App() {
                 playSuccessSound
             },
             createGenerationTaskLaunchController,
-            executeAppGenerationRequest
+            executeAppGenerationRequest,
+            dispatchKernelCommand: command => appAgentKernel.dispatchCommand(command)
         });
     };
 
@@ -1273,7 +1335,8 @@ export function App() {
         deleteAssetPermanently: permanentlyDeleteAssetFromDB,
         activeProjectIdRef,
         getActiveProjectId: () => activeProjectId,
-        setAssets
+        setAssets,
+        dispatchKernelCommand: command => appAgentKernel.dispatchCommand(command)
     });
     const openConfirmDeleteProject = (projectId: string) => {
         const project = projects.find(p => p.id === projectId);
@@ -1578,7 +1641,7 @@ export function App() {
             <ProjectSidebar isOpen={showProjects} onClose={() => setShowProjects(false)} projects={projects} activeProjectId={activeProjectId} generatingStates={generatingStates} onSelectProject={(id) => switchProject(id)} onCreateProject={() => createNewProject()} onRenameProject={(id, name) => { const p = projects.find(p => p.id === id); if (p) { const updated = { ...p, name }; setProjects(prev => prev.map(prj => prj.id === id ? updated : prj)); updateProject(id, { name }); } }} onDeleteProject={openConfirmDeleteProject} />
 
             <div className="flex-1 flex overflow-hidden relative">
-                <GenerationForm mode={mode} params={params} setParams={setParams} chatParams={chatParams} setChatParams={setChatParams} isGenerating={tasks.some(t => t.projectId === activeProjectId && (t.status === 'GENERATING' || t.status === 'QUEUED' || t.status === 'REVIEWING'))} startTime={generatingStates[activeProjectId]} onGenerate={handleParamsGenerate} onVerifyVeo={handleAuthVerify} veoVerified={veoVerified} chatHistory={chatHistory} setChatHistory={setChatHistory} activeTab={activeTab} onTabChange={setActiveTab} chatSelectedImages={chatSelectedImages} setChatSelectedImages={setChatSelectedImages} projectId={activeProjectId} cooldownEndTime={videoCooldownEndTime} thoughtImages={thoughtImages} setThoughtImages={setThoughtImages} {...({ projectContextSummary: contextSummary, projectSummaryCursor: summaryCursor, onUpdateProjectContext: (s: string, c: number) => { setContextSummary(s); setSummaryCursor(c); }, onToolCall: handleAgentToolCall, onKeepCurrentAction: handleKeepCurrentAction, agentContextAssets: mode === AppMode.IMAGE ? agentContextAssets : [], onRemoveContextAsset: (assetId: string) => setAgentContextAssets(prev => prev.filter(a => a.id !== assetId)), onClearContextAssets: () => setAgentContextAssets([]) } as any)} />
+                <GenerationForm mode={mode} params={params} setParams={setParams} chatParams={chatParams} setChatParams={setChatParams} isGenerating={tasks.some(t => t.projectId === activeProjectId && (t.status === 'GENERATING' || t.status === 'QUEUED' || t.status === 'REVIEWING'))} startTime={generatingStates[activeProjectId]} onGenerate={handleParamsGenerate} onVerifyVeo={handleAuthVerify} veoVerified={veoVerified} chatHistory={chatHistory} setChatHistory={setChatHistory} activeTab={activeTab} onTabChange={setActiveTab} chatSelectedImages={chatSelectedImages} setChatSelectedImages={setChatSelectedImages} projectId={activeProjectId} cooldownEndTime={videoCooldownEndTime} thoughtImages={thoughtImages} setThoughtImages={setThoughtImages} {...({ projectContextSummary: contextSummary, projectSummaryCursor: summaryCursor, onUpdateProjectContext: (s: string, c: number) => { setContextSummary(s); setSummaryCursor(c); }, onToolCall: handleAgentToolCall, dispatchKernelCommand: (command: any) => appAgentKernel.dispatchCommand(command), onKeepCurrentAction: handleKeepCurrentAction, agentContextAssets: mode === AppMode.IMAGE ? agentContextAssets : [], onRemoveContextAsset: (assetId: string) => setAgentContextAssets(prev => prev.filter(a => a.id !== assetId)), onClearContextAssets: () => setAgentContextAssets([]) } as any)} />
 
                 <div className="flex-1 bg-dark-bg flex flex-col min-w-0 relative">
                     {rightPanelMode === 'CANVAS' && activeCanvasAsset ? (

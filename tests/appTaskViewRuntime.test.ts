@@ -2,9 +2,13 @@ import { describe, expect, it, vi } from 'vitest';
 import { createAppTaskViewController } from '../services/appTaskViewRuntime';
 
 describe('appTaskViewRuntime', () => {
-  it('dismisses the task view and aborts active controllers when cancelling', () => {
+  it('dismisses the task view after kernel cancel settles and aborts active controllers', async () => {
     const dismissById = vi.fn().mockResolvedValue(undefined);
     const deleteAssetPermanently = vi.fn().mockResolvedValue(undefined);
+    let resolveDispatch: (() => void) | undefined;
+    const dispatchKernelCommand = vi.fn().mockImplementation(() => new Promise<void>(resolve => {
+      resolveDispatch = resolve;
+    }));
     const abort = vi.fn();
     const setAssets = vi.fn();
 
@@ -14,10 +18,21 @@ describe('appTaskViewRuntime', () => {
       deleteAssetPermanently,
       activeProjectIdRef: { current: 'project-1' },
       getActiveProjectId: () => 'project-1',
-      setAssets
+      setAssets,
+      dispatchKernelCommand
     });
 
-    controller.cancelTask('task-1');
+    const cancellation = controller.cancelTask('task-1', 'job-1');
+
+    expect(dispatchKernelCommand).toHaveBeenCalledWith({
+      type: 'CancelJob',
+      jobId: 'job-1',
+      reason: 'Cancelled from task center'
+    });
+    expect(dismissById).not.toHaveBeenCalled();
+
+    resolveDispatch?.();
+    await cancellation;
 
     expect(dismissById).toHaveBeenCalledWith('task-1');
     expect(abort).toHaveBeenCalledTimes(1);
@@ -25,7 +40,7 @@ describe('appTaskViewRuntime', () => {
     expect(setAssets).toHaveBeenCalledTimes(1);
   });
 
-  it('routes task intents to cancel or dismiss', () => {
+  it('routes task intents to cancel or dismiss', async () => {
     const dismissById = vi.fn().mockResolvedValue(undefined);
     const controller = createAppTaskViewController({
       taskViewDismissal: { dismissById, clearDismissable: vi.fn().mockResolvedValue(undefined) } as any,
@@ -33,11 +48,12 @@ describe('appTaskViewRuntime', () => {
       deleteAssetPermanently: vi.fn(),
       activeProjectIdRef: { current: 'project-1' },
       getActiveProjectId: () => 'project-1',
-      setAssets: vi.fn()
+      setAssets: vi.fn(),
+      dispatchKernelCommand: vi.fn().mockResolvedValue(undefined)
     });
 
-    controller.handleTaskViewIntent({ type: 'cancel_job', taskId: 'task-1', jobId: 'job-1' });
-    controller.handleTaskViewIntent({ type: 'dismiss_task_view', taskId: 'task-2' });
+    await controller.handleTaskViewIntent({ type: 'cancel_job', taskId: 'task-1', jobId: 'job-1' });
+    await controller.handleTaskViewIntent({ type: 'dismiss_task_view', taskId: 'task-2' });
 
     expect(dismissById).toHaveBeenNthCalledWith(1, 'task-1');
     expect(dismissById).toHaveBeenNthCalledWith(2, 'task-2');

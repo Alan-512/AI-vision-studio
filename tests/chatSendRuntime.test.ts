@@ -107,4 +107,62 @@ describe('chatSendRuntime', () => {
       searchProgress: { status: 'complete' }
     });
   });
+
+  it('dispatches SubmitUserTurn through kernel when a dispatcher is provided', async () => {
+    const dispatchKernelCommand = vi.fn().mockResolvedValue({
+      turnOutput: {
+        streamed: true
+      }
+    });
+    const executeStreamingTurn = vi.fn();
+
+    const result = await executeChatSendFlow({
+      customText: 'hello',
+      input: '',
+      selectedImages: [],
+      isLoading: false,
+      history: [],
+      projectId: 'project-1',
+      projectIdRef: { current: 'project-1' },
+      selectedModel: TextModel.FLASH,
+      mode: AppMode.IMAGE,
+      useSearch: true,
+      params: {
+        prompt: 'hello',
+        imageModel: ImageModel.FLASH_3_1
+      } as any,
+      abortControllerRef: { current: null },
+      thinkingTextRef: { current: '' },
+      searchProgressRef: { current: null },
+      setHistory: vi.fn(),
+      setInput: vi.fn(),
+      setSelectedImages: vi.fn(),
+      setIsLoading: vi.fn(),
+      setThinkingText: vi.fn(),
+      setSearchProgress: vi.fn(),
+      setSearchIsCollapsed: vi.fn(),
+      clearInputHeight: vi.fn(),
+      clearContextAssets: vi.fn(),
+      clearThoughtImages: vi.fn(),
+      handleToolCallWithRetry: vi.fn(),
+      appendThoughtImage: vi.fn(),
+      executeStreamingTurn,
+      onUpdateProjectContext: vi.fn(),
+      dispatchKernelCommand,
+      createId: () => 'turn-submit'
+    });
+
+    expect(dispatchKernelCommand).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'SubmitUserTurn',
+      turn: expect.objectContaining({
+        id: 'turn-submit',
+        sessionId: 'project-1',
+        userMessage: 'hello'
+      })
+    }));
+    expect(executeStreamingTurn).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      streamed: true
+    });
+  });
 });
