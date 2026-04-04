@@ -12,6 +12,128 @@ export type SearchCompletionProgress = {
 
 export const SEARCH_PHASE_TIMEOUT_MS = 15000;
 
+export const executeSearchPhase = async ({
+  ai,
+  searchModelName,
+  searchContents,
+  searchInstruction,
+  signal,
+  searchTools,
+  onSearchProgress,
+  language,
+  searchTimeoutMs = SEARCH_PHASE_TIMEOUT_MS
+}: {
+  ai: { models: { generateContentStream: (input: any) => Promise<AsyncIterable<any>> | AsyncIterable<any> } };
+  searchModelName: string;
+  searchContents: any[];
+  searchInstruction: string;
+  signal: AbortSignal;
+  searchTools: any[];
+  onSearchProgress?: (progress: {
+    status: 'searching' | 'complete';
+    title: string;
+    queries: string[];
+    results?: SearchProgressResultItem[];
+    sources: SearchSource[];
+  }) => void;
+  language: string;
+  searchTimeoutMs?: number;
+}) => {
+  let searchFullText = '';
+  let collectedQueries: string[] = [];
+  let hasNotifiedSearchStart = false;
+  let collectedSources: SearchSource[] = [];
+  let searchTimeoutId: ReturnType<typeof setTimeout> | undefined;
+
+  try {
+    const searchTimeout = new Promise<never>((_, reject) => {
+      searchTimeoutId = setTimeout(() => {
+        reject(new Error(`Search phase timed out after ${searchTimeoutMs}ms`));
+      }, searchTimeoutMs);
+    });
+    const searchResult = await Promise.race([
+      ai.models.generateContentStream({
+        model: searchModelName,
+        contents: searchContents,
+        config: {
+          systemInstruction: searchInstruction,
+          tools: searchTools,
+          abortSignal: signal
+        }
+      }),
+      searchTimeout
+    ]);
+    if (searchTimeoutId) {
+      clearTimeout(searchTimeoutId);
+    }
+
+    for await (const chunk of searchResult) {
+      if (signal.aborted) throw new Error('Cancelled');
+
+      const chunkText = chunk.text ?? '';
+      if (chunkText) {
+        searchFullText += chunkText;
+      }
+
+      const candidates = (chunk as any).candidates;
+      if (candidates && candidates[0]?.groundingMetadata) {
+        const groundingMetadata = candidates[0].groundingMetadata;
+
+        if (!hasNotifiedSearchStart && onSearchProgress) {
+          hasNotifiedSearchStart = true;
+          onSearchProgress({
+            status: 'searching',
+            title: language === 'zh' ? '正在搜索中...' : 'Searching...',
+            queries: [],
+            sources: []
+          });
+        }
+
+        if (groundingMetadata.webSearchQueries && groundingMetadata.webSearchQueries.length > 0) {
+          collectedQueries = [...new Set([...collectedQueries, ...groundingMetadata.webSearchQueries])];
+        }
+
+        if (groundingMetadata.groundingChunks) {
+          for (const groundingChunk of groundingMetadata.groundingChunks) {
+            if (groundingChunk.web?.uri && groundingChunk.web?.title) {
+              const exists = collectedSources.some(source => source.url === groundingChunk.web.uri);
+              if (!exists) {
+                collectedSources.push({ title: groundingChunk.web.title, url: groundingChunk.web.uri });
+              }
+            }
+          }
+        }
+
+        if (onSearchProgress && (collectedQueries.length > 0 || collectedSources.length > 0)) {
+          onSearchProgress({
+            status: 'searching',
+            title: language === 'zh' ? '收集关键信息' : 'Gathering key information',
+            queries: collectedQueries,
+            sources: collectedSources.slice(0, 5)
+          });
+        }
+      }
+    }
+  } catch (error: any) {
+    if (searchTimeoutId) {
+      clearTimeout(searchTimeoutId);
+    }
+    if (signal.aborted || error?.message === 'Cancelled' || error?.name === 'AbortError') {
+      throw error;
+    }
+    console.warn('[Search] Search phase failed, continuing without search context.', error);
+    searchFullText = '';
+    collectedQueries = [];
+    collectedSources = [];
+  }
+
+  return {
+    searchFullText,
+    collectedQueries,
+    collectedSources
+  };
+};
+
 export const buildSearchPhaseInstruction = ({
   contextPart,
   dateStr,

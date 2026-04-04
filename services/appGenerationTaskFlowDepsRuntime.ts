@@ -1,0 +1,235 @@
+import type { AgentJob, AssetItem } from '../types';
+import { createGenerationTaskFlowDeps } from './generationTaskFlowDepsRuntime';
+
+export const createAppGenerationTaskFlowDepsBuilder = ({
+  currentMode,
+  normalizeGenerationParamsForExecution,
+  translateTag,
+  executeGenerationAttempt,
+  executePrimaryReview,
+  executeAutoRevisionFlow,
+  resolvePrimaryReview,
+  resolveGenerationFailure,
+  generateImageImpl,
+  generateVideoImpl,
+  normalizeAssistantMode,
+  buildImageCriticContext,
+  reviewGeneratedAsset,
+  buildDefaultRefinePromptRequiresAction,
+  toolCall,
+  historyOverride,
+  chatHistory,
+  userKey,
+  runMemoryExtractionTask,
+  addToast,
+  handleUseAsReference,
+  playSuccessSound,
+  playErrorSound,
+  setVideoCooldownEndTime,
+  getFriendlyError,
+  language
+}: any) => (runtimeInput: any) => {
+  const {
+    taskRuntime,
+    getAgentJob,
+    stepId,
+    taskId,
+    jobId,
+    currentProjectId,
+    activeParams,
+    initialPendingAsset,
+    signal,
+    selectedReferenceRecords,
+    historyForGeneration,
+    latestVisibleAssetRef,
+    taskMarkedVisibleCompleteRef,
+    playVisibleSuccess
+  } = runtimeInput;
+
+  return createGenerationTaskFlowDeps({
+    taskRuntime,
+    taskContext: {
+      getAgentJob,
+      stepId,
+      taskId,
+      jobId,
+      currentProjectId,
+      activeParams,
+      initialPendingAsset,
+      signal,
+      selectedReferenceRecords,
+      historyForGeneration
+    },
+    generationDeps: {
+      normalizeGenerationParams: () => normalizeGenerationParamsForExecution(
+        { ...activeParams },
+        currentMode,
+        translateTag
+      ),
+      executeGenerationAttempt: ({ genParams, historyForGeneration, taskRuntime, taskContext }: any) => executeGenerationAttempt({
+        mode: currentMode,
+        agentJob: taskContext.getAgentJob(),
+        stepId: taskContext.stepId,
+        taskId: taskContext.taskId,
+        jobId: taskContext.jobId,
+        currentProjectId: taskContext.currentProjectId,
+        genParams,
+        initialPendingAsset: taskContext.initialPendingAsset,
+        signal: taskContext.signal,
+        taskRuntime: {
+          stageRunningJob: (nestedInput: any) => taskRuntime.stageRunningJob(nestedInput),
+          completeVisibleImage: (nestedInput: any) => taskRuntime.completeVisibleImage(nestedInput),
+          updateOperation: (nestedInput: any) => taskRuntime.updateOperation(nestedInput),
+          completeVideo: (nestedInput: any) => taskRuntime.completeVideo(nestedInput)
+        },
+        generateImageImpl,
+        generateVideoImpl,
+        historyForGeneration
+      }),
+      afterVisibleImage: async ({ asset, taskRuntime, taskContext }: any) => {
+        latestVisibleAssetRef.current = asset;
+        if (taskContext.signal.aborted) throw new Error('Cancelled');
+        playVisibleSuccess();
+        if (!taskMarkedVisibleCompleteRef.current) {
+          taskMarkedVisibleCompleteRef.current = true;
+          await taskRuntime.markTaskVisibleComplete(taskContext.getAgentJob());
+        }
+      },
+      executePrimaryReview: ({ asset, genParams, toolResult, taskRuntime, taskContext }: any) => executePrimaryReview({
+        job: taskContext.getAgentJob(),
+        asset,
+        generationStepId: taskContext.stepId,
+        toolResult,
+        prompt: genParams.prompt,
+        genParams,
+        selectedReferences: taskContext.selectedReferenceRecords,
+        assistantMode: normalizeAssistantMode((genParams as any).assistant_mode),
+        taskRuntime: {
+          startReview: (job: AgentJob, shouldSyncTaskView: boolean) => taskRuntime.startReview(job, shouldSyncTaskView)
+        },
+        buildCriticContext: ({ assistantMode, negativePrompt, selectedReferences, consistencyProfile, searchContext }: any) => buildImageCriticContext({
+          assistantMode: normalizeAssistantMode(assistantMode),
+          negativePrompt,
+          selectedReferences,
+          consistencyProfile,
+          searchContext
+        }),
+        reviewAsset: (reviewAssetTarget: AssetItem, reviewPrompt: string, criticContext: string) => reviewGeneratedAsset(reviewAssetTarget, reviewPrompt, criticContext)
+      }),
+      executeAutoRevisionFlow: ({ review, genParams, toolResult, generatedArtifact, reviewArtifact, finalizedReviewStep, selectedReferenceRecords, taskRuntime, taskContext }: any) => executeAutoRevisionFlow({
+        job: taskContext.getAgentJob(),
+        review,
+        currentMode,
+        originalPrompt: genParams.prompt,
+        genParams,
+        toolCall,
+        finalizedReviewStep,
+        reviewArtifact,
+        currentProjectId: taskContext.currentProjectId,
+        signal: taskContext.signal,
+        taskId: taskContext.taskId,
+        jobId: taskContext.jobId,
+        toolResult,
+        selectedReferences: selectedReferenceRecords,
+        historyForGeneration: taskContext.historyForGeneration,
+        continuousMode: taskContext.activeParams.continuousMode,
+        taskRuntime: {
+          startAutoRevision: (jobs: AgentJob[]) => taskRuntime.startAutoRevision(jobs)
+        },
+        generatedArtifact,
+        deps: {
+          executeAttempt: (nestedInput: any) => executeGenerationAttempt({
+            ...nestedInput,
+            taskRuntime: {
+              publishAssetAndPersistJob: (deepInput: any) => taskRuntime.publishAssetAndPersistJob(deepInput)
+            },
+            generateImageImpl
+          }),
+          executeReview: (nestedInput: any) => executePrimaryReview({
+            ...nestedInput,
+            taskRuntime: {
+              buildCriticContext: ({ assistantMode, negativePrompt, selectedReferences, consistencyProfile, searchContext }: any) => buildImageCriticContext({
+                assistantMode: normalizeAssistantMode(assistantMode),
+                negativePrompt,
+                selectedReferences,
+                consistencyProfile,
+                searchContext
+              }),
+              reviewAsset: (reviewAssetTarget: AssetItem, reviewPrompt: string, criticContext: string) => reviewGeneratedAsset(reviewAssetTarget, reviewPrompt, criticContext),
+              buildDefaultRequiresAction: ({ prompt, latestAssetId, review }: any) => buildDefaultRefinePromptRequiresAction({
+                prompt,
+                latestAssetId,
+                review
+              })
+            }
+          }),
+          resolveAutoRevision: (nestedInput: any) => resolvePrimaryReview({
+            ...nestedInput,
+            deps: {
+              resolveAutoRevision: (job: AgentJob, shouldSyncTaskView: boolean) => taskRuntime.resolveAutoRevision(job, shouldSyncTaskView),
+              addToast,
+              runMemoryExtraction: () => runMemoryExtractionTask(taskContext.currentProjectId, historyOverride || chatHistory, userKey).catch((err: any) => {
+                console.error('[App] Background memory extraction failed:', err);
+              }),
+              playSuccessSound,
+              useAsReference: handleUseAsReference
+            },
+            now: () => Date.now()
+          }),
+          playVisibleSuccess: () => {
+            playVisibleSuccess();
+          },
+          onVisibleAsset: (asset: AssetItem) => {
+            latestVisibleAssetRef.current = asset;
+          },
+          normalizeAssistantMode,
+          now: () => Date.now()
+        }
+      }),
+      resolvePrimaryReview: ({ review, genParams, reviewedToolResult, generatedArtifact, reviewArtifact, finalizedReviewStep, asset, taskRuntime, taskContext }: any) => resolvePrimaryReview({
+        mode: currentMode,
+        job: taskContext.getAgentJob(),
+        finalizedReviewStep,
+        generatedArtifact,
+        reviewArtifact,
+        review,
+        prompt: genParams.prompt,
+        reviewedToolResult,
+        continuousMode: taskContext.activeParams.continuousMode,
+        asset,
+        deps: {
+          resolvePrimaryReview: (job: AgentJob, shouldSyncTaskView: boolean) => taskRuntime.resolvePrimaryReview(job, shouldSyncTaskView),
+          addToast,
+          runMemoryExtraction: () => runMemoryExtractionTask(taskContext.currentProjectId, historyOverride || chatHistory, userKey).catch((err: any) => {
+            console.error('[App] Background memory extraction failed:', err);
+          }),
+          playSuccessSound,
+          useAsReference: handleUseAsReference
+        },
+        now: () => Date.now()
+      }),
+      resolveGenerationFailure: ({ error }: any) => resolveGenerationFailure({
+        mode: currentMode,
+        agentJob: getAgentJob(),
+        stepId,
+        taskId,
+        latestVisibleAsset: latestVisibleAssetRef.current,
+        taskMarkedVisibleComplete: taskMarkedVisibleCompleteRef.current,
+        error,
+        deps: {
+          taskRuntime: {
+            cancel: (job: AgentJob, id: string) => taskRuntime.cancel(job, id),
+            recoverVisibleAsset: (nestedInput: any) => taskRuntime.recoverVisibleAsset(nestedInput),
+            fail: (job: AgentJob) => taskRuntime.fail(job)
+          },
+          addToast,
+          playErrorSound,
+          setCooldown: setVideoCooldownEndTime,
+          getFriendlyError,
+          language,
+          now: () => Date.now()
+        }
+      })
+    }
+  });
+};

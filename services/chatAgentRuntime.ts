@@ -1,5 +1,5 @@
 import { AspectRatio, ImageModel, ImageResolution, type AgentAction, type ChatMessage, type GenerationParams } from '../types';
-import { AgentStateMachine, createGenerateAction, createInitialAgentState, type AgentState, type AgentStateMachine as AgentStateMachineType, type PendingAction } from './agentService';
+import { createGenerateAction, createInitialAgentState, type AgentState, type PendingAction } from './agentService';
 import { resolveActiveToolCallMessageTimestamp, type ActiveChatToolCallStatus } from './chatToolCallRuntime';
 
 type RetryControlError = Error & {
@@ -39,13 +39,99 @@ export const createChatAgentMachine = ({
 }: {
   onStateChange: (state: AgentState) => void;
   onToolCallRef: { current?: ((action: AgentAction) => Promise<any> | any) | undefined };
-}): AgentStateMachineType => new AgentStateMachine(
-  createInitialAgentState(),
-  {
-    onStateChange,
-    onExecuteAction: createGenerateActionExecutor({ onToolCallRef })
-  }
-);
+}) => {
+  let state = createInitialAgentState();
+  const maxRetries = state.maxRetries;
+  const executeAction = createGenerateActionExecutor({ onToolCallRef });
+
+  const updateState = (updates: Partial<AgentState>) => {
+    state = {
+      ...state,
+      ...updates,
+      lastUpdated: Date.now()
+    };
+    onStateChange(state);
+  };
+
+  const executeWithRetry = async (action: PendingAction) => {
+    let lastError: any;
+    updateState({ retryCount: 0 });
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        if (attempt > 0) {
+          updateState({ phase: 'EXECUTING' });
+        }
+        return await executeAction(action);
+      } catch (error) {
+        lastError = error;
+        const retryError = error as RetryControlError;
+        const isCancelled = retryError?.lifecycleStatus === 'cancelled'
+          || retryError?.message === 'Cancelled by user'
+          || retryError?.name === 'AbortError';
+        if (retryError?.retryable === false || isCancelled) {
+          throw error;
+        }
+
+        if (attempt < maxRetries) {
+          updateState({
+            phase: 'RETRYING',
+            retryCount: attempt + 1
+          });
+          await new Promise(resolve => setTimeout(resolve, Math.pow(2, attempt) * 1000));
+        }
+      }
+    }
+
+    throw lastError;
+  };
+
+  return {
+    getState: () => ({ ...state }),
+    setPendingAction: async (action: PendingAction) => {
+      updateState({
+        phase: 'EXECUTING',
+        pendingAction: action,
+        error: undefined
+      });
+
+      try {
+        console.log('[Agent] Auto-executing action (no confirmation required)');
+        const result = await executeWithRetry(action);
+        const generatedAssetIds = Array.isArray(result?.artifactIds)
+          ? result.artifactIds.filter((assetId: unknown): assetId is string => typeof assetId === 'string' && assetId.length > 0)
+          : [];
+
+        if (typeof result?.assetId === 'string' && result.assetId.length > 0) {
+          generatedAssetIds.push(result.assetId);
+        }
+
+        updateState({
+          phase: result?.status === 'requires_action' ? 'AWAITING_CONFIRMATION' : 'COMPLETED',
+          pendingAction: undefined,
+          retryCount: 0,
+          context: {
+            ...state.context,
+            generatedAssets: generatedAssetIds.length > 0
+              ? [...new Set([...state.context.generatedAssets, ...generatedAssetIds])]
+              : state.context.generatedAssets
+          }
+        });
+      } catch (error: any) {
+        updateState({
+          phase: 'ERROR',
+          pendingAction: undefined,
+          retryCount: 0,
+          error: `Generation failed: ${error?.message || String(error)}`
+        });
+      }
+    },
+    reset: () => {
+      state = createInitialAgentState();
+      onStateChange(state);
+    }
+  };
+};
 
 export const resolveGenerateActionArgs = (
   actionArgs: Record<string, any>,
@@ -107,7 +193,7 @@ export const runGenerateActionWithRetry = async ({
   action: AgentAction;
   params: GenerationParams;
   history: ChatMessage[];
-  agentMachine: Pick<AgentStateMachineType, 'setPendingAction'>;
+  agentMachine: Pick<ReturnType<typeof createChatAgentMachine>, 'setPendingAction'>;
   setToolCallStatus: (status: ActiveChatToolCallStatus | null) => void;
   setToolCallExpanded: (expanded: boolean) => void;
 }): Promise<void> => {
@@ -136,7 +222,7 @@ export const createChatAgentRuntimeController = ({
 }: {
   getParams: () => GenerationParams;
   getHistory: () => ChatMessage[];
-  agentMachine: Pick<AgentStateMachineType, 'setPendingAction' | 'reset'>;
+  agentMachine: Pick<ReturnType<typeof createChatAgentMachine>, 'setPendingAction' | 'reset'>;
   setToolCallStatus: (status: ActiveChatToolCallStatus | null) => void;
   setToolCallExpanded: (expanded: boolean) => void;
 }) => ({
@@ -167,7 +253,7 @@ export const createChatAgentRuntimeStore = ({
   createMachine?: (input: {
     onStateChange: (state: AgentState) => void;
     onToolCallRef: { current?: ((action: AgentAction) => Promise<any> | any) | undefined };
-  }) => AgentStateMachineType;
+  }) => ReturnType<typeof createChatAgentMachine>;
 }) => {
   let agentState = createInitialAgentState();
   const listeners = new Set<() => void>();

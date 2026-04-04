@@ -1,12 +1,13 @@
 
-import React, { useState, useRef, useEffect, useMemo, useSyncExternalStore } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { Send, User, Sparkles, ChevronDown, BrainCircuit, Zap, X, Box, Copy, Check, Plus, MonitorPlay, Film, Bot, Square, Crop, CheckCircle2, Globe, Brain, CircuitBoard, Wrench, Image as ImageIcon, CircleDashed, Terminal, RefreshCw, AlertCircle, Search, Upload, ShieldCheck, ArrowUpRight } from 'lucide-react';
 import { ChatMessage, GenerationParams, ImageResolution, AppMode, ImageModel, VideoResolution, VideoModel, AspectRatio, SmartAsset, APP_LIMITS, AgentAction, TextModel, SearchProgress, ThinkingLevel, ToolCallRecord, ReviewTrace } from '../types';
-import { streamChatResponse } from '../services/geminiService';
 import { normalizeImageUrlForChat } from '../services/imageUtils';
-import { createChatAgentRuntimeStore } from '../services/chatAgentRuntime';
+import { useChatAgentRuntimeController } from '../services/useChatAgentRuntimeController';
+import { applyChatActionCard, dismissChatActionCard, finalizeChatStreamingTurn, stopChatStreaming } from '../services/chatSurfaceRuntime';
+import { executeChatSendFlow } from '../services/chatSendRuntime';
+import { createChatSurfaceController } from '../services/chatSurfaceController';
 import { ActiveChatToolCallStatus, shouldShowActiveToolCallForMessage } from '../services/chatToolCallRuntime';
-import { removeChatMessageByTimestamp, resolveChatHistoryKeepCurrent } from '../services/requiresActionRuntime';
 import { useLanguage } from '../contexts/LanguageContext';
 import ReactMarkdown from 'react-markdown';
 import rehypeSanitize from 'rehype-sanitize';
@@ -252,7 +253,6 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const projectIdRef = useRef(projectId);
   const historyRef = useRef(history);
-  const paramsRef = useRef(params);
   const abortControllerRef = useRef<AbortController | null>(null);
 
   // NEW: Track LLM thinking process text
@@ -342,30 +342,14 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   const [applyingActionCardId, setApplyingActionCardId] = useState<string | null>(null);
 
   // NEW: Agent state machine for workflow management and retry
-  // FIX: Use ref to hold onToolCall so runtime store doesn't recreate when prop changes
-  const onToolCallRef = useRef(onToolCall);
-  onToolCallRef.current = onToolCall; // Always keep ref up-to-date
-
-  paramsRef.current = params;
-  const agentRuntime = useMemo(() => createChatAgentRuntimeStore({
-    getParams: () => paramsRef.current,
-    getHistory: () => historyRef.current,
-    onToolCallRef,
+  const { agentState, handleToolCallWithRetry } = useChatAgentRuntimeController({
+    projectId,
+    params,
+    historyRef,
+    onToolCall,
     setToolCallStatus,
     setToolCallExpanded
-  }), []);
-  const agentState = useSyncExternalStore(agentRuntime.subscribe, agentRuntime.getState, agentRuntime.getState);
-
-  // Tool call handler with retry support
-  const handleToolCallWithRetry = async (action: AgentAction) => {
-    try {
-      await agentRuntime.executeGenerateAction(action);
-      console.log('[Agent] Action execution completed');
-    } catch (error) {
-      console.error('[Agent] Action failed after retries:', error);
-      // State machine will have transitioned to ERROR state
-    }
-  };
+  });
 
   const isAutoMode = params.isAutoMode ?? true;
   const getRatioLabel = (r: AspectRatio) => { const enumKey = Object.keys(AspectRatio).find(k => AspectRatio[k as keyof typeof AspectRatio] === r); return t(`ratio.${enumKey}` as any) || r; };
@@ -379,8 +363,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
     setShowModelSelector(false);
     setDismissedActionCardIds({});
     setApplyingActionCardId(null);
-    agentRuntime.reset();
-  }, [projectId, agentRuntime]);
+  }, [projectId]);
   // Smart auto-scroll logic
   const prevHistoryLengthRef = useRef(history.length);
 
@@ -420,225 +403,69 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => { const files = e.target.files; if (!files || files.length === 0) return; await processFiles(Array.from(files)); if (fileInputRef.current) fileInputRef.current.value = ''; };
   const handlePaste = async (e: React.ClipboardEvent) => { const items = e.clipboardData.items; const files: File[] = []; for (let i = 0; i < items.length; i++) { if (items[i].type.indexOf('image') !== -1) { const file = items[i].getAsFile(); if (file) files.push(file); } } if (files.length > 0) { e.preventDefault(); await processFiles(files); } };
   const removeSelectedImage = (index: number) => { setSelectedImages(prev => prev.filter((_, i) => i !== index)); };
-  const handleStop = () => {
-    if (abortControllerRef.current) { abortControllerRef.current.abort(); abortControllerRef.current = null; }
-    setIsLoading(false);
-    setHistory(prev => { const updated = [...prev]; const last = updated[updated.length - 1]; if (last.role === 'model' && last.isThinking) { updated[updated.length - 1] = { ...last, isThinking: false }; } return updated; });
-  };
-
-  const handleSend = async (customText?: string) => {
-    const textToSend = customText || input.trim();
-    console.log('[Chat] handleSend called, isLoading:', isLoading, 'text:', textToSend?.slice(0, 30));
-    if ((!textToSend && selectedImages.length === 0) || isLoading) {
-      console.log('[Chat] Message blocked - early return');
-      return;
-    }
-
-    const sendingProjectId = projectId;
-
-    // Merge selectedImages with agentContextAssets (convert to data URLs)
-    const contextImageUrls = (agentContextAssets || []).map(a => `data:${a.mimeType};base64,${a.data}`);
-    const allImages = [...contextImageUrls, ...selectedImages];
-    const userMsg: ChatMessage = { role: 'user', content: textToSend, timestamp: Date.now(), images: allImages.length > 0 ? allImages : undefined };
-    const newHistory = [...history, userMsg];
-    setHistory(newHistory);
-    setInput('');
-    if (inputRef.current) inputRef.current.style.height = 'auto';
-    setSelectedImages([]);
-    // Clear context assets from UI immediately after sending
-    // Images are already merged into userMsg.images and will be in chatHistory
-    onClearContextAssets?.();
-    setThoughtImages?.([]); // Clear previous thought images
-    setIsLoading(true);
-
-    const abortController = new AbortController();
-    abortControllerRef.current = abortController;
-    let collectedSignatures: Array<{ partIndex: number; signature: string }> = [];
-
-    try {
-      const tempAiMsg: ChatMessage = { role: 'model', content: '', timestamp: Date.now(), isThinking: true };
-      setThinkingText(''); // Clear previous thinking text
-      thinkingTextRef.current = ''; // Clear ref too
-      // Clear search state for new message
-      setSearchProgress(null);
-      searchProgressRef.current = null; // Clear ref too
-      setSearchIsCollapsed(false);
-      setHistory(prev => [...prev, tempAiMsg]);
-
-      await streamChatResponse(
-        newHistory,
-        userMsg.content,
-        (chunkText) => {
-          if (projectIdRef.current !== sendingProjectId) return;
-          setHistory(prev => { const updated = [...prev]; updated[updated.length - 1] = { ...updated[updated.length - 1], content: chunkText }; return updated; });
-        },
-        selectedModel,
-        mode,
-        abortController.signal,
-        projectContextSummary,
-        projectSummaryCursor,
-        onUpdateProjectContext,
-        handleToolCallWithRetry, // Use Agent state machine with retry logic
-        useSearch,
-        params,
-        agentContextAssets,
-        (signatures) => { collectedSignatures = signatures; },
-        // Callback for thought images (构思图)
-        setThoughtImages ? (imageData) => {
-          if (projectIdRef.current !== sendingProjectId) return;
-          setThoughtImages(prev => [...prev, {
-            id: crypto.randomUUID(),
-            ...imageData,
-            timestamp: Date.now()
-          }]);
-        } : undefined,
-        // Callback for thinking process text (思考过程)
-        (text) => {
-          if (projectIdRef.current !== sendingProjectId) return;
-          thinkingTextRef.current += text;
-          setThinkingText(prev => prev + text);
-        },
-        // NEW: Callback for structured search progress (2025 best practices)
-        (progress: SearchProgress) => {
-          if (projectIdRef.current !== sendingProjectId) return;
-          setSearchProgress(progress);
-          searchProgressRef.current = progress; // Sync to ref for finally block
-          if (progress.status === 'complete') {
-            // Auto-collapse after 2 seconds
-            setTimeout(() => {
-              setSearchIsCollapsed(true);
-            }, 2000);
-          }
-        }
-      );
-    } catch (error: any) {
-      if (error.message === 'Cancelled' || error.name === 'AbortError') {
-        console.log('Chat generation stopped by user');
-      } else {
-        console.error("Chat Error:", error);
-        if (projectIdRef.current === sendingProjectId) {
-          setHistory(prev => {
-            const updated = [...prev];
-            const lastIdx = updated.length - 1;
-            if (lastIdx >= 0 && updated[lastIdx].role === 'model') {
-              const currentContent = updated[lastIdx].content;
-              const suppressInlineError = (updated[lastIdx].toolCalls || []).some(record =>
-                record.toolName === 'generate_image' || record.toolName === 'generate_video'
-              );
-              updated[lastIdx] = {
-                ...updated[lastIdx],
-                content: suppressInlineError ? currentContent : (currentContent
-                  ? `${currentContent}\n\n*[System Error: ${error.message || "Connection timed out"}]*`
-                  : `*[System Error: ${error.message || "Connection timed out"}]*`),
-                isThinking: false
-              };
-            }
-            return updated;
-          });
-        }
-      }
-    } finally {
-      if (projectIdRef.current === sendingProjectId) {
-        setIsLoading(false);
-        abortControllerRef.current = null;
-        // Store thinkingText and searchProgress in the message for persistence after completion
-        const finalThinkingContent = thinkingTextRef.current; // Use ref to get latest value
-        const finalSearchProgress = searchProgressRef.current; // Use ref to get latest value
-        setHistory(prev => {
-          const updated = [...prev];
-          const last = updated[updated.length - 1];
-          if (last.role === 'model') {
-            updated[updated.length - 1] = {
-              ...last,
-              isThinking: false,
-              thinkingContent: finalThinkingContent || undefined, // Persist thinking content
-              thoughtSignatures: collectedSignatures.length > 0 ? collectedSignatures : undefined,
-              searchProgress: finalSearchProgress || undefined // Persist search progress
-            };
-          }
-          return updated;
-        });
-      }
-    }
-  };
-  const handleKeyDown = (e: React.KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); } };
-
-  const resolveSuggestedPrompt = (toolCall: ToolCallRecord): string => {
-    const payload = toolCall.result?.requiresAction?.payload as Record<string, unknown> | undefined;
-    if (typeof payload?.revisedPrompt === 'string' && payload.revisedPrompt.trim()) return payload.revisedPrompt;
-    if (typeof toolCall.result?.metadata?.revisedPrompt === 'string' && String(toolCall.result.metadata.revisedPrompt).trim()) {
-      return String(toolCall.result.metadata.revisedPrompt);
-    }
-    if (typeof payload?.prompt === 'string' && payload.prompt.trim()) return payload.prompt;
-    if (typeof toolCall.args?.prompt === 'string' && toolCall.args.prompt.trim()) return toolCall.args.prompt;
-    return '';
-  };
-
-  const handleDismissActionCard = async (toolCall: ToolCallRecord) => {
-    const resolvedAt = Date.now();
-    const previousHistory = history;
-    setDismissedActionCardIds(prev => ({ ...prev, [toolCall.id]: true }));
-    setHistory(resolveChatHistoryKeepCurrent(history, toolCall.id, resolvedAt));
-
-    try {
-      await onKeepCurrentAction?.(toolCall);
-    } catch (error) {
-      console.error('[ChatInterface] Failed to keep current result', error);
-      setHistory(previousHistory);
-      setDismissedActionCardIds(prev => {
-        const next = { ...prev };
-        delete next[toolCall.id];
-        return next;
-      });
-    }
-  };
-
-  const handleApplyActionCard = async (toolCall: ToolCallRecord) => {
-    if (toolCall.toolName !== 'generate_image') return;
-    const suggestedPrompt = resolveSuggestedPrompt(toolCall);
-    if (!suggestedPrompt) return;
-    const payload = toolCall.result?.requiresAction?.payload as Record<string, unknown> | undefined;
-    const reviewPlan = payload?.reviewPlan as { summary?: string; localized?: { zh?: { summary?: string }; en?: { summary?: string } } } | undefined;
-    const localizedPlanSummary = language === 'zh'
-      ? reviewPlan?.localized?.zh?.summary
-      : reviewPlan?.localized?.en?.summary;
-    const optimisticMessageTimestamp = Date.now();
-    setApplyingActionCardId(toolCall.id);
-    setDismissedActionCardIds(prev => ({ ...prev, [toolCall.id]: true }));
-    setHistory(prev => [
-      ...prev,
-      {
-        role: 'user',
-        isSystem: true,
-        content: language === 'zh'
-          ? `继续按当前优化方向处理这一版。${localizedPlanSummary ? `\n${localizedPlanSummary}` : ''}`
-          : `Continuing with the current refinement plan.${localizedPlanSummary ? `\n${localizedPlanSummary}` : ''}`,
-        timestamp: optimisticMessageTimestamp
-      }
-    ]);
-
-    try {
-      await handleToolCallWithRetry({
-        toolName: toolCall.toolName,
-        args: {
-          ...(toolCall.args || {}),
-          prompt: suggestedPrompt,
-          resume_job_id: toolCall.result?.jobId,
-          requires_action_type: toolCall.result?.requiresAction?.type
-        }
-      });
-    } catch (error) {
-      console.error('[ChatInterface] Failed to apply action card', error);
-      setHistory(prev => removeChatMessageByTimestamp(prev, optimisticMessageTimestamp));
-      setDismissedActionCardIds(prev => {
-        const next = { ...prev };
-        delete next[toolCall.id];
-        return next;
-      });
-    } finally {
-      setApplyingActionCardId(current => current === toolCall.id ? null : current);
-    }
-  };
+  const chatSurfaceController = createChatSurfaceController({
+    stopStreaming: () => stopChatStreaming({
+      abortControllerRef,
+      setIsLoading,
+      setHistory
+    }),
+    executeSendFlow: customText => executeChatSendFlow({
+      customText,
+      input,
+      selectedImages,
+      isLoading,
+      history,
+      projectId,
+      projectIdRef,
+      selectedModel,
+      mode,
+      projectContextSummary,
+      projectSummaryCursor,
+      onUpdateProjectContext,
+      handleToolCallWithRetry,
+      useSearch,
+      params,
+      agentContextAssets,
+      abortControllerRef,
+      thinkingTextRef,
+      searchProgressRef,
+      setHistory,
+      setInput,
+      setSelectedImages: images => setSelectedImages(images),
+      setIsLoading,
+      setThinkingText,
+      setSearchProgress,
+      setSearchIsCollapsed,
+      clearInputHeight: () => {
+        if (inputRef.current) inputRef.current.style.height = 'auto';
+      },
+      clearContextAssets: onClearContextAssets,
+      clearThoughtImages: setThoughtImages ? () => setThoughtImages([]) : undefined,
+      appendThoughtImage: setThoughtImages ? imageData => {
+        setThoughtImages(prev => [...prev, {
+          id: crypto.randomUUID(),
+          ...imageData,
+          timestamp: Date.now()
+        }]);
+      } : undefined
+    }),
+    dismissActionCard: toolCall => dismissChatActionCard({
+      toolCall,
+      history,
+      setHistory,
+      setDismissedActionCardIds,
+      onKeepCurrentAction
+    }),
+    applyActionCard: toolCall => applyChatActionCard({
+      toolCall,
+      language,
+      setHistory,
+      setDismissedActionCardIds,
+      setApplyingActionCardId,
+      handleToolCallWithRetry
+    })
+  });
+  const handleKeyDown = (e: React.KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); chatSurfaceController.handleSend(); } };
 
   return (
     <div
@@ -723,8 +550,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                   toolCallExpanded={shouldShowActiveToolCall ? toolCallExpanded : undefined}
                   onToolCallToggle={shouldShowActiveToolCall ? () => setToolCallExpanded(!toolCallExpanded) : undefined}
                   dismissedActionCardIds={dismissedActionCardIds}
-                  onApplyActionCard={handleApplyActionCard}
-                  onDismissActionCard={handleDismissActionCard}
+                  onApplyActionCard={chatSurfaceController.handleApplyActionCard}
+                  onDismissActionCard={chatSurfaceController.handleDismissActionCard}
                   isApplyingAction={applyingActionCardId === (feedbackActionCardSource || msg).toolCalls?.find(record => record.result?.status === 'requires_action')?.id}
                 />
               );
@@ -897,7 +724,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     </div>
                   )}
                 </div>
-                {isLoading ? (<button onClick={handleStop} className="p-2.5 bg-red-500/20 hover:bg-red-500/30 border border-red-500 text-red-400 rounded-xl shadow-lg transition-all" title={t('chat.stop')}><Square size={18} fill="currentColor" /></button>) : (<button onClick={() => handleSend()} disabled={(!input.trim() && selectedImages.length === 0)} className="p-2.5 bg-brand-600 hover:bg-brand-500 text-white rounded-xl shadow-lg disabled:opacity-50 disabled:cursor-not-allowed transition-all"><Send size={18} /></button>)}
+                {isLoading ? (<button onClick={chatSurfaceController.handleStop} className="p-2.5 bg-red-500/20 hover:bg-red-500/30 border border-red-500 text-red-400 rounded-xl shadow-lg transition-all" title={t('chat.stop')}><Square size={18} fill="currentColor" /></button>) : (<button onClick={() => chatSurfaceController.handleSend()} disabled={(!input.trim() && selectedImages.length === 0)} className="p-2.5 bg-brand-600 hover:bg-brand-500 text-white rounded-xl shadow-lg disabled:opacity-50 disabled:cursor-not-allowed transition-all"><Send size={18} /></button>)}
               </div>
             </div>
           </div>

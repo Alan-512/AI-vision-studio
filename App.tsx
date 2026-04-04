@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { Image as ImageIcon, Video, LayoutGrid, Folder, Sparkles, Settings, Star, CheckSquare, MoveHorizontal, Languages, Trash2, Recycle, Download, RotateCcw, ArrowRight, Key, X } from 'lucide-react';
-import { AppMode, AspectRatio, GenerationParams, AssetItem, ImageResolution, VideoResolution, ImageModel, VideoModel, ImageStyle, Project, ChatMessage, BackgroundTask, SmartAsset, VideoDuration, VideoStyle, AgentAction, EditRegion, SearchPolicy, AssistantMode, SmartAssetRole, ThinkingLevel, AgentJob, AgentJobStatus, JobStep, JobArtifact, AgentToolResult, ToolCallRecord, ConsistencyProfile, TaskViewIntent } from './types';
+import { AppMode, AspectRatio, GenerationParams, AssetItem, ImageResolution, VideoResolution, ImageModel, VideoModel, ImageStyle, Project, ChatMessage, BackgroundTask, SmartAsset, VideoDuration, VideoStyle, AgentAction, EditRegion, SearchPolicy, AssistantMode, SmartAssetRole, ThinkingLevel, AgentJob, AgentJobStatus, JobStep, JobArtifact, AgentToolResult, ToolCallRecord, ConsistencyProfile } from './types';
 import { GenerationForm } from './components/GenerationForm';
 import { AssetCard } from './components/AssetCard';
 import { ProjectSidebar } from './components/ProjectSidebar';
@@ -30,6 +30,11 @@ import { executeAutoRevisionFlow } from './services/generationAutoRevisionRuntim
 import { resolveGenerationFailure } from './services/generationFailureRuntime';
 import { executeAutoRevisionReview, executePrimaryReview } from './services/generationReviewRuntime';
 import { resolveAutoRevision, resolvePrimaryReview } from './services/generationResolutionRuntime';
+import { createAppGenerationTaskFlowDepsBuilder } from './services/appGenerationTaskFlowDepsRuntime';
+import { prepareAppGenerationRequest } from './services/appGenerationPreflightRuntime';
+import { executeAppGenerationRequest } from './services/appGenerationRequestRuntime';
+import { executeAppGenerationFlow } from './services/appGenerationRuntime';
+import { createAppTaskViewController } from './services/appTaskViewRuntime';
 import { buildDefaultRefinePromptRequiresAction, buildEditPrompt, normalizeGenerationParamsForExecution, prepareGenerationLaunch } from './services/generationOrchestrator';
 import { resolveAgentJobKeepCurrent, resolveToolCallRecordStatus } from './services/requiresActionRuntime';
 import {
@@ -1160,89 +1165,139 @@ export function App() {
         if (audioCtx && audioCtx.state === 'suspended') {
             audioCtx.resume().catch(console.warn);
         }
+        const preflight = await prepareAppGenerationRequest({
+            fullParams,
+            useParamsAsBase,
+            params,
+            mode: modeOverride || mode,
+            activeProjectId,
+            projects,
+            historyOverride,
+            videoCooldownEndTime,
+            getUserApiKey,
+            sanitizeImageModel,
+            setThoughtImages,
+            addToast,
+            setShowSettings,
+            generateTitle,
+            setProjects,
+            saveProject,
+            jobSource,
+            resolveNewProjectLabel: () => t('nav.new_project')
+        });
+        if (!preflight) return [];
 
-        if (Date.now() < videoCooldownEndTime) {
-            addToast('error', 'System Cooled Down', 'Please wait for the timer to finish before generating again.');
-            return [];
-        }
-        const userKey = getUserApiKey();
-        // FIX: Use import.meta.env for Vite, or just check userKey directly
-        if (!userKey) { setShowSettings(true); return []; }
-
-        // Clear previous thought images for new generation (ensures isolation)
-        setThoughtImages([]);
-
-        // CLEAN ISOLATION: Only merge with params if explicitly requested (params config page)
-        let activeParams = useParamsAsBase ? { ...params, ...fullParams } : fullParams;
-        activeParams.imageModel = sanitizeImageModel(activeParams.imageModel);
+        const {
+            userKey,
+            activeParams,
+            currentProjectId,
+            currentMode,
+            resolvedJobSource,
+            triggerMessageTimestamp
+        } = preflight;
 
         // DEBUG: Trace smartAssets at entry point
         console.log('[handleGenerate] ENTRY - smartAssets:', {
             fromFullParams: fullParams.smartAssets?.length || 0,
             fromActiveParams: activeParams.smartAssets?.length || 0
         });
-        const currentProjectId = activeProjectId;
-        const currentMode = modeOverride || mode;
-        const resolvedJobSource: AgentJob['source'] = jobSource || (historyOverride ? 'chat' : 'studio');
-        const triggerMessageTimestamp = historyOverride
-            ? [...historyOverride].reverse().find(message => message.role === 'user')?.timestamp
-            : undefined;
-        const project = projects.find(p => p.id === currentProjectId);
-        if (project && (project.name === 'New Project' || project.name === t('nav.new_project')) && activeParams.prompt) {
-            generateTitle(activeParams.prompt).then(name => {
-                setProjects(prev => prev.map(p => p.id === currentProjectId ? { ...p, name } : p));
-                saveProject({ ...project, name }).catch(console.error);
-            });
-        }
 
-        const launchPreparedTask = createGenerationTaskLaunchController({
-            persistenceDeps: {
-                taskViewsRef: tasksRef,
-                setTaskViews: setTasks,
-                saveTaskView: saveTask,
-                deleteTaskView: deleteTask,
-                activeProjectIdRef,
-                setAssets,
-                saveAsset,
-                updateAsset,
-                deleteAssetPermanently: permanentlyDeleteAssetFromDB,
-                saveAgentJobSnapshot: saveAgentJob,
-                onPreview,
-                onSuccess
-            },
-            launcherDeps: {
-                loadExistingJob: async (projectId, maybeResumeJobId) => maybeResumeJobId
-                    ? (await loadAgentJobsByProject(projectId)).find(job => job.id === maybeResumeJobId)
-                    : undefined,
-                getPreviousTaskIds: jobId => tasks.filter(task => task.jobId === jobId).map(task => task.id),
-                createAbortController: () => new AbortController(),
-                registerController: (taskId, controller) => {
-                    taskControllers.current[taskId] = controller;
+        const projectName = projects.find(p => p.id === currentProjectId)?.name || 'Project';
+        const isEditMode = currentMode === AppMode.IMAGE && !!activeParams.editBaseImage && !!activeParams.editMask;
+        const historyForGeneration = !isEditMode && currentMode === AppMode.IMAGE ? historyOverride : undefined;
+        const createTaskFlowDepsBuilder = () => createAppGenerationTaskFlowDepsBuilder({
+                currentMode,
+                activeParams,
+                normalizeGenerationParamsForExecution,
+                translateTag: tagKey => t(tagKey as any) || tagKey,
+                executeGenerationAttempt,
+                executePrimaryReview,
+                executeAutoRevisionFlow,
+                resolvePrimaryReview,
+                resolveGenerationFailure,
+                generateImageImpl: (params, projectId, onStartCb, signal, taskIdArg, historyArg, onThoughtImage) => generateImage(
+                    params,
+                    projectId,
+                    onStartCb,
+                    signal,
+                    taskIdArg,
+                    historyArg,
+                    (imageData) => {
+                        setThoughtImages(prev => [...prev, {
+                            id: crypto.randomUUID(),
+                            ...imageData,
+                            timestamp: Date.now()
+                        }]);
+                        onThoughtImage?.(imageData);
+                    }
+                ),
+                generateVideoImpl: (params, onUpdate, onStartCb, signal) => generateVideo(params, onUpdate, onStartCb, signal),
+                normalizeAssistantMode,
+                buildImageCriticContext: ({
+                    assistantMode,
+                    negativePrompt,
+                    selectedReferences,
+                    consistencyProfile,
+                    searchContext
+                }) => buildImageCriticContext({
+                    assistantMode: normalizeAssistantMode(assistantMode),
+                    negativePrompt,
+                    selectedReferences: selectedReferences as SelectedReferenceRecord[],
+                    consistencyProfile,
+                    searchContext
+                }),
+                reviewGeneratedAsset,
+                buildDefaultRefinePromptRequiresAction,
+                toolCall,
+                historyOverride,
+                chatHistory,
+                userKey,
+                runMemoryExtractionTask,
+                addToast,
+                handleUseAsReference,
+                playSuccessSound,
+                playErrorSound,
+                setVideoCooldownEndTime,
+                getFriendlyError,
+                language
+            });
+
+        return executeAppGenerationFlow({
+            launchControllerInput: {
+                persistenceDeps: {
+                    taskViewsRef: tasksRef,
+                    setTaskViews: setTasks,
+                    saveTaskView: saveTask,
+                    deleteTaskView: deleteTask,
+                    activeProjectIdRef,
+                    setAssets,
+                    saveAsset,
+                    updateAsset,
+                    deleteAssetPermanently: permanentlyDeleteAssetFromDB,
+                    saveAgentJobSnapshot: saveAgentJob,
+                    onPreview,
+                    onSuccess
                 },
-                unregisterController: taskId => {
-                    delete taskControllers.current[taskId];
+                launcherDeps: {
+                    loadExistingJob: async (projectId, maybeResumeJobId) => maybeResumeJobId
+                        ? (await loadAgentJobsByProject(projectId)).find(job => job.id === maybeResumeJobId)
+                        : undefined,
+                    getPreviousTaskIds: (jobId: string) => tasks.filter(task => task.jobId === jobId).map(task => task.id),
+                    createAbortController: () => new AbortController(),
+                    registerController: (taskId: string, controller: AbortController) => {
+                        taskControllers.current[taskId] = controller;
+                    },
+                    unregisterController: (taskId: string) => {
+                        delete taskControllers.current[taskId];
+                    }
+                },
+                runtimeDeps: {
+                    now: () => Date.now(),
+                    createId: () => crypto.randomUUID()
                 }
             },
-            runtimeDeps: {
-                now: () => Date.now(),
-                createId: () => crypto.randomUUID()
-            }
-        });
-
-        const launchTask = async (_index: number): Promise<AgentToolResult> => {
-            const projectName = projects.find(p => p.id === currentProjectId)?.name || 'Project';
-            const latestVisibleAssetRef = { current: null as AssetItem | null };
-            const taskMarkedVisibleCompleteRef = { current: false };
-            let successSoundPlayed = false;
-            const playVisibleSuccess = () => {
-                if (successSoundPlayed) return;
-                successSoundPlayed = true;
-                playSuccessSound();
-            };
-            const isEditMode = currentMode === AppMode.IMAGE && !!activeParams.editBaseImage && !!activeParams.editMask;
-            const historyForGeneration = !isEditMode && currentMode === AppMode.IMAGE ? historyOverride : undefined;
-
-            return launchPreparedTask({
+            requestInput: {
+                count: activeParams.numberOfImages || 1,
                 currentProjectId,
                 currentMode,
                 activeParams,
@@ -1254,247 +1309,19 @@ export function App() {
                 resumeActionType,
                 toolCall,
                 historyForGeneration,
+                projectName,
                 createSessionInput: {
-                    projectName,
                     createResumeActionStep,
                     buildConsistencyProfile,
                     normalizeAssistantMode,
                     prepareGenerationLaunch
                 },
-                buildTaskRuntimeDeps: ({
-                    taskRuntime,
-                    getAgentJob,
-                    stepId,
-                    taskId,
-                    jobId,
-                    currentProjectId,
-                    activeParams,
-                    initialPendingAsset,
-                    signal,
-                    selectedReferenceRecords,
-                    historyForGeneration
-                }: any) => ({
-                    stagePendingAsset: (asset: AssetItem) => taskRuntime.stagePendingAsset(asset),
-                    normalizeGenerationParams: () => normalizeGenerationParamsForExecution(
-                        { ...activeParams },
-                        currentMode,
-                        tagKey => t(tagKey as any) || tagKey
-                    ),
-                    executeGenerationAttempt: ({ genParams, historyForGeneration }: any) => executeGenerationAttempt({
-                        mode: currentMode,
-                        agentJob: getAgentJob(),
-                        stepId,
-                        taskId,
-                        jobId,
-                        currentProjectId,
-                        genParams,
-                        initialPendingAsset,
-                        signal,
-                        taskRuntime: {
-                            stageRunningJob: (runtimeInput: any) => taskRuntime.stageRunningJob(runtimeInput),
-                            completeVisibleImage: (runtimeInput: any) => taskRuntime.completeVisibleImage(runtimeInput),
-                            updateOperation: (runtimeInput: any) => taskRuntime.updateOperation(runtimeInput),
-                            completeVideo: (runtimeInput: any) => taskRuntime.completeVideo(runtimeInput)
-                        },
-                        generateImageImpl: (params, projectId, onStartCb, signal, taskIdArg, historyArg, onThoughtImage) => generateImage(
-                            params,
-                            projectId,
-                            onStartCb,
-                            signal,
-                            taskIdArg,
-                            historyArg,
-                            (imageData) => {
-                                setThoughtImages(prev => [...prev, {
-                                    id: crypto.randomUUID(),
-                                    ...imageData,
-                                    timestamp: Date.now()
-                                }]);
-                                onThoughtImage?.(imageData);
-                            }
-                        ),
-                        generateVideoImpl: (params, onUpdate, onStartCb, signal) => generateVideo(params, onUpdate, onStartCb, signal),
-                        historyForGeneration
-                    }),
-                    afterVisibleImage: async ({ asset }: any) => {
-                        latestVisibleAssetRef.current = asset;
-                        if (signal.aborted) throw new Error('Cancelled');
-                        playVisibleSuccess();
-                        if (!taskMarkedVisibleCompleteRef.current) {
-                            taskMarkedVisibleCompleteRef.current = true;
-                            await taskRuntime.markTaskVisibleComplete(getAgentJob());
-                        }
-                    },
-                    executePrimaryReview: ({ asset, genParams, toolResult }: any) => executePrimaryReview({
-                        job: getAgentJob(),
-                        asset,
-                        generationStepId: stepId,
-                        toolResult,
-                        prompt: genParams.prompt,
-                        genParams,
-                        selectedReferences: selectedReferenceRecords,
-                        assistantMode: normalizeAssistantMode((genParams as any).assistant_mode),
-                        taskRuntime: {
-                            startReview: (job: AgentJob, shouldSyncTaskView: boolean) => taskRuntime.startReview(job, shouldSyncTaskView)
-                        },
-                        buildCriticContext: ({
-                            assistantMode,
-                            negativePrompt,
-                            selectedReferences,
-                            consistencyProfile,
-                            searchContext
-                        }) => buildImageCriticContext({
-                            assistantMode: normalizeAssistantMode(assistantMode),
-                            negativePrompt,
-                            selectedReferences: selectedReferences as SelectedReferenceRecord[],
-                            consistencyProfile,
-                            searchContext
-                        }),
-                        reviewAsset: (reviewAssetTarget: AssetItem, reviewPrompt: string, criticContext: string) => reviewGeneratedAsset(reviewAssetTarget, reviewPrompt, criticContext)
-                    }),
-                    executeAutoRevisionFlow: ({ review, genParams, toolResult, generatedArtifact, reviewArtifact, finalizedReviewStep, selectedReferenceRecords }: any) => executeAutoRevisionFlow({
-                        job: getAgentJob(),
-                        review,
-                        currentMode,
-                        originalPrompt: genParams.prompt,
-                        genParams,
-                        toolCall,
-                        finalizedReviewStep,
-                        reviewArtifact,
-                        currentProjectId,
-                        signal,
-                        taskId,
-                        jobId,
-                        toolResult,
-                        selectedReferences: selectedReferenceRecords,
-                        historyForGeneration,
-                        continuousMode: activeParams.continuousMode,
-                        taskRuntime: {
-                            startAutoRevision: (jobs: AgentJob[]) => taskRuntime.startAutoRevision(jobs)
-                        },
-                        generatedArtifact,
-                        deps: {
-                            executeAttempt: (runtimeInput: any) => executeAutoRevisionAttempt({
-                                ...runtimeInput,
-                                taskRuntime: {
-                                    publishAssetAndPersistJob: (nestedInput: any) => taskRuntime.publishAssetAndPersistJob(nestedInput)
-                                },
-                                generateImageImpl: (params, projectId, onStartCb, signal, taskIdArg, historyArg, onThoughtImage) => generateImage(
-                                    params,
-                                    projectId,
-                                    onStartCb,
-                                    signal,
-                                    taskIdArg,
-                                    historyArg,
-                                    (imageData) => {
-                                        setThoughtImages(prev => [...prev, {
-                                            id: crypto.randomUUID(),
-                                            ...imageData,
-                                            timestamp: Date.now()
-                                        }]);
-                                        onThoughtImage?.(imageData);
-                                    }
-                                )
-                            }),
-                            executeReview: (runtimeInput: any) => executeAutoRevisionReview({
-                                ...runtimeInput,
-                                taskRuntime: {
-                                    buildCriticContext: ({
-                                        assistantMode,
-                                        negativePrompt,
-                                        selectedReferences,
-                                        consistencyProfile,
-                                        searchContext
-                                    }) => buildImageCriticContext({
-                                        assistantMode: normalizeAssistantMode(assistantMode),
-                                        negativePrompt,
-                                        selectedReferences: selectedReferences as SelectedReferenceRecord[],
-                                        consistencyProfile,
-                                        searchContext
-                                    }),
-                                    reviewAsset: (reviewAssetTarget: AssetItem, reviewPrompt: string, criticContext: string) => reviewGeneratedAsset(reviewAssetTarget, reviewPrompt, criticContext),
-                                    buildDefaultRequiresAction: ({ prompt, latestAssetId, review }: any) => buildDefaultRefinePromptRequiresAction({
-                                        prompt,
-                                        latestAssetId,
-                                        review
-                                    })
-                                }
-                            }),
-                            resolveAutoRevision: (runtimeInput: any) => resolveAutoRevision({
-                                ...runtimeInput,
-                                deps: {
-                                    resolveAutoRevision: (job: AgentJob, shouldSyncTaskView: boolean) => taskRuntime.resolveAutoRevision(job, shouldSyncTaskView),
-                                    addToast,
-                                    runMemoryExtraction: () => runMemoryExtractionTask(currentProjectId, historyOverride || chatHistory, userKey).catch(err => {
-                                        console.error('[App] Background memory extraction failed:', err);
-                                    }),
-                                    playSuccessSound,
-                                    useAsReference: handleUseAsReference
-                                },
-                                now: () => Date.now()
-                            }),
-                            playVisibleSuccess: () => {
-                                playVisibleSuccess();
-                            },
-                            onVisibleAsset: (asset: AssetItem) => {
-                                latestVisibleAssetRef.current = asset;
-                            },
-                            normalizeAssistantMode,
-                            now: () => Date.now()
-                        },
-                    }),
-                    resolvePrimaryReview: ({ review, genParams, reviewedToolResult, generatedArtifact, reviewArtifact, finalizedReviewStep, asset }: any) => resolvePrimaryReview({
-                        mode: currentMode,
-                        job: getAgentJob(),
-                        finalizedReviewStep,
-                        generatedArtifact,
-                        reviewArtifact,
-                        review,
-                        prompt: genParams.prompt,
-                        reviewedToolResult,
-                        continuousMode: activeParams.continuousMode,
-                        asset,
-                        deps: {
-                            resolvePrimaryReview: (job: AgentJob, shouldSyncTaskView: boolean) => taskRuntime.resolvePrimaryReview(job, shouldSyncTaskView),
-                            addToast,
-                            runMemoryExtraction: () => runMemoryExtractionTask(currentProjectId, historyOverride || chatHistory, userKey).catch(err => {
-                                console.error('[App] Background memory extraction failed:', err);
-                            }),
-                            playSuccessSound,
-                            useAsReference: handleUseAsReference
-                        },
-                        now: () => Date.now()
-                    }),
-                    resolveGenerationFailure: ({ error, latestVisibleAsset, taskMarkedVisibleComplete }: any) => resolveGenerationFailure({
-                        mode: currentMode,
-                        agentJob: getAgentJob(),
-                        stepId,
-                        taskId,
-                        latestVisibleAsset,
-                        taskMarkedVisibleComplete,
-                        error,
-                        deps: {
-                            taskRuntime: {
-                                cancel: (job: AgentJob, id: string) => taskRuntime.cancel(job, id),
-                                recoverVisibleAsset: (runtimeInput: any) => taskRuntime.recoverVisibleAsset(runtimeInput),
-                                fail: (job: AgentJob) => taskRuntime.fail(job)
-                            },
-                            addToast,
-                            playErrorSound,
-                            setCooldown: setVideoCooldownEndTime,
-                            getFriendlyError,
-                            language,
-                            now: () => Date.now()
-                        }
-                    })
-                })
-            });
-        };
-        const count = activeParams.numberOfImages || 1;
-        const tasksToLaunch = [];
-        for (let i = 0; i < count; i++) {
-            tasksToLaunch.push(launchTask(i));
-        }
-        return Promise.all(tasksToLaunch);
+                createTaskFlowDepsBuilder,
+                playSuccessSound
+            },
+            createGenerationTaskLaunchController,
+            executeAppGenerationRequest
+        });
     };
 
     // Wrapper for Params Config page - merges with params state (backward compatible)
@@ -1504,31 +1331,14 @@ export function App() {
         });
     };
 
-    const handleCancelTask = (taskId: string) => {
-        taskViewDismissal.dismissById(taskId).catch(console.error);
-        if (taskControllers.current[taskId]) {
-            taskControllers.current[taskId].abort();
-            permanentlyDeleteAssetFromDB(taskId).catch(console.error);
-            if (activeProjectIdRef.current === activeProjectId) setAssets(prev => prev.filter(a => a.id !== taskId));
-        }
-    };
-
-    const handleDismissTaskView = (taskId: string) => {
-        taskViewDismissal.dismissById(taskId).catch(console.error);
-    };
-
-    const handleTaskViewIntent = (intent: TaskViewIntent) => {
-        if (intent.type === 'cancel_job') {
-            handleCancelTask(intent.taskId);
-            return;
-        }
-
-        handleDismissTaskView(intent.taskId);
-    };
-
-    const handleClearCompletedTasks = () => {
-        taskViewDismissal.clearDismissable().catch(console.error);
-    };
+    const appTaskViewController = createAppTaskViewController({
+        taskViewDismissal,
+        taskControllers,
+        deleteAssetPermanently: permanentlyDeleteAssetFromDB,
+        activeProjectIdRef,
+        getActiveProjectId: () => activeProjectId,
+        setAssets
+    });
     const openConfirmDeleteProject = (projectId: string) => {
         const project = projects.find(p => p.id === projectId);
         setConfirmDialog({
@@ -1909,7 +1719,7 @@ export function App() {
                 </div>
             </div>
 
-            <TaskCenter tasks={tasks} onTaskIntent={handleTaskViewIntent} onClearCompleted={handleClearCompletedTasks} />
+            <TaskCenter tasks={tasks} onTaskIntent={appTaskViewController.handleTaskViewIntent} onClearCompleted={appTaskViewController.clearCompletedTasks} />
             <SettingsDialog isOpen={showSettings} onClose={() => setShowSettings(false)} onApiKeyChange={() => setVeoVerified(!!getUserApiKey())} projectId={activeProjectId} />
             <ConfirmDialog isOpen={confirmDialog.isOpen} title={confirmDialog.title} message={confirmDialog.message} onConfirm={confirmDialog.action} onCancel={() => setConfirmDialog(prev => ({ ...prev, isOpen: false }))} confirmLabel={confirmDialog.confirmLabel} cancelLabel={confirmDialog.cancelLabel} isDestructive={confirmDialog.isDestructive} />
             {comparisonAssets && <ComparisonView assetA={comparisonAssets[0]} assetB={comparisonAssets[1]} onClose={() => setComparisonAssets(null)} />}
