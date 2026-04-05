@@ -1,5 +1,10 @@
 import type { AgentAction, JobTransitionResult } from '../types';
 
+// Kernel contracts define the split write model:
+// - TurnRuntimeState: ephemeral truth for the active turn
+// - AgentJob: durable truth for recoverable work
+// Projection-only intents such as dismissing task cards stay out of KernelCommand.
+
 export type ToolClass = 'interactive_tool' | 'job_tool' | 'kernel_step';
 
 export type KernelErrorType =

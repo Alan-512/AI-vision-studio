@@ -59,6 +59,10 @@ import { runMemoryExtractionTask } from './services/memoryExtractor';
 import { runConsolidation } from './services/memoryConsolidator';
 import { useLanguage } from './contexts/LanguageContext';
 
+// Surface/composition root only.
+// App wires kernel commands, runtimes, and projections together, but should avoid
+// owning durable lifecycle semantics directly.
+
 const DEFAULT_PARAMS: GenerationParams = {
     prompt: '',
     savedImagePrompt: '',

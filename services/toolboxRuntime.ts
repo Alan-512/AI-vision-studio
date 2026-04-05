@@ -2,6 +2,10 @@ import type { AgentAction } from '../types';
 import type { ToolClass, TurnRuntimeState } from './agentKernelTypes';
 import { evaluateToolPermission, type ToolPermissionPolicy } from './toolPermissionRuntime';
 
+// Toolbox is the capability boundary.
+// It classifies tools, validates arguments, enforces permission policy, and normalizes results.
+// It must not become a second lifecycle owner; turn/job semantics stay in the kernel.
+
 type ToolExecutionOutput = {
   status: 'success' | 'error' | 'requires_action';
   content?: Record<string, unknown>;

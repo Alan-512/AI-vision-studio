@@ -5,6 +5,9 @@ import type {
   TaskViewIntent
 } from '../types';
 
+// BackgroundTaskView is a read model derived from AgentJob.
+// It exists for UX and persistence convenience, not as an execution source of truth.
+
 const ACTIVE_TASK_VIEW_STATUSES: TaskStatus[] = ['QUEUED', 'GENERATING', 'REVIEWING'];
 const DISMISSABLE_TASK_VIEW_STATUSES: TaskStatus[] = ['COMPLETED', 'FAILED', 'ACTION_REQUIRED'];
 

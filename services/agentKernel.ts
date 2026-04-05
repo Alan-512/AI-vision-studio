@@ -21,6 +21,11 @@ import {
 } from './turnRuntimeState';
 import { buildQueuedJobEvents } from './jobCommandEventRuntime';
 
+// Unified execution owner.
+// The kernel decides what a command means in system terms:
+// complete the current turn, reinject tool results, or promote work into a durable AgentJob.
+// It should not own UI projection concerns or provider-specific execution details.
+
 type PlannerResponse =
   | {
       type: 'final_response';

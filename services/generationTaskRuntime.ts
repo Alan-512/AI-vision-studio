@@ -12,6 +12,10 @@ import {
 } from './jobCommandEventRuntime';
 import { createTaskViewProjectionController } from './taskProjectionPersistence';
 
+// Durable generation transition runtime.
+// This layer persists AgentJob snapshots and syncs derived task/asset projections,
+// but it should not reintroduce page-level orchestration or UI-only behavior.
+
 export const createGenerationTaskRuntimeController = ({
   jobRuntime,
   taskRuntime,

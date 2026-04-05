@@ -13,6 +13,10 @@ import { useLanguage } from '../contexts/LanguageContext';
 import ReactMarkdown from 'react-markdown';
 import rehypeSanitize from 'rehype-sanitize';
 
+// Chat surface adapter.
+// This component owns transient UI state and delegates execution semantics to
+// chat runtimes plus the unified kernel contract.
+
 interface ChatInterfaceProps {
   history: ChatMessage[];
   setHistory: React.Dispatch<React.SetStateAction<ChatMessage[]>>;
