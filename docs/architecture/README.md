@@ -11,3 +11,5 @@ This folder contains long-form architecture notes and product workflow documents
 - `playbook-agent-mode.md`: earlier playbook strategy for chat image generation
 
 Authoritative implementation plans for current and future changes live under `/openspec`.
+
+Local-only working notes, execution plans, and internal regression guides live under `/docs/internal` and are ignored by git except for the folder README.

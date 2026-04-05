@@ -42,5 +42,4 @@ This release upgrades the image agent from a simple chat-triggered generator to 
 ## QA
 
 - Regression checklist for action-card behavior is documented in:
-  - [docs/qa/image-agent-card-regression.md](/mnt/d/project/ai-vision-studio/docs/qa/image-agent-card-regression.md)
-
+  - the local-only internal docs folder at `docs/internal/qa/image-agent-card-regression.md`
