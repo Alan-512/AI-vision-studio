@@ -93,7 +93,11 @@ export const resolveGenerationFailure = async ({
     };
   }
 
-  const retryable = errorText.includes('429') || errorText.includes('Quota') || errorText.includes('RESOURCE_EXHAUSTED');
+  const retryable = errorText.includes('429')
+    || errorText.includes('Quota')
+    || errorText.includes('RESOURCE_EXHAUSTED')
+    || errorText.includes('503')
+    || errorText.includes('UNAVAILABLE');
   const { failedJob, toolResult } = prepareFailedGeneration({
     job: agentJob,
     stepId,

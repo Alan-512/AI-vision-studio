@@ -10,6 +10,21 @@ import {
   type GenerationParams
 } from '../types';
 
+const ATTACHED_IMAGE_ID_PATTERN = /^\s*\[Attached Image ID: .+?\]\s*$/;
+
+const stripInlineImagesFromHistoryContents = (contents: Content[]): Content[] => contents.map(content => ({
+  ...content,
+  parts: (content.parts || []).filter(part => {
+    if ((part as any)?.inlineData) return false;
+    if (typeof (part as any)?.text === 'string' && ATTACHED_IMAGE_ID_PATTERN.test((part as any).text.trim())) {
+      return false;
+    }
+    return true;
+  })
+}));
+
+const SINGLE_FRAME_SEQUENCE_GUARDRAIL = 'Render exactly one standalone frame. Do not create a collage, grid, split-screen, diptych, triptych, storyboard, contact sheet, or multiple panels. Show a single continuous camera shot only.';
+
 export const generateImageWithModel = async ({
   ai,
   params,
@@ -54,9 +69,12 @@ export const generateImageWithModel = async ({
     aspectRatio: params.aspectRatio
   });
 
-  const historyContents = history && history.length > 0
+  const rawHistoryContents = history && history.length > 0
     ? convertHistoryToNativeFormat(history, params.imageModel)
     : [];
+  const historyContents = (params.smartAssets?.length || 0) > 0
+    ? stripInlineImagesFromHistoryContents(rawHistoryContents)
+    : rawHistoryContents;
 
   const historyImagePrefixes = new Set<string>();
   let historyImageCount = 0;
@@ -114,7 +132,16 @@ export const generateImageWithModel = async ({
   if (params.imageStyle && params.imageStyle !== 'None') {
     mainPrompt = `[Style: ${params.imageStyle}] ${mainPrompt}`;
   }
+  if (((params.numberOfImages || 1) > 1 || (params.sequenceFramePrompts?.length || 0) > 1) && !mainPrompt.includes(SINGLE_FRAME_SEQUENCE_GUARDRAIL)) {
+    mainPrompt += `\n${SINGLE_FRAME_SEQUENCE_GUARDRAIL}`;
+  }
   if (params.negativePrompt) mainPrompt += `\nAvoid: ${params.negativePrompt}`;
+  console.log('[generateImage] Final main prompt preview:', {
+    promptPreview: mainPrompt.slice(0, 600),
+    promptLength: mainPrompt.length,
+    sequenceFramePromptsCount: params.sequenceFramePrompts?.length || 0,
+    numberOfImages: params.numberOfImages || 1
+  });
   parts.push({ text: mainPrompt });
 
   const contents: Content[] = [...historyContents, { role: 'user', parts }];

@@ -118,6 +118,30 @@ const dedupeStrings = (values: Array<string | undefined | null>, limit = 10): st
   return result;
 };
 
+const buildIssueSpecificPreserveHints = (issues: CriticIssue[]): string[] => {
+  const issueTypes = new Set(issues.map(issue => issue.type));
+  const hints: string[] = [];
+
+  if (issueTypes.has('text_artifact')) {
+    hints.push('same subject pose and body position');
+    hints.push('same camera framing and studio layout');
+  }
+
+  return hints;
+};
+
+const buildIssueSpecificFocusHints = (issues: CriticIssue[]): string[] => {
+  const issueTypes = new Set(issues.map(issue => issue.type));
+  const hints: string[] = [];
+
+  if (issueTypes.has('text_artifact')) {
+    hints.push('clean only corrupted text or logo glyphs that are visibly broken');
+    hints.push('Do not redesign the composition, move the subject, or restage the shot while cleaning text artifacts.');
+  }
+
+  return hints;
+};
+
 const ISSUE_PROMPT_HINTS: Record<CriticIssueType, string> = {
   subject_mismatch: 'Correct the main subject identity so it matches the user request more precisely.',
   brand_incorrect: 'Tighten brand, logo, or label accuracy while preserving the successful parts of the shot.',
@@ -329,6 +353,7 @@ export const buildRevisionPromptFromPlan = (
 ): string => {
   const preserve = dedupeStrings([
     ...plan.preserve,
+    ...buildIssueSpecificPreserveHints(issues),
     ...(context?.consistencyProfile?.preserveSignals || []),
     ...(context?.preferredContinuity || [])
   ]);
@@ -338,6 +363,7 @@ export const buildRevisionPromptFromPlan = (
     ...(context?.consistencyProfile?.hardConstraints || [])
   ]);
   const issueHints = dedupeStrings(issues.map(issue => ISSUE_PROMPT_HINTS[issue.type]));
+  const issueSpecificHints = dedupeStrings(buildIssueSpecificFocusHints(issues));
   const issueEvidence = dedupeStrings(issues.flatMap(issue => issue.evidence || []), 6);
   const revisionStrength = plan.revisionStrength || inferRevisionStrength(
     selectPrimaryIssue(issues),
@@ -356,6 +382,7 @@ export const buildRevisionPromptFromPlan = (
   preserve.forEach(item => lines.push(`- Keep: ${item}`));
   plan.adjust.forEach(item => lines.push(`- Improve: ${item}`));
   issueHints.forEach(item => lines.push(`- Focus: ${item}`));
+  issueSpecificHints.forEach(item => lines.push(`- Focus: ${item}`));
   issueEvidence.forEach(item => lines.push(`- Evidence: ${item}`));
   hardConstraints.forEach(item => lines.push(`- Constraint: ${item}`));
 

@@ -825,7 +825,9 @@ const ChatBubble: React.FC<ChatBubbleProps> = ({
     && hasToolCallRecords;
 
   const MarkdownComponents = {
-    p: ({ children }: any) => <p className="mb-2 last:mb-0 break-words whitespace-pre-wrap">{children}</p>,
+    // Use a block container instead of <p> because markdown content here can contain
+    // custom block renderers such as code cards and responsive tables.
+    p: ({ children }: any) => <div className="mb-2 last:mb-0 break-words whitespace-pre-wrap">{children}</div>,
     ul: ({ children }: any) => <ul className="list-disc ml-4 mb-2 space-y-1">{children}</ul>,
     ol: ({ children }: any) => <ol className="list-decimal ml-4 mb-2 space-y-1">{children}</ol>,
     li: ({ children }: any) => <li>{children}</li>,

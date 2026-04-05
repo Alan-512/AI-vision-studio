@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AspectRatio, ImageModel, TextModel, VideoModel, type GenerationParams } from '../types';
 import { generateImageWithModel, generateVideoWithModel } from '../services/geminiMediaRuntime';
+import { convertHistoryToNativeFormat, getRoleInstruction, resolveSmartAssetRole } from '../services/chatContentRuntime';
 
 describe('geminiMediaRuntime', () => {
   afterEach(() => {
@@ -60,6 +61,72 @@ describe('geminiMediaRuntime', () => {
       { partIndex: 0, signature: 'draft-sig' },
       { partIndex: 1, signature: 'final-sig' }
     ]);
+  });
+
+  it('keeps explicit smart assets as reference parts even when the same image already exists in chat history', async () => {
+    const ai = {
+      models: {
+        generateContent: vi.fn().mockResolvedValue({
+          candidates: [{
+            finishReason: 'STOP',
+            content: {
+              parts: [
+                { inlineData: { data: 'final-data', mimeType: 'image/png' } }
+              ]
+            }
+          }]
+        })
+      }
+    } as any;
+
+    await generateImageWithModel({
+      ai,
+      params: {
+        prompt: 'extend this weather anchor image',
+        imageModel: ImageModel.FLASH_3_1,
+        aspectRatio: AspectRatio.LANDSCAPE,
+        imageResolution: '1K' as any,
+        useGrounding: false,
+        smartAssets: [{
+          id: 'asset-1',
+          mimeType: 'image/png',
+          data: 'same-image-data',
+          role: 'SUBJECT' as any
+        }]
+      } as GenerationParams,
+      projectId: 'project-1',
+      onStart: vi.fn(),
+      signal: new AbortController().signal,
+      id: 'asset-1',
+      history: [{
+        role: 'user',
+        content: 'Use this anchor as reference',
+        image: 'data:image/png;base64,same-image-data',
+        timestamp: 1
+      }] as any,
+      convertHistoryToNativeFormat,
+      buildGoogleSearchTools: vi.fn(),
+      getRoleInstruction,
+      resolveSmartAssetRole
+    });
+
+    const generateContentArgs = ai.models.generateContent.mock.calls[0][0];
+    const contents = generateContentArgs.contents as any[];
+    const historyParts = contents.slice(0, -1).flatMap(content => content.parts ?? []);
+    const requestParts = contents[contents.length - 1].parts;
+
+    expect(historyParts.some((part: any) => part.inlineData)).toBe(false);
+    expect(requestParts).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        inlineData: expect.objectContaining({
+          mimeType: 'image/png',
+          data: 'same-image-data'
+        })
+      }),
+      expect.objectContaining({
+        text: expect.stringMatching(/subject/i)
+      })
+    ]));
   });
 
   it('downloads the generated video and returns blob/video uris', async () => {

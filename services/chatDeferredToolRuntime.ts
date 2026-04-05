@@ -1,6 +1,7 @@
 import type { Content } from '@google/genai';
 import { buildPromptWithFacts, type StructuredFact } from './searchFactsRuntime';
 import { executeInternalToolCall, runInternalToolResultLoop, type DeferredToolCall } from './internalToolRuntime';
+import { annotateSeparateFrameToolCalls } from './sequencePlanningRuntime';
 
 export const executeDeferredChatToolCalls = async ({
   pendingToolCalls,
@@ -37,7 +38,7 @@ export const executeDeferredChatToolCalls = async ({
     return { fullText };
   }
 
-  const preparedToolCalls: DeferredToolCall[] = pendingToolCalls.map(pendingToolCall => {
+  const preparedToolCalls: DeferredToolCall[] = annotateSeparateFrameToolCalls(pendingToolCalls).map(pendingToolCall => {
     const rawArgs = pendingToolCall.args && typeof pendingToolCall.args === 'object'
       ? pendingToolCall.args as Record<string, any>
       : {};
@@ -82,7 +83,7 @@ export const executeDeferredChatToolCalls = async ({
   });
 
   if (internalLoopResult.externalToolCalls.length > 0 && onToolCall && !signal.aborted) {
-    for (const externalToolCall of internalLoopResult.externalToolCalls) {
+    for (const externalToolCall of annotateSeparateFrameToolCalls(internalLoopResult.externalToolCalls)) {
       onToolCall({ toolName: externalToolCall.toolName, args: externalToolCall.args });
     }
   }

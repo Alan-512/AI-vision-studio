@@ -509,4 +509,41 @@ describe('criticRuntime', () => {
 
         expect(normalized.decision).toBe('auto_revise');
     });
+
+    it('should keep text artifact auto-revisions narrowly scoped to text cleanup', () => {
+        const critic: StructuredCriticReview = {
+            decision: 'auto_revise',
+            summary: 'The frame is good, but the weather board text contains visible artifacts.',
+            issues: [
+                {
+                    type: 'text_artifact',
+                    severity: 'high',
+                    confidence: 'high',
+                    autoFixable: true,
+                    title: 'Weather board text artifact',
+                    detail: 'The forecast labels contain garbled glyphs.',
+                    fixScope: 'local',
+                    evidence: ['The day labels on the forecast board are distorted.']
+                }
+            ],
+            reviewPlan: {
+                summary: 'Keep the frame and clean only the corrupted forecast text.',
+                preserve: ['host identity', 'camera framing'],
+                adjust: ['forecast text legibility'],
+                confidence: 'high',
+                executionMode: 'auto',
+                issueTypes: ['text_artifact'],
+                localized: {}
+            }
+        };
+
+        const normalized = normalizeStructuredCriticReview('Weather anchor broadcast frame', critic);
+
+        expect(normalized.decision).toBe('auto_revise');
+        expect(normalized.revisedPrompt).toContain('clean only corrupted text');
+        expect(normalized.revisedPrompt).toContain('Keep: host identity');
+        expect(normalized.revisedPrompt).toContain('Keep: same subject pose and body position');
+        expect(normalized.revisedPrompt).toContain('Keep: same camera framing and studio layout');
+        expect(normalized.revisedPrompt).toContain('Do not redesign the composition');
+    });
 });

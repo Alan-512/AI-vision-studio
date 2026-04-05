@@ -36,6 +36,9 @@ If the user requests a sequence, storyboard, or set of distinct images (e.g., "g
 - You MUST emit MULTIPLE, SEPARATE generate_image function calls (one for each distinct image).
 - DO NOT combine different scenes into one prompt.
 - For subject consistency across the sequence, you MUST set reference_mode to "ALL_USER_UPLOADED" or "USER_UPLOADED_ONLY" in EVERY distinct function call if reference images are available.
+- For separate multi-image frame sequences, first decide each frame's position, movement beat, and screen focus, then write the prompt for THAT frame only.
+- If sequence_intent is "separate_frames", the prompt must describe only one frame's exact camera moment, not a storyboard or merged progression.
+- In separate frame mode, align the natural-language prompt with frame_index, frame_total, screen_focus, change_objective, and stable_constraints.
 
 === OPTIONAL (add only when relevant to the scene) ===
    If the image involves these aspects, include them. Otherwise, omit:
@@ -75,6 +78,32 @@ If the user requests a sequence, storyboard, or set of distinct images (e.g., "g
 - To use an image for style/subject, put its <id> here.
 - For pure text-to-image (no reference needed), leave empty.
 - When generating a sequence of consistent images, pass the SAME user uploaded image ID to every call.`
+      },
+      sequence_intent: {
+        type: Type.STRING,
+        description: 'Optional sequence mode. Use "separate_frames" only when this call is one frame in a multi-image sequence. Use "multi_panel_single_image" only when the user explicitly wants one image with multiple panels.',
+        enum: ['separate_frames', 'multi_panel_single_image']
+      },
+      frame_index: {
+        type: Type.NUMBER,
+        description: 'Optional zero-based frame index when sequence_intent is "separate_frames".'
+      },
+      frame_total: {
+        type: Type.NUMBER,
+        description: 'Optional total number of frames when sequence_intent is "separate_frames".'
+      },
+      screen_focus: {
+        type: Type.STRING,
+        description: 'Optional frame-level focus target for the weather board or scene area, such as "left-side forecast area" or "right-side forecast area".'
+      },
+      change_objective: {
+        type: Type.STRING,
+        description: 'Optional frame-level change objective describing what should change in this frame relative to neighboring frames, for example host movement, gesture beat, or body orientation.'
+      },
+      stable_constraints: {
+        type: Type.ARRAY,
+        items: { type: Type.STRING },
+        description: 'Optional constraints that must remain stable across the sequence, such as same host identity, same camera angle, or same studio layout.'
       },
       thinkingLevel: { type: Type.STRING, description: 'Thinking depth for Gemini 3.1 Flash Image. Options: "minimal" (speed), "high" (quality). Default: "minimal".', enum: Object.values(ThinkingLevel) }
     },

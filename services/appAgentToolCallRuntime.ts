@@ -15,6 +15,7 @@ import {
   type SmartAsset
 } from '../types';
 import { buildSequenceFramePrompts } from './toolboxRuntime';
+import { normalizeSequenceAwarePrompt } from './sequencePlanningRuntime';
 
 const defaultCreateToolCallKey = (action: AgentAction, rawArgs: unknown) =>
   `${action.toolName}-${JSON.stringify(rawArgs ?? {}).slice(0, 100)}`;
@@ -155,7 +156,11 @@ export const createAppAgentToolCallHandler = ({
       setRightPanelMode('GALLERY');
       if (mode !== AppMode.IMAGE) handleModeSwitch(AppMode.IMAGE);
 
-      const normalizedPrompt = typeof prompt === 'string' ? prompt.trim() : '';
+      const basePrompt = typeof prompt === 'string' ? prompt.trim() : '';
+      const normalizedPrompt = normalizeSequenceAwarePrompt({
+        prompt: basePrompt,
+        rawArgs: toolArgs
+      });
       if (!normalizedPrompt) {
         const failedResult = createToolErrorResult(action.toolName, 'Prompt missing for generate_image tool call.');
         upsertLastModelToolCall(toolCallId, existing => ({
@@ -258,6 +263,15 @@ export const createAppAgentToolCallHandler = ({
       const playbookReferenceMode = playbookDefaults.referenceMode;
       const requestedIds = Array.isArray((toolArgs as any).reference_image_ids) ? (toolArgs as any).reference_image_ids : [];
 
+      console.log('[AgentToolCall] generate_image normalized input:', {
+        promptPreview: normalizedPrompt.slice(0, 240),
+        numberOfImages: resolvedNumberOfImages,
+        explicitSequenceFramePrompts: explicitSequenceFramePrompts || [],
+        normalizedSequenceFramePrompts: normalizedSequenceFramePrompts || [],
+        smartAssetsCount: executionParams.smartAssets?.length || 0,
+        requestedReferenceIds: requestedIds
+      });
+
       const projectAgentJobs = await loadAgentJobsByProject(activeProjectId);
       const selectedReferences = selectReferenceRecords({
         jobs: projectAgentJobs,
@@ -272,6 +286,13 @@ export const createAppAgentToolCallHandler = ({
         if (!exists) {
           executionParams.smartAssets?.push(ref.asset);
         }
+      });
+
+      console.log('[AgentToolCall] generate_image resolved references:', {
+        selectedReferenceCount: selectedReferences.length,
+        finalSmartAssetsCount: executionParams.smartAssets?.length || 0,
+        playbookReferenceMode,
+        hasUserUploadedImages
       });
 
       let onSuccessCallback: ((asset: AssetItem) => Promise<void>) | undefined;

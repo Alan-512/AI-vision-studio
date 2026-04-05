@@ -877,7 +877,7 @@ export function App() {
         prepareGenerationLaunch,
         playSuccessSound
     });
-    const handleGenerate = async (
+    async function handleGenerate(
         fullParams: GenerationParams,
         options?: {
             modeOverride?: AppMode;
@@ -892,7 +892,7 @@ export function App() {
             resumeJobId?: string;
             resumeActionType?: string;
         }
-    ): Promise<AgentToolResult[]> => {
+    ): Promise<AgentToolResult[]> {
         const audioCtx = getAudioContext();
         if (audioCtx && audioCtx.state === 'suspended') {
             audioCtx.resume().catch(console.warn);
@@ -908,7 +908,7 @@ export function App() {
                 onSuccess: options?.onSuccess
             })
         });
-    };
+    }
 
     const appAgentKernel = useMemo(() => createAppAgentKernel({
         executeResolveRequiresAction: command => executeAppResolveRequiresAction({

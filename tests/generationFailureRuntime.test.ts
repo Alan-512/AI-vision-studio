@@ -147,4 +147,39 @@ describe('generationFailureRuntime', () => {
     expect(result.toolResult.metadata?.runtimeEvents).toMatchObject([{ type: 'JobFailed' }]);
     expect(result.toolResult.metadata?.jobSnapshot).toMatchObject({ status: 'failed' });
   });
+
+  it('treats transient 503 unavailable errors as retryable', async () => {
+    const fail = vi.fn().mockResolvedValue({
+      job: createJob({ status: 'failed' }),
+      events: [{ type: 'JobFailed' }]
+    });
+    const setCooldown = vi.fn();
+
+    await resolveGenerationFailure({
+      mode: AppMode.IMAGE,
+      agentJob: createJob(),
+      stepId: 'step-1',
+      taskId: 'task-1',
+      error: new Error('503 UNAVAILABLE'),
+      deps: {
+        taskRuntime: {
+          cancel: vi.fn(),
+          recoverVisibleAsset: vi.fn(),
+          fail
+        },
+        addToast: vi.fn(),
+        playErrorSound: vi.fn(),
+        setCooldown,
+        getFriendlyError: message => message,
+        language: 'en',
+        now: () => 1710000000400
+      }
+    });
+
+    expect(fail).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'failed'
+    }));
+    expect(setCooldown).toHaveBeenCalledWith(1710000000400 + 60000);
+    expect(fail.mock.calls[0]?.[0]?.lastError).toBe('503 UNAVAILABLE');
+  });
 });

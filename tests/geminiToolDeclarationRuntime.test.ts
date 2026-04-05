@@ -15,6 +15,17 @@ describe('geminiToolDeclarationRuntime', () => {
       'resolution',
       'assistant_mode'
     ]));
+    expect((generateImageTool.parameters as any)?.properties).toMatchObject({
+      sequence_intent: expect.any(Object),
+      frame_index: expect.any(Object),
+      frame_total: expect.any(Object),
+      screen_focus: expect.any(Object),
+      change_objective: expect.any(Object),
+      stable_constraints: expect.any(Object)
+    });
+    expect(String((generateImageTool.parameters as any)?.properties?.prompt?.description)).toContain('For separate multi-image frame sequences');
+    expect(String((generateImageTool.parameters as any)?.properties?.prompt?.description)).toContain('position');
+    expect(String((generateImageTool.parameters as any)?.properties?.prompt?.description)).toContain('screen focus');
   });
 
   it('defines the update_memory tool contract', () => {

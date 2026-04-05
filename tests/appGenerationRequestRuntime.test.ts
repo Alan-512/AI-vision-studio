@@ -92,10 +92,10 @@ describe('appGenerationRequestRuntime', () => {
       }
     });
 
-    expect(prompts).toEqual([
-      'Frame 1: anchor raises hand',
-      'Frame 2: anchor points at rain map'
-    ]);
+    expect(prompts[0]).toContain('Frame 1: anchor raises hand');
+    expect(prompts[1]).toContain('Frame 2: anchor points at rain map');
+    expect(prompts[0]).toContain('Render exactly one standalone frame');
+    expect(prompts[0]).toContain('Do not create a collage');
   });
 
   it('passes per-frame activeParams into downstream task flow deps', async () => {
@@ -148,9 +148,10 @@ describe('appGenerationRequestRuntime', () => {
     });
 
     expect(downstreamPrompts).toEqual([
-      'Frame 1: anchor raises hand',
-      'Frame 2: anchor points at rain map'
+      expect.stringContaining('Frame 1: anchor raises hand'),
+      expect.stringContaining('Frame 2: anchor points at rain map')
     ]);
+    expect(downstreamPrompts[0]).toContain('Render exactly one standalone frame');
   });
 
   it('rejects sequence generation requests with duplicate explicit frame prompts', async () => {

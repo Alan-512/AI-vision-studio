@@ -189,6 +189,58 @@ describe('appAgentToolCallRuntime', () => {
     }), expect.any(Object));
   });
 
+  it('rewrites multi-call separate frame intents into single-frame generation prompts', async () => {
+    const handleGenerate = vi.fn().mockResolvedValue([{
+      jobId: 'job-1',
+      toolName: 'generate_image',
+      status: 'success'
+    } satisfies AgentToolResult]);
+
+    const handler = createAppAgentToolCallHandler({
+      mode: AppMode.IMAGE,
+      processingToolCallKeys: new Set<string>(),
+      createToolCallId: () => 'tool-1',
+      createToolCallKey: () => 'generate_image-frame-intent',
+      upsertLastModelToolCall: vi.fn(),
+      updateLastModelMessage: vi.fn(),
+      setChatHistory: vi.fn(),
+      handleModeSwitch: vi.fn(),
+      addToast: vi.fn(),
+      handleGenerate,
+      normalizeAssistantMode: vi.fn(),
+      getPlaybookDefaults: vi.fn().mockReturnValue({}),
+      loadAgentJobsByProject: vi.fn().mockResolvedValue([]),
+      activeProjectId: 'project-1',
+      chatParams: {} as any,
+      chatHistory: [],
+      chatEditParams: {},
+      setRightPanelMode: vi.fn(),
+      setThoughtImages: vi.fn(),
+      setChatEditParams: vi.fn(),
+      setAgentContextAssets: vi.fn(),
+      extractSearchContextFromProgress: vi.fn(),
+      selectReferenceRecords: vi.fn().mockReturnValue([]),
+      latestSearchProgress: undefined,
+      compressImageForContext: vi.fn(),
+      resolveToolCallRecordStatus: vi.fn().mockReturnValue('success')
+    });
+
+    await handler({
+      toolName: 'generate_image',
+      args: {
+        prompt: 'A wide shot in a TV news studio, continuing the sequence as the anchor moves toward center stage.',
+        sequence_intent: 'separate_frames',
+        frame_index: 1,
+        frame_total: 4
+      }
+    } as AgentAction);
+
+    expect(handleGenerate).toHaveBeenCalledWith(expect.objectContaining({
+      prompt: expect.stringContaining('Render exactly one standalone frame'),
+      numberOfImages: 1
+    }), expect.any(Object));
+  });
+
   it('normalizes numberOfImages from explicit sequence frame prompts when omitted', async () => {
     const handleGenerate = vi.fn().mockResolvedValue([{
       jobId: 'job-1',
