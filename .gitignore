@@ -33,7 +33,6 @@ tmp-docs/
 
 # Internal-only docs
 docs/internal/*
-!docs/internal/README.md
 
 # Output/temp folders
 output/
