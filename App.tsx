@@ -880,6 +880,7 @@ export function App() {
     async function handleGenerate(
         fullParams: GenerationParams,
         options?: {
+            generationSurface?: 'quick' | 'assistant';
             modeOverride?: AppMode;
             onPreview?: (asset: AssetItem) => void;
             onSuccess?: (asset: AssetItem) => void;
@@ -959,6 +960,7 @@ export function App() {
     // Wrapper for Params Config page - merges with params state (backward compatible)
     const handleParamsGenerate = async (overrideParams?: Partial<GenerationParams>) => {
         await handleGenerate({ ...params, ...overrideParams } as GenerationParams, {
+            generationSurface: activeTab === 'chat' ? 'assistant' : 'quick',
             useParamsAsBase: true
         });
     };

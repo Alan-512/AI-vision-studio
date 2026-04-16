@@ -1,5 +1,13 @@
 import type { Dispatch, SetStateAction } from 'react';
-import type { AgentJob, ChatMessage, GenerationParams, Project } from '../types';
+import { AppMode, ImageModel, type AgentJob, type ChatMessage, type GenerationParams, type Project } from '../types';
+
+type ThoughtImage = {
+  id: string;
+  data: string;
+  mimeType: string;
+  isFinal: boolean;
+  timestamp: number;
+};
 
 export const prepareAppGenerationRequest = async ({
   fullParams,
@@ -25,15 +33,15 @@ export const prepareAppGenerationRequest = async ({
   fullParams: GenerationParams;
   useParamsAsBase: boolean;
   params: GenerationParams;
-  mode: any;
+  mode: AppMode;
   activeProjectId: string;
   projects: Project[];
   historyOverride?: ChatMessage[];
   videoCooldownEndTime: number;
   getUserApiKey: () => string | null;
-  sanitizeImageModel: (model: string | undefined) => any;
-  setThoughtImages: (images: any[]) => void;
-  addToast: (type: string, title: string, message: string) => void;
+  sanitizeImageModel: (model: string | undefined) => ImageModel;
+  setThoughtImages: Dispatch<SetStateAction<ThoughtImage[]>>;
+  addToast: (type: 'success' | 'error' | 'info', title: string, message: string) => void;
   setShowSettings: (visible: boolean) => void;
   generateTitle?: (prompt: string) => Promise<string>;
   setProjects?: Dispatch<SetStateAction<Project[]>>;

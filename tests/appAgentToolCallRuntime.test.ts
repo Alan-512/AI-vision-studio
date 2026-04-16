@@ -27,11 +27,11 @@ describe('appAgentToolCallRuntime', () => {
       setThoughtImages: vi.fn(),
       setChatEditParams: vi.fn(),
       setAgentContextAssets: vi.fn(),
-      playSuccessSound: vi.fn(),
       extractSearchContextFromProgress: vi.fn(),
       selectReferenceRecords: vi.fn(),
       latestSearchProgress: undefined,
-      compressImageForContext: vi.fn()
+      compressImageForContext: vi.fn(),
+      resolveToolCallRecordStatus: vi.fn().mockReturnValue('success')
     });
 
     const result = await handler({
@@ -72,11 +72,11 @@ describe('appAgentToolCallRuntime', () => {
       setThoughtImages: vi.fn(),
       setChatEditParams: vi.fn(),
       setAgentContextAssets: vi.fn(),
-      playSuccessSound: vi.fn(),
       extractSearchContextFromProgress: vi.fn(),
       selectReferenceRecords: vi.fn(),
       latestSearchProgress: undefined,
-      compressImageForContext: vi.fn()
+      compressImageForContext: vi.fn(),
+      resolveToolCallRecordStatus: vi.fn().mockReturnValue('failed')
     });
 
     const result = await handler({
@@ -112,11 +112,11 @@ describe('appAgentToolCallRuntime', () => {
       setThoughtImages: vi.fn(),
       setChatEditParams: vi.fn(),
       setAgentContextAssets: vi.fn(),
-      playSuccessSound: vi.fn(),
       extractSearchContextFromProgress: vi.fn(),
       selectReferenceRecords: vi.fn(),
       latestSearchProgress: undefined,
-      compressImageForContext: vi.fn()
+      compressImageForContext: vi.fn(),
+      resolveToolCallRecordStatus: vi.fn().mockReturnValue('failed')
     });
 
     const result = await handler({

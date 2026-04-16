@@ -1,4 +1,36 @@
-import type { AgentToolResult, GenerationParams } from '../types';
+import type { AgentAction, AgentJob, AgentToolResult, AppMode, ChatMessage, GenerationParams } from '../types';
+
+type PrepareRequestResult = {
+  userKey: string;
+  activeParams: GenerationParams;
+  currentProjectId: string;
+  currentMode: AppMode;
+  resolvedJobSource: AgentJob['source'];
+  triggerMessageTimestamp?: number;
+};
+
+type BuildTaskFlowDepsBuilderInput = {
+  currentMode: AppMode;
+  activeParams: GenerationParams;
+  userKey: string;
+  toolCall?: AgentAction;
+  historyOverride?: ChatMessage[];
+};
+
+type AppHandleGenerateOptions = {
+  generationSurface?: 'quick' | 'assistant';
+  modeOverride?: AppMode;
+  onPreview?: (asset: any) => void;
+  onSuccess?: (asset: any) => void;
+  historyOverride?: ChatMessage[];
+  useParamsAsBase?: boolean;
+  jobSource?: AgentJob['source'];
+  toolCall?: AgentAction;
+  selectedReferenceRecords?: any[];
+  searchContextOverride?: AgentJob['searchContext'];
+  resumeJobId?: string;
+  resumeActionType?: string;
+};
 
 export const createAppHandleGenerate = ({
   prepareRequest,
@@ -7,36 +39,21 @@ export const createAppHandleGenerate = ({
   getProjectName,
   computeHistoryForGeneration
 }: {
-  prepareRequest: (fullParams: GenerationParams, options?: Record<string, unknown>) => Promise<any>;
-  buildTaskFlowDepsBuilder: (input: {
-    currentMode: any;
-    activeParams: any;
-    userKey: string;
-    toolCall?: unknown;
-    historyOverride?: unknown;
-  }) => () => unknown;
+  prepareRequest: (
+    fullParams: GenerationParams,
+    options?: AppHandleGenerateOptions
+  ) => Promise<PrepareRequestResult | null>;
+  buildTaskFlowDepsBuilder: (input: BuildTaskFlowDepsBuilderInput) => () => unknown;
   executeGenerationFlow: (input: any) => Promise<AgentToolResult[]>;
   getProjectName: (projectId: string) => string;
   computeHistoryForGeneration: (input: {
-    currentMode: any;
-    activeParams: any;
-    historyOverride?: any;
-  }) => any;
+    currentMode: AppMode;
+    activeParams: GenerationParams;
+    historyOverride?: ChatMessage[];
+  }) => ChatMessage[] | undefined;
 }) => async (
   fullParams: GenerationParams,
-  options?: {
-    modeOverride?: any;
-    onPreview?: (asset: any) => void;
-    onSuccess?: (asset: any) => void;
-    historyOverride?: any;
-    useParamsAsBase?: boolean;
-    jobSource?: any;
-    toolCall?: any;
-    selectedReferenceRecords?: any[];
-    searchContextOverride?: any;
-    resumeJobId?: string;
-    resumeActionType?: string;
-  },
+  options?: AppHandleGenerateOptions,
   context?: {
     launchControllerInput: any;
     createGenerationTaskLaunchController: (input: any) => any;
@@ -45,7 +62,7 @@ export const createAppHandleGenerate = ({
     createSessionInput: {
       createResumeActionStep: any;
       buildConsistencyProfile: any;
-      normalizeAssistantMode: any;
+      normalizeAssistantMode: (value: unknown) => unknown;
       prepareGenerationLaunch: any;
     };
     playSuccessSound?: () => void;
@@ -75,6 +92,7 @@ export const createAppHandleGenerate = ({
     launchControllerInput: context?.launchControllerInput,
     requestInput: {
       count: activeParams.numberOfImages || 1,
+      generationSurface: options?.generationSurface ?? 'assistant',
       currentProjectId,
       currentMode,
       activeParams,

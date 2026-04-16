@@ -34,6 +34,7 @@ describe('appGenerationRequestRuntime', () => {
       count: 2,
       currentProjectId: 'project-1',
       currentMode: AppMode.IMAGE,
+      generationSurface: 'assistant',
       activeParams: { prompt: 'make a poster', numberOfImages: 2 } as any,
       resolvedJobSource: 'studio',
       selectedReferenceRecords: [],
@@ -59,6 +60,38 @@ describe('appGenerationRequestRuntime', () => {
     ]);
   });
 
+  it('keeps quick generation multi-image prompts independent without sequence augmentation', async () => {
+    const prompts: string[] = [];
+    const launchPreparedTask = vi.fn().mockImplementation(async (input: any): Promise<AgentToolResult> => {
+      prompts.push(input.activeParams.prompt);
+      expect(input.activeParams.numberOfImages).toBe(1);
+      return { status: 'success' } as AgentToolResult;
+    });
+
+    await executeAppGenerationRequest({
+      count: 2,
+      currentProjectId: 'project-1',
+      currentMode: AppMode.IMAGE,
+      generationSurface: 'quick',
+      activeParams: { prompt: 'make a poster', numberOfImages: 2 } as any,
+      resolvedJobSource: 'studio',
+      selectedReferenceRecords: [],
+      createTaskFlowDepsBuilder: vi.fn().mockReturnValue(() => ({})),
+      launchPreparedTask,
+      createSessionInput: {
+        projectName: 'Project',
+        createResumeActionStep: vi.fn(),
+        buildConsistencyProfile: vi.fn(),
+        normalizeAssistantMode: vi.fn(),
+        prepareGenerationLaunch: vi.fn()
+      }
+    });
+
+    expect(prompts).toEqual(['make a poster', 'make a poster']);
+    expect(prompts[0]).not.toContain('Sequence frame');
+    expect(prompts[0]).not.toContain('Render exactly one standalone frame');
+  });
+
   it('uses explicit sequence frame prompts when they are provided', async () => {
     const prompts: string[] = [];
     const launchPreparedTask = vi.fn().mockImplementation(async (input: any): Promise<AgentToolResult> => {
@@ -71,6 +104,7 @@ describe('appGenerationRequestRuntime', () => {
       count: 2,
       currentProjectId: 'project-1',
       currentMode: AppMode.IMAGE,
+      generationSurface: 'assistant',
       activeParams: {
         prompt: 'make a poster',
         numberOfImages: 2,
@@ -126,6 +160,7 @@ describe('appGenerationRequestRuntime', () => {
       count: 2,
       currentProjectId: 'project-1',
       currentMode: AppMode.IMAGE,
+      generationSurface: 'assistant',
       activeParams: {
         prompt: 'make a poster',
         numberOfImages: 2,
@@ -159,6 +194,7 @@ describe('appGenerationRequestRuntime', () => {
       count: 2,
       currentProjectId: 'project-1',
       currentMode: AppMode.IMAGE,
+      generationSurface: 'assistant',
       activeParams: {
         prompt: 'make a poster',
         numberOfImages: 2,

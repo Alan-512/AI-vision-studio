@@ -1,3 +1,6 @@
+import type { AgentJob, AssistantMode } from '../types';
+import type { SelectedReferenceRecord } from './agentRuntime';
+
 export const createAppHandleGenerateContextBuilder = ({
   tasksRef,
   setTaskViews,
@@ -35,10 +38,15 @@ export const createAppHandleGenerateContextBuilder = ({
   createGenerationTaskLaunchController: (input: any) => any;
   executeAppGenerationRequest: (input: any) => Promise<any>;
   dispatchKernelCommand?: (command: any) => Promise<any>;
-  createResumeActionStep: unknown;
-  buildConsistencyProfile: unknown;
-  normalizeAssistantMode: unknown;
-  prepareGenerationLaunch: unknown;
+  createResumeActionStep: (stepId: string, jobId: string, prompt: string, actionType?: string) => any;
+  buildConsistencyProfile: (
+    assistantMode: AssistantMode | undefined,
+    selectedReferences: SelectedReferenceRecord[],
+    searchContext?: AgentJob['searchContext'],
+    existing?: AgentJob['consistencyProfile']
+  ) => AgentJob['consistencyProfile'];
+  normalizeAssistantMode: (value: unknown) => unknown;
+  prepareGenerationLaunch: (input: any) => any;
   playSuccessSound?: () => void;
 }) => ({
   onPreview,

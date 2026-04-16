@@ -1,11 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
+import { AppMode } from '../types';
 import { createAppGenerationTaskFlowDepsBuilder } from '../services/appGenerationTaskFlowDepsRuntime';
 
 describe('appGenerationTaskFlowDepsRuntime', () => {
   it('delegates normalizeGenerationParams to the app-level normalizer', () => {
     const normalizeGenerationParamsForExecution = vi.fn().mockReturnValue({ prompt: 'normalized' });
     const builder = createAppGenerationTaskFlowDepsBuilder({
-      currentMode: 'IMAGE',
+      currentMode: AppMode.IMAGE,
       normalizeGenerationParamsForExecution,
       translateTag: (key: string) => key,
       executeGenerationAttempt: vi.fn(),
@@ -57,7 +58,7 @@ describe('appGenerationTaskFlowDepsRuntime', () => {
     const taskMarkedVisibleCompleteRef = { current: false };
     const playVisibleSuccess = vi.fn();
     const builder = createAppGenerationTaskFlowDepsBuilder({
-      currentMode: 'IMAGE',
+      currentMode: AppMode.IMAGE,
       normalizeGenerationParamsForExecution: vi.fn(),
       translateTag: (key: string) => key,
       executeGenerationAttempt: vi.fn(),
@@ -136,7 +137,7 @@ describe('appGenerationTaskFlowDepsRuntime', () => {
       revisedAsset: { id: 'asset-2' }
     }));
     const builder = createAppGenerationTaskFlowDepsBuilder({
-      currentMode: 'IMAGE',
+      currentMode: AppMode.IMAGE,
       normalizeGenerationParamsForExecution: vi.fn(),
       translateTag: (key: string) => key,
       executeGenerationAttempt: vi.fn(),

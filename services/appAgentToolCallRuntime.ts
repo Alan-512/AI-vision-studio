@@ -1,6 +1,9 @@
+import type { Dispatch, SetStateAction } from 'react';
 import {
   AppMode,
   AspectRatio,
+  AssistantMode,
+  EditRegion,
   ImageModel,
   ImageResolution,
   ImageStyle,
@@ -12,8 +15,10 @@ import {
   type ChatMessage,
   type GenerationParams,
   type ImageStyle as ImageStyleType,
-  type SmartAsset
+  type SmartAsset,
+  type ToolCallRecord
 } from '../types';
+import type { SelectedReferenceRecord } from './agentRuntime';
 import { buildSequenceFramePrompts } from './toolboxRuntime';
 import { normalizeSequenceAwarePrompt } from './sequencePlanningRuntime';
 
@@ -26,6 +31,39 @@ const createToolErrorResult = (toolName: string, error: string): AgentToolResult
   status: 'error',
   error
 });
+
+type PlaybookDefaults = {
+  aspectRatio?: AspectRatio;
+  imageStyle?: ImageStyleType;
+  imageResolution?: ImageResolution;
+  thinkingLevel?: ThinkingLevel;
+  negativePrompt?: string;
+  referenceMode?: string;
+};
+
+type RightPanelMode = 'GALLERY' | 'TRASH' | 'CANVAS';
+
+type ThoughtImage = {
+  id: string;
+  data: string;
+  mimeType: string;
+  isFinal: boolean;
+  timestamp: number;
+};
+
+type ChatEditParamsState = {
+  editBaseImage?: SmartAsset;
+  editMask?: SmartAsset;
+  editRegions?: EditRegion[];
+};
+
+type ReferenceRecordSelectorInput = {
+  jobs: AgentJob[];
+  chatHistory: ChatMessage[];
+  requestedIds: string[];
+  playbookReferenceMode?: string;
+  hasUserUploadedImages: boolean;
+};
 
 export const createAppAgentToolCallHandler = ({
   mode,
@@ -59,35 +97,31 @@ export const createAppAgentToolCallHandler = ({
   processingToolCallKeys: Set<string>;
   createToolCallId?: () => string;
   createToolCallKey?: (action: AgentAction, rawArgs: unknown) => string;
-  upsertLastModelToolCall: (toolCallId: string, updater: (record: any) => any) => void;
+  upsertLastModelToolCall: (
+    toolCallId: string,
+    updater: (record: ToolCallRecord | undefined) => ToolCallRecord
+  ) => void;
   updateLastModelMessage: (updater: (message: ChatMessage) => ChatMessage) => void;
   setChatHistory: (updater: (prev: ChatMessage[]) => ChatMessage[]) => void;
   handleModeSwitch: (mode: AppMode) => void;
   addToast: (type: 'success' | 'error' | 'info', title: string, message: string) => void;
   handleGenerate: (params: GenerationParams, options?: Record<string, unknown>) => Promise<AgentToolResult[]>;
-  normalizeAssistantMode: (value: unknown) => unknown;
-  getPlaybookDefaults: (assistantMode: unknown) => {
-    aspectRatio?: AspectRatio;
-    imageStyle?: ImageStyleType;
-    imageResolution?: ImageResolution;
-    thinkingLevel?: ThinkingLevel;
-    negativePrompt?: string;
-    referenceMode?: string;
-  };
+  normalizeAssistantMode: (value: unknown) => AssistantMode | undefined;
+  getPlaybookDefaults: (assistantMode: AssistantMode | undefined) => PlaybookDefaults;
   loadAgentJobsByProject: (projectId: string) => Promise<AgentJob[]>;
   activeProjectId: string;
   chatParams: Partial<GenerationParams>;
   chatHistory: ChatMessage[];
-  chatEditParams: Partial<GenerationParams>;
-  setRightPanelMode: (mode: string) => void;
-  setThoughtImages: (images: any[]) => void;
-  setChatEditParams: (value: Partial<GenerationParams>) => void;
-  setAgentContextAssets: (updater: (prev: SmartAsset[]) => SmartAsset[]) => void;
+  chatEditParams: ChatEditParamsState;
+  setRightPanelMode: Dispatch<SetStateAction<RightPanelMode>>;
+  setThoughtImages: Dispatch<SetStateAction<ThoughtImage[]>>;
+  setChatEditParams: Dispatch<SetStateAction<ChatEditParamsState>>;
+  setAgentContextAssets: Dispatch<SetStateAction<SmartAsset[]>>;
   extractSearchContextFromProgress: (progress: any) => any;
-  selectReferenceRecords: (input: Record<string, unknown>) => any[];
+  selectReferenceRecords: (input: ReferenceRecordSelectorInput) => SelectedReferenceRecord[];
   latestSearchProgress: any;
   compressImageForContext: (blob: Blob) => Promise<string>;
-  resolveToolCallRecordStatus: (status: AgentToolResult['status']) => any;
+  resolveToolCallRecordStatus: (status: AgentToolResult['status']) => ToolCallRecord['status'];
 }) => {
   const upsertChatFeedbackImage = (asset: AssetItem, imageUrl: string) => {
     if (!imageUrl) return;
@@ -343,6 +377,7 @@ export const createAppAgentToolCallHandler = ({
       };
 
       const toolResults = await handleGenerate(executionParams as GenerationParams, {
+        generationSurface: 'assistant',
         modeOverride: AppMode.IMAGE,
         onPreview,
         onSuccess: onComplete,

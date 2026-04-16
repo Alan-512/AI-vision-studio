@@ -38,6 +38,7 @@ describe('appHandleGenerateRuntime', () => {
     });
 
     const result = await handleGenerate({ prompt: 'hello' } as any, {
+      generationSurface: 'assistant',
       resumeJobId: 'job-1',
       resumeActionType: 'review_output',
       selectedReferenceRecords: [{ id: 'ref-1' }] as any,
@@ -65,6 +66,7 @@ describe('appHandleGenerateRuntime', () => {
       requestInput: expect.objectContaining({
         currentProjectId: 'project-1',
         projectName: 'Project One',
+        generationSurface: 'assistant',
         resumeJobId: 'job-1',
         resumeActionType: 'review_output',
         selectedReferenceRecords: [{ id: 'ref-1' }],

@@ -1,4 +1,5 @@
-import { AppMode, type SmartAsset } from '../types';
+import type { Dispatch, SetStateAction } from 'react';
+import { AppMode, type SmartAsset, type ToolCallRecord } from '../types';
 
 export const createAppGenerationFormSurfaceProps = ({
   contextSummary,
@@ -18,10 +19,10 @@ export const createAppGenerationFormSurfaceProps = ({
   setSummaryCursor: (value: number) => void;
   onToolCall: (action: any) => Promise<any>;
   dispatchKernelCommand: (command: any) => Promise<any>;
-  onKeepCurrentAction: (toolCallId: string) => Promise<void>;
+  onKeepCurrentAction: (toolCall: ToolCallRecord) => Promise<void>;
   mode: AppMode;
   agentContextAssets: SmartAsset[];
-  setAgentContextAssets: (updater: (prev: SmartAsset[]) => SmartAsset[]) => void;
+  setAgentContextAssets: Dispatch<SetStateAction<SmartAsset[]>>;
 }) => ({
   projectContextSummary: contextSummary,
   projectSummaryCursor: summaryCursor,

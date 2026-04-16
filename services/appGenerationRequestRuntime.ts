@@ -6,6 +6,7 @@ const SINGLE_FRAME_SEQUENCE_GUARDRAIL = 'Render exactly one standalone frame. Do
 
 export const executeAppGenerationRequest = async ({
   count,
+  generationSurface = 'assistant',
   currentProjectId,
   currentMode,
   activeParams,
@@ -24,6 +25,7 @@ export const executeAppGenerationRequest = async ({
   playSuccessSound
 }: {
   count: number;
+  generationSurface?: 'quick' | 'assistant';
   currentProjectId: string;
   currentMode: any;
   activeParams: GenerationParams;
@@ -54,21 +56,28 @@ export const executeAppGenerationRequest = async ({
   launchPreparedTask: (input: any) => Promise<AgentToolResult>;
   playSuccessSound: () => void;
 }) => {
-  const sequenceFramePrompts = buildSequenceFramePrompts({
-    basePrompt: activeParams.prompt,
-    count,
-    framePrompts: activeParams.sequenceFramePrompts
-  });
+  const hasExplicitSequenceFramePrompts = (activeParams.sequenceFramePrompts?.length || 0) > 0;
+  const shouldUseSequencePromptAugmentation = hasExplicitSequenceFramePrompts || generationSurface === 'assistant';
+  const sequenceFramePrompts = shouldUseSequencePromptAugmentation
+    ? buildSequenceFramePrompts({
+        basePrompt: activeParams.prompt,
+        count,
+        framePrompts: activeParams.sequenceFramePrompts
+      })
+    : undefined;
 
   return launchAppGenerationTasks({
     count,
     createLaunchInput: index => index,
     launchPreparedTask: async (index: number) => {
-      const normalizedPrompt = sequenceFramePrompts[index] || activeParams.prompt;
-      const guardedPrompt = count > 1
+      const normalizedPrompt = shouldUseSequencePromptAugmentation
+        ? (sequenceFramePrompts?.[index] || activeParams.prompt)
+        : activeParams.prompt;
+      const guardedPrompt = shouldUseSequencePromptAugmentation && count > 1
         ? `${normalizedPrompt}\n\n${SINGLE_FRAME_SEQUENCE_GUARDRAIL}`
         : normalizedPrompt;
       console.log('[AppGenerationRequest] sequence frame prompt:', {
+        generationSurface,
         frameIndex: index,
         frameCount: count,
         originalFramePrompt: normalizedPrompt,
