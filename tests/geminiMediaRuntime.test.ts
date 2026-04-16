@@ -174,4 +174,134 @@ describe('geminiMediaRuntime', () => {
       videoUri: 'https://video.example.com/file.mp4?token=1'
     });
   });
+
+  it('sends Veo video config in the format expected by the SDK', async () => {
+    const onStart = vi.fn();
+    const onUpdate = vi.fn().mockResolvedValue(undefined);
+    const generateVideos = vi.fn().mockResolvedValue({
+      done: true,
+      response: {
+        generatedVideos: [{ video: { uri: 'https://video.example.com/file.mp4?token=1' } }]
+      }
+    });
+
+    const ai = {
+      models: { generateVideos }
+    } as any;
+
+    await generateVideoWithModel({
+      ai,
+      params: {
+        prompt: 'adult presenter walking and explaining the weather',
+        videoModel: VideoModel.VEO_FAST,
+        videoResolution: '720p' as any,
+        aspectRatio: AspectRatio.LANDSCAPE,
+        videoDuration: '4' as any,
+        videoStyleReferences: []
+      } as GenerationParams,
+      onUpdate,
+      onStart,
+      signal: new AbortController().signal,
+      createTrackedBlobUrl: vi.fn().mockReturnValue('blob:video-1'),
+      getApiKey: () => 'key-123',
+      fetchImpl: vi.fn().mockResolvedValue({
+        ok: true,
+        blob: vi.fn().mockResolvedValue(new Blob(['video']))
+      }) as any
+    });
+
+    expect(generateVideos).toHaveBeenCalledWith(expect.objectContaining({
+      model: VideoModel.VEO_FAST,
+      config: expect.objectContaining({
+        durationSeconds: 4,
+        personGeneration: 'allow_adult'
+      })
+    }));
+  });
+
+  it('continues video generation when the AI Studio bridge check fails', async () => {
+    const onStart = vi.fn();
+    const onUpdate = vi.fn().mockResolvedValue(undefined);
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      blob: vi.fn().mockResolvedValue(new Blob(['video']))
+    });
+
+    (window as any).aistudio = {
+      hasSelectedApiKey: vi.fn().mockRejectedValue(new Error('The message port closed before a response was received.')),
+      openSelectKey: vi.fn()
+    };
+
+    const generateVideos = vi.fn().mockResolvedValue({
+      done: true,
+      response: {
+        generatedVideos: [{ video: { uri: 'https://video.example.com/file.mp4?token=1' } }]
+      }
+    });
+
+    const result = await generateVideoWithModel({
+      ai: { models: { generateVideos } } as any,
+      params: {
+        prompt: 'animate this anchor shot',
+        videoModel: VideoModel.VEO_FAST,
+        videoResolution: '720p' as any,
+        aspectRatio: AspectRatio.LANDSCAPE,
+        videoDuration: '4' as any,
+        videoStyleReferences: []
+      } as GenerationParams,
+      onUpdate,
+      onStart,
+      signal: new AbortController().signal,
+      createTrackedBlobUrl: vi.fn().mockReturnValue('blob:video-1'),
+      getApiKey: () => 'key-123',
+      fetchImpl: fetchMock as any
+    });
+
+    expect(generateVideos).toHaveBeenCalledTimes(1);
+    expect(warnSpy).toHaveBeenCalledWith('[Video] AI Studio bridge unavailable, continuing with configured API key.', expect.any(Error));
+    expect(result).toEqual({
+      blobUrl: 'blob:video-1',
+      videoUri: 'https://video.example.com/file.mp4?token=1'
+    });
+  });
+
+  it('logs and surfaces raw Veo operation errors before download handling', async () => {
+    const onStart = vi.fn();
+    const onUpdate = vi.fn().mockResolvedValue(undefined);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await expect(generateVideoWithModel({
+      ai: {
+        models: {
+          generateVideos: vi.fn().mockResolvedValue({
+            done: true,
+            error: {
+              code: 400,
+              message: 'Request contains an invalid argument.'
+            }
+          })
+        }
+      } as any,
+      params: {
+        prompt: 'animate this anchor shot',
+        videoModel: VideoModel.VEO_FAST,
+        videoResolution: '720p' as any,
+        aspectRatio: AspectRatio.LANDSCAPE,
+        videoDuration: '4' as any,
+        videoStyleReferences: []
+      } as GenerationParams,
+      onUpdate,
+      onStart,
+      signal: new AbortController().signal,
+      createTrackedBlobUrl: vi.fn(),
+      getApiKey: () => 'key-123',
+      fetchImpl: vi.fn() as any
+    })).rejects.toThrow('Request contains an invalid argument.');
+
+    expect(errorSpy).toHaveBeenCalledWith('[Video] generateVideos returned an operation error:', expect.objectContaining({
+      code: 400,
+      message: 'Request contains an invalid argument.'
+    }));
+  });
 });

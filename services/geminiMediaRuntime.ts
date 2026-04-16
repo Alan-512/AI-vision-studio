@@ -324,16 +324,24 @@ export const generateVideoWithModel = async ({
   fetchImpl?: typeof fetch;
 }): Promise<{ blobUrl: string; videoUri?: string }> => {
   onStart();
-  if (params.videoModel.includes('veo') && window.aistudio && !await window.aistudio.hasSelectedApiKey()) {
-    await window.aistudio.openSelectKey();
+  if (params.videoModel.includes('veo') && window.aistudio) {
+    try {
+      if (!await window.aistudio.hasSelectedApiKey()) {
+        await window.aistudio.openSelectKey();
+      }
+    } catch (error) {
+      console.warn('[Video] AI Studio bridge unavailable, continuing with configured API key.', error);
+    }
   }
+
+  const requestedDurationSeconds = Number(params.videoDuration || '4');
 
   const config: any = {
     numberOfVideos: 1,
     resolution: params.videoResolution as '720p' | '1080p',
     aspectRatio: params.aspectRatio === AspectRatio.PORTRAIT ? '9:16' : '16:9',
-    durationSeconds: params.videoDuration || '4',
-    personGeneration: 'allow_all'
+    durationSeconds: Number.isFinite(requestedDurationSeconds) ? requestedDurationSeconds : 4,
+    personGeneration: 'allow_adult'
   };
 
   let imageInput = undefined;
@@ -370,6 +378,21 @@ export const generateVideoWithModel = async ({
     console.log('[Video] Extension mode: using source video URI');
   }
 
+  console.log('[Video] Starting generation request:', {
+    model: generateRequest.model,
+    hasPrompt: Boolean(generateRequest.prompt),
+    hasImage: Boolean(generateRequest.image),
+    hasVideo: Boolean(generateRequest.video),
+    config: {
+      resolution: config.resolution,
+      aspectRatio: config.aspectRatio,
+      durationSeconds: config.durationSeconds,
+      personGeneration: config.personGeneration,
+      referenceImagesCount: Array.isArray(config.referenceImages) ? config.referenceImages.length : 0,
+      hasLastFrame: Boolean(config.lastFrame)
+    }
+  });
+
   let operation = await ai.models.generateVideos(generateRequest);
   if (operation.name) {
     await onUpdate(operation.name);
@@ -386,8 +409,17 @@ export const generateVideoWithModel = async ({
     operation = await ai.operations.getVideosOperation({ operation });
   }
 
+  if (operation.error) {
+    console.error('[Video] generateVideos returned an operation error:', operation.error);
+    const rawMessage = typeof operation.error.message === 'string'
+      ? operation.error.message
+      : JSON.stringify(operation.error);
+    throw new Error(rawMessage || 'Video generation failed with an unknown operation error.');
+  }
+
   const downloadLink = operation.response?.generatedVideos?.[0]?.video?.uri;
   if (!downloadLink) {
+    console.error('[Video] Video generation finished without a download link:', operation);
     throw new Error('Video generation completed but no download link was returned. The video may have been blocked by safety filters.');
   }
 

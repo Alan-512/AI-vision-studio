@@ -16,6 +16,7 @@ import { buildChatResponseConfig, buildRetrievedContextSection, mergeChatSystemI
 import { generateImageWithModel, generateVideoWithModel } from "./geminiMediaRuntime";
 import { executeStreamChatResponse } from "./chatResponseRuntime";
 import { describeImageWithModel, extractPromptFromHistoryWithModel, generateShortTitle, generateTextWithModel, testGeminiConnection } from "./geminiUtilityRuntime";
+import { createTrackedBlobUrl } from "./storageService";
 export { stripVisibleToolPlanningText } from "./internalToolRuntime";
 
 // Key management

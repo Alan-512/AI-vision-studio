@@ -98,6 +98,16 @@ export const resolveGenerationFailure = async ({
     || errorText.includes('RESOURCE_EXHAUSTED')
     || errorText.includes('503')
     || errorText.includes('UNAVAILABLE');
+  console.error('[GenerationFailure] Generation attempt failed:', {
+    mode,
+    jobId: agentJob.id,
+    taskId,
+    stepId,
+    errorMessage: errorText,
+    retryable,
+    latestVisibleAssetId: latestVisibleAsset?.id || null,
+    taskMarkedVisibleComplete
+  }, error);
   const { failedJob, toolResult } = prepareFailedGeneration({
     job: agentJob,
     stepId,

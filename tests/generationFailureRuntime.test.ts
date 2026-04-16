@@ -117,6 +117,7 @@ describe('generationFailureRuntime', () => {
     const addToast = vi.fn();
     const playErrorSound = vi.fn();
     const setCooldown = vi.fn();
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     const result = await resolveGenerationFailure({
       mode: AppMode.VIDEO,
@@ -140,6 +141,13 @@ describe('generationFailureRuntime', () => {
     });
 
     expect(fail).toHaveBeenCalledWith(expect.objectContaining({ status: 'failed' }));
+    expect(errorSpy).toHaveBeenCalledWith('[GenerationFailure] Generation attempt failed:', expect.objectContaining({
+      mode: AppMode.VIDEO,
+      jobId: 'job-1',
+      taskId: 'task-1',
+      stepId: 'step-1',
+      errorMessage: '429 RESOURCE_EXHAUSTED'
+    }), expect.any(Error));
     expect(playErrorSound).toHaveBeenCalledTimes(1);
     expect(addToast).toHaveBeenCalledWith('error', 'task.failed', 'Friendly quota error');
     expect(setCooldown).toHaveBeenCalledWith(1710000000300 + 60000);
