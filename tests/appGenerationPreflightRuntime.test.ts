@@ -94,4 +94,27 @@ describe('appGenerationPreflightRuntime', () => {
     await Promise.resolve();
     expect(generateTitle).toHaveBeenCalledWith('make a poster');
   });
+
+  it('forces video generations to a single output even if image count state leaked in', async () => {
+    const result = await prepareAppGenerationRequest({
+      fullParams: {
+        prompt: 'generate a clip',
+        imageModel: ImageModel.FLASH_3_1,
+        numberOfImages: 2
+      } as GenerationParams,
+      useParamsAsBase: false,
+      params: { prompt: 'base', numberOfImages: 4 } as GenerationParams,
+      mode: AppMode.VIDEO,
+      activeProjectId: 'project-1',
+      projects: [],
+      videoCooldownEndTime: 0,
+      getUserApiKey: () => 'user-key',
+      sanitizeImageModel: value => value as ImageModel,
+      setThoughtImages: vi.fn(),
+      addToast: vi.fn(),
+      setShowSettings: vi.fn()
+    });
+
+    expect(result?.activeParams.numberOfImages).toBe(1);
+  });
 });

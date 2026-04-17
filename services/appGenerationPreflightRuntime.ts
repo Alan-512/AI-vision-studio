@@ -65,6 +65,9 @@ export const prepareAppGenerationRequest = async ({
 
   const activeParams = useParamsAsBase ? { ...params, ...fullParams } : { ...fullParams };
   activeParams.imageModel = sanitizeImageModel(activeParams.imageModel);
+  if (mode === AppMode.VIDEO) {
+    activeParams.numberOfImages = 1;
+  }
 
   const currentProjectId = activeProjectId;
   const currentMode = mode;
